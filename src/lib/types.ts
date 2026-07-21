@@ -8,6 +8,8 @@ export type Truck = {
 export type CustomerMemory = {
   name: string;
   defaultArea: string;
+  /** 0 = unset; otherwise 1..n within defaultArea */
+  loadingNumber: number;
   firstSeen: string;
 };
 
@@ -25,13 +27,13 @@ export type Invoice = {
 
 export type TruckDay = {
   truckId: string;
-  area: string;
+  areas: string[];
 };
 
 export type Plan = {
   date: string; // YYYY-MM-DD (tomorrow by default)
   areas: string[];
-  truckDay: TruckDay[]; // per truck today's area
+  truckDay: TruckDay[]; // per truck today's areas
   invoices: Invoice[];
   locked: boolean;
   createdAt: string;
@@ -47,3 +49,25 @@ export type AuditEntry = {
   message: string;
   payload?: unknown;
 };
+
+/** Normalize legacy TruckDay.area → areas[] */
+export function normalizeTruckDay(raw: {
+  truckId: string;
+  areas?: string[];
+  area?: string;
+}): TruckDay {
+  if (Array.isArray(raw.areas)) {
+    return { truckId: raw.truckId, areas: raw.areas.filter(Boolean) };
+  }
+  const legacy = typeof raw.area === "string" ? raw.area : "";
+  return { truckId: raw.truckId, areas: legacy ? [legacy] : [] };
+}
+
+export function normalizeCustomer(raw: Partial<CustomerMemory> & { name: string }): CustomerMemory {
+  return {
+    name: raw.name,
+    defaultArea: raw.defaultArea ?? "",
+    loadingNumber: typeof raw.loadingNumber === "number" ? raw.loadingNumber : 0,
+    firstSeen: raw.firstSeen ?? new Date().toISOString(),
+  };
+}

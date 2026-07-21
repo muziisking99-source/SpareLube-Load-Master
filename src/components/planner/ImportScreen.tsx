@@ -1,7 +1,34 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  FileSpreadsheet,
+  Trash2,
+  TriangleAlert,
+  Upload,
+} from "lucide-react";
+import { toast } from "sonner";
 import { useStore } from "@/lib/store";
-import { parseImport } from "@/lib/parse";
+import { parseExcelFile } from "@/lib/parse";
 import { areaColor } from "@/lib/colors";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { ScreenHeader } from "./ui/ScreenHeader";
+import { EmptyState } from "./ui/EmptyState";
+import { StatTile } from "./ui/StatTile";
+import type { Invoice } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export function ImportScreen() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
@@ -11,10 +38,15 @@ export function ImportScreen() {
   const updateInvoice = useStore((s) => s.updateInvoice);
   const removeInvoice = useStore((s) => s.removeInvoice);
   const confirmImport = useStore((s) => s.confirmImport);
+  const setCustomerLoadingNumber = useStore((s) => s.setCustomerLoadingNumber);
   const setStep = useStore((s) => s.setStep);
 
-  const [paste, setPaste] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [fileName, setFileName] = useState("");
   const [message, setMessage] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [pendingLoads, setPendingLoads] = useState<Record<string, number>>({});
 
   const areas = plan.areas;
   const invoices = plan.invoices;
@@ -32,37 +64,73 @@ export function ImportScreen() {
   const totalWeight = invoices.reduce((s, i) => s + (i.weight || 0), 0);
   const entered = invoices.filter((i) => i.weight > 0).length;
   const avg = entered ? totalWeight / entered : 0;
-  const canConfirm =
-    invoices.length > 0 && missingWeights === 0 && missingAreas === 0;
+  const canConfirm = invoices.length > 0 && missingWeights === 0 && missingAreas === 0;
+  const progressPct = invoices.length ? (entered / invoices.length) * 100 : 0;
 
-  function doParse() {
-    const rows = parseImport(paste);
-    if (rows.length === 0) {
-      setMessage("No valid rows found. Use TAB or comma-separated Doc,Customer.");
+  async function handleExcelFile(file: File) {
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith(".xlsx") && !lower.endsWith(".xls") && !lower.endsWith(".csv")) {
+      setMessage("Please upload an Excel file (.xlsx or .xls).");
+      toast.error("Invalid file type");
       return;
     }
-    // filter duplicates against existing SYSTEM rows already imported
-    const existingDocs = new Set(systemInvoices.map((i) => i.doc));
-    const fresh = rows.filter((r) => !existingDocs.has(r.doc));
-    addInvoices(
-      fresh.map((r) => ({
-        doc: r.doc,
-        customer: r.customer,
-        weight: 0,
-        area: customers[r.customer]?.defaultArea ?? "",
-        source: "SYSTEM",
-      })),
-    );
-    setPaste("");
-    setMessage(
-      `Parsed ${rows.length} row${rows.length === 1 ? "" : "s"}. Added ${fresh.length}.`,
-    );
+
+    setParsing(true);
+    setFileName(file.name);
+    setMessage("");
+    try {
+      const rows = await parseExcelFile(file);
+      if (rows.length === 0) {
+        setMessage("No valid rows found. Sheet needs Doc and Customer columns.");
+        toast.error("No valid rows found");
+        return;
+      }
+      const existingDocs = new Set(systemInvoices.map((i) => i.doc));
+      const fresh = rows.filter((r) => !existingDocs.has(r.doc));
+      addInvoices(
+        fresh.map((r) => ({
+          doc: r.doc,
+          customer: r.customer,
+          weight: 0,
+          area: customers[r.customer]?.defaultArea ?? "",
+          source: "SYSTEM",
+        })),
+      );
+      const loads: Record<string, number> = { ...pendingLoads };
+      for (const r of fresh) {
+        if (r.loadingNumber) loads[r.customer] = r.loadingNumber;
+      }
+      setPendingLoads(loads);
+      // Apply immediately when customer already has an area
+      for (const r of fresh) {
+        if (!r.loadingNumber) continue;
+        const area = customers[r.customer]?.defaultArea;
+        if (area) setCustomerLoadingNumber(r.customer, area, r.loadingNumber);
+      }
+      const withLoad = fresh.filter((r) => r.loadingNumber).length;
+      const msg = `Parsed ${rows.length} row${rows.length === 1 ? "" : "s"} from ${file.name}. Added ${fresh.length}${withLoad ? ` (${withLoad} with load #)` : ""}.`;
+      setMessage(msg);
+      toast.success(msg);
+    } catch {
+      setMessage("Could not read that Excel file. Check the format and try again.");
+      toast.error("Failed to read Excel file");
+    } finally {
+      setParsing(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
   }
 
   function handleConfirm() {
     if (!canConfirm) return;
     const { known, learned } = confirmImport();
-    alert(`Saved. ${known} known customers, ${learned} newly learned.`);
+    // Apply pending Excel load numbers now that areas are confirmed
+    const s = useStore.getState();
+    for (const inv of s.plans[s.currentDate]?.invoices ?? []) {
+      const n = pendingLoads[inv.customer];
+      if (n && inv.area) setCustomerLoadingNumber(inv.customer, inv.area, n);
+    }
+    setPendingLoads({});
+    toast.success(`Saved. ${known} known customers, ${learned} newly learned.`);
     setStep("allocate");
   }
 
@@ -70,54 +138,97 @@ export function ImportScreen() {
     <div className="space-y-6">
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="panel p-5">
-          <h2 className="text-lg font-semibold mb-2">Paste Import</h2>
-          <p className="text-xs text-muted-foreground mb-2">
-            One row per line — <code>DOC[TAB]Customer</code> or <code>DOC,Customer</code>.
-            Weights are added below.
-          </p>
-          <textarea
-            value={paste}
-            onChange={(e) => setPaste(e.target.value)}
-            rows={10}
-            placeholder={"12345\tABC Stores\n12346,XYZ Depot"}
-            className="w-full bg-panel-2 border border-border rounded p-3 font-mono text-sm outline-none focus:ring-2 focus:ring-primary"
+          <ScreenHeader
+            title="Excel Import"
+            description="Upload an .xlsx or .xls sheet with Doc and Customer columns. Optional Load # column sets sequence when areas are assigned."
+            className="mb-4"
           />
-          <div className="mt-2 flex items-center gap-3">
-            <button
-              onClick={doParse}
-              className="px-4 py-2 rounded bg-primary text-primary-foreground font-medium"
-            >
-              Parse & Review
-            </button>
-            {message && <span className="text-sm text-muted-foreground">{message}</span>}
-          </div>
+
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleExcelFile(f);
+            }}
+          />
+
+          <button
+            type="button"
+            disabled={parsing}
+            onClick={() => fileRef.current?.click()}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const f = e.dataTransfer.files?.[0];
+              if (f) void handleExcelFile(f);
+            }}
+            className={cn(
+              "flex w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-4 py-10 text-center transition-colors",
+              dragOver
+                ? "border-primary bg-primary/5"
+                : "border-border bg-panel-2/50 hover:border-primary/50 hover:bg-panel-2",
+              parsing && "opacity-60",
+            )}
+          >
+            <div className="grid size-12 place-items-center rounded-xl bg-primary/10 text-primary">
+              {parsing ? (
+                <Upload className="size-6 animate-pulse" />
+              ) : (
+                <FileSpreadsheet className="size-6" />
+              )}
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                {parsing ? "Reading workbook…" : "Drop Excel file here, or click to browse"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                .xlsx / .xls — Doc, Customer, optional Load #
+              </p>
+            </div>
+            {fileName && !parsing && (
+              <Badge variant="outline" className="metric-mono font-normal">
+                {fileName}
+              </Badge>
+            )}
+          </button>
+
+          {message && <p className="mt-3 text-sm text-muted-foreground">{message}</p>}
         </section>
 
         <section className="panel p-5">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-lg font-semibold">Adhoc Invoices</h2>
-            <button
-              onClick={addAdhoc}
-              className="text-sm px-3 py-1 rounded bg-secondary text-secondary-foreground"
-            >
-              + Add Row
-            </button>
-          </div>
+          <ScreenHeader
+            title="Adhoc Invoices"
+            description="Manually add one-off deliveries not in the system export."
+            action={
+              <Button variant="secondary" size="sm" onClick={addAdhoc}>
+                Add Row
+              </Button>
+            }
+            className="mb-4"
+          />
           {adhocInvoices.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No adhoc invoices yet.</p>
+            <EmptyState title="No adhoc invoices" description="Use Add Row for manual entries." />
           ) : (
-            <div className="overflow-auto max-h-80">
-              <table className="w-full text-sm">
-                <thead className="text-muted-foreground text-left">
-                  <tr>
-                    <th className="p-2">Doc</th>
-                    <th className="p-2">Customer</th>
-                    <th className="p-2 w-24">Weight</th>
-                    <th className="p-2 w-40">Area</th>
-                    <th className="p-2 w-8"></th>
-                  </tr>
-                </thead>
-                <tbody>
+            <div className="max-h-80 overflow-auto rounded-xl border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Doc</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead className="w-24">Weight</TableHead>
+                    <TableHead className="w-40">Area</TableHead>
+                    <TableHead className="w-10" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {adhocInvoices.map((i) => (
                     <InvoiceRow
                       key={i.id}
@@ -129,8 +240,8 @@ export function ImportScreen() {
                       adhoc
                     />
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
           )}
         </section>
@@ -138,26 +249,26 @@ export function ImportScreen() {
 
       {invoices.length > 0 && (
         <section className="panel p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Review — Enter Weights</h2>
-            <div className="text-xs text-muted-foreground">
-              Tab / Enter to move. Numeric only. Blank or 0 blocks confirmation.
-            </div>
-          </div>
-          <div className="overflow-auto max-h-[520px] border border-border rounded">
-            <table className="w-full text-sm">
-              <thead className="bg-panel-2 text-muted-foreground text-left sticky top-0">
-                <tr>
-                  <th className="p-2 w-28">Doc</th>
-                  <th className="p-2">Customer</th>
-                  <th className="p-2 w-28">Weight (kg)</th>
-                  <th className="p-2 w-40">Area</th>
-                  <th className="p-2 w-40">Status</th>
-                  <th className="p-2 w-8"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {invoices.map((i) => {
+          <ScreenHeader
+            title="Review — Enter Weights"
+            description="Tab or Enter to move between weight fields. All weights and areas must be complete."
+            className="mb-4"
+          />
+          <div className="max-h-[520px] overflow-auto rounded-xl border border-border">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-panel-2">
+                <TableRow className="hover:bg-panel-2">
+                  <TableHead className="w-16">Load #</TableHead>
+                  <TableHead className="w-28">Doc</TableHead>
+                  <TableHead>Customer</TableHead>
+                  <TableHead className="w-28">Weight (kg)</TableHead>
+                  <TableHead className="w-40">Area</TableHead>
+                  <TableHead className="w-40">Status</TableHead>
+                  <TableHead className="w-10" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {invoices.map((i, idx) => {
                   const known = i.source === "SYSTEM" && !!customers[i.customer];
                   const dup = (docCounts.get(i.doc) ?? 0) > 1;
                   return (
@@ -167,66 +278,69 @@ export function ImportScreen() {
                       areas={areas}
                       known={known}
                       duplicate={dup}
+                      index={idx}
+                      loadNumber={
+                        (i.area &&
+                          customers[i.customer]?.defaultArea === i.area &&
+                          customers[i.customer]?.loadingNumber) ||
+                        pendingLoads[i.customer] ||
+                        0
+                      }
                       onChange={(patch) => updateInvoice(i.id, patch)}
                       onRemove={() => removeInvoice(i.id)}
                     />
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         </section>
       )}
 
       <div className="grid gap-4 md:grid-cols-3">
         <div className="panel p-4">
-          <div className="text-xs text-muted-foreground mb-1">Validation</div>
-          <div className="space-y-1 text-sm">
-            <div className={missingWeights === 0 && missingAreas === 0 && invoices.length > 0 ? "text-good" : ""}>
-              {missingWeights === 0 && missingAreas === 0 && invoices.length > 0
-                ? "✓ Complete"
-                : "Incomplete"}
+          <div className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">Validation</div>
+          <div className="space-y-2 text-sm">
+            {canConfirm ? (
+              <div className="flex items-center gap-2 text-good">
+                <CheckCircle2 className="size-4" />
+                Complete
+              </div>
+            ) : (
+              <div className="text-muted-foreground">Incomplete</div>
+            )}
+            <div className={`flex items-center gap-2 ${missingWeights ? "text-warn" : "text-muted-foreground"}`}>
+              <TriangleAlert className="size-3.5" />
+              Missing weights: {missingWeights}
             </div>
-            <div className={missingWeights ? "text-warn" : "text-muted-foreground"}>
-              ⚠ Missing Weights: {missingWeights}
-            </div>
-            <div className={missingAreas ? "text-warn" : "text-muted-foreground"}>
-              ⚠ Missing Areas: {missingAreas}
+            <div className={`flex items-center gap-2 ${missingAreas ? "text-warn" : "text-muted-foreground"}`}>
+              <TriangleAlert className="size-3.5" />
+              Missing areas: {missingAreas}
             </div>
           </div>
-          <div className="mt-2 h-2 bg-panel-2 rounded overflow-hidden">
-            <div
-              className="h-full bg-primary"
-              style={{
-                width: `${invoices.length ? (entered / invoices.length) * 100 : 0}%`,
-              }}
-            />
-          </div>
+          <Progress value={progressPct} className="mt-3" />
         </div>
-        <div className="panel p-4">
-          <div className="text-xs text-muted-foreground mb-1">Live Weight Summary</div>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>Total Invoices</div><div className="font-mono">{invoices.length}</div>
-            <div>Weights Entered</div><div className="font-mono">{entered}</div>
-            <div>Total Weight</div><div className="font-mono">{totalWeight.toFixed(0)} kg</div>
-            <div>Average Weight</div><div className="font-mono">{avg.toFixed(1)} kg</div>
+
+        <StatTile label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />
+        <div className="panel flex flex-col justify-between p-4">
+          <div className="mb-3 grid grid-cols-2 gap-2 text-sm">
+            <span className="text-muted-foreground">Invoices</span>
+            <span className="metric-mono text-right">{invoices.length}</span>
+            <span className="text-muted-foreground">Weights entered</span>
+            <span className="metric-mono text-right">{entered}</span>
+            <span className="text-muted-foreground">Average</span>
+            <span className="metric-mono text-right">{avg.toFixed(1)} kg</span>
           </div>
-        </div>
-        <div className="panel p-4 flex flex-col justify-between">
-          <div className="text-xs text-muted-foreground mb-2">Confirm & continue</div>
-          <button
-            disabled={!canConfirm}
-            onClick={handleConfirm}
-            className="w-full py-3 rounded bg-primary text-primary-foreground font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Confirm & Save (Ctrl+Enter)
-          </button>
-          <button
-            onClick={() => setStep("setup")}
-            className="w-full py-2 mt-2 rounded border border-border text-sm hover:bg-panel-2"
-          >
-            ← Back to Setup
-          </button>
+          <div className="space-y-2">
+            <Button disabled={!canConfirm} className="w-full" onClick={handleConfirm}>
+              Confirm and Save
+              <ArrowRight className="size-4" />
+            </Button>
+            <Button variant="outline" className="w-full" onClick={() => setStep("setup")}>
+              <ArrowLeft className="size-4" />
+              Back to Setup
+            </Button>
+          </div>
         </div>
       </div>
     </div>
@@ -239,15 +353,19 @@ function InvoiceRow({
   known,
   duplicate,
   adhoc,
+  index,
+  loadNumber,
   onChange,
   onRemove,
 }: {
-  inv: import("@/lib/types").Invoice;
+  inv: Invoice;
   areas: string[];
   known: boolean;
   duplicate?: boolean;
   adhoc?: boolean;
-  onChange: (p: Partial<import("@/lib/types").Invoice>) => void;
+  index?: number;
+  loadNumber?: number;
+  onChange: (p: Partial<Invoice>) => void;
   onRemove: () => void;
 }) {
   const badWeight = !inv.weight || inv.weight <= 0;
@@ -259,10 +377,6 @@ function InvoiceRow({
       : { background: "color-mix(in oklab, var(--warn) 6%, transparent)" };
 
   function onKey(e: React.KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-      // handled at parent via button; blur to trigger update
-      (e.target as HTMLElement).blur();
-    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       const inputs = Array.from(
@@ -271,96 +385,96 @@ function InvoiceRow({
         ),
       );
       const idx = inputs.indexOf(e.target as HTMLInputElement);
-      const next = inputs[idx + 1];
-      next?.focus();
+      inputs[idx + 1]?.focus();
     }
   }
 
   return (
-    <tr className="border-t border-border" style={rowStyle}>
-      <td className="p-2 font-mono">
+    <TableRow
+      style={{ ...rowStyle, ...(index !== undefined ? { "--index": index } : {}) } as React.CSSProperties}
+      className={index !== undefined ? "stagger-item" : undefined}
+    >
+      {!adhoc && (
+        <TableCell className="metric-mono text-muted-foreground">
+          {loadNumber && loadNumber > 0 ? loadNumber : "—"}
+        </TableCell>
+      )}
+      <TableCell className="metric-mono">
         {adhoc ? (
-          <input
+          <Input
             value={inv.doc}
             onChange={(e) => onChange({ doc: e.target.value })}
-            className="bg-transparent border border-border rounded px-1 py-0.5 w-full"
+            className="h-8"
           />
         ) : (
-          <span>{inv.doc}</span>
+          inv.doc
         )}
-      </td>
-      <td className="p-2">
+      </TableCell>
+      <TableCell>
         {adhoc ? (
-          <input
+          <Input
             value={inv.customer}
             onChange={(e) => onChange({ customer: e.target.value })}
-            className="bg-transparent border border-border rounded px-1 py-0.5 w-full"
+            className="h-8"
           />
         ) : (
-          <>
-            <span>{inv.customer}</span>
-            {duplicate && (
-              <span className="ml-2 chip" style={{ color: "var(--crit)", borderColor: "var(--crit)" }}>
-                Duplicate
-              </span>
-            )}
-          </>
+          <span className="flex flex-wrap items-center gap-2">
+            {inv.customer}
+            {duplicate && <Badge variant="crit">Duplicate</Badge>}
+          </span>
         )}
-      </td>
-      <td className="p-2">
-        <input
+      </TableCell>
+      <TableCell>
+        <Input
           type="number"
           min={0}
           value={inv.weight || ""}
           onChange={(e) => onChange({ weight: Number(e.target.value) })}
           onKeyDown={onKey}
-          className={`weight-input w-24 bg-panel-2 border rounded px-2 py-1 font-mono ${
-            badWeight ? "border-crit" : "border-border"
-          }`}
+          className={`weight-input h-8 w-24 metric-mono ${badWeight ? "border-crit" : ""}`}
           placeholder="0"
         />
-      </td>
-      <td className="p-2">
+      </TableCell>
+      <TableCell>
         <select
           value={inv.area}
           onChange={(e) => onChange({ area: e.target.value })}
-          disabled={known && !!inv.area}
-          className={`w-full bg-panel-2 border rounded px-2 py-1 disabled:opacity-70 ${
-            badArea ? "border-warn" : "border-border"
+          className={`h-9 w-full rounded-lg border bg-panel-2 px-2 text-sm ${
+            badArea ? "border-warn" : "border-input"
           }`}
         >
-          <option value="">— Area —</option>
-          {areas.map((a) => (
-            <option key={a} value={a}>
-              {a}
-            </option>
-          ))}
+          <option value="">Select area</option>
+          {areas.map((a) => {
+            const c = areaColor(a);
+            return (
+              <option key={a} value={a} style={{ color: c.text }}>
+                {a}
+              </option>
+            );
+          })}
         </select>
-      </td>
-      <td className="p-2">
+      </TableCell>
+      <TableCell>
         {adhoc ? (
-          <span className="chip" style={{ color: "var(--primary)", borderColor: "var(--primary)" }}>
-            Adhoc
-          </span>
+          <Badge variant="outline">Adhoc</Badge>
         ) : known ? (
-          <span className="chip" style={{ color: "var(--good)", borderColor: "var(--good)" }}>
-            Known
-          </span>
+          <Badge variant="good">Known</Badge>
         ) : (
-          <span className="chip" style={{ color: "var(--warn)", borderColor: "var(--warn)" }}>
-            New — Assign Area
-          </span>
+          <Badge variant="warn">New</Badge>
         )}
-      </td>
-      <td className="p-2 text-right">
-        <button
+      </TableCell>
+      <TableCell>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-8 text-muted-foreground hover:text-destructive"
           onClick={onRemove}
-          className="text-muted-foreground hover:text-destructive text-xs"
           aria-label="Remove"
         >
-          ✕
-        </button>
-      </td>
-    </tr>
+          <Trash2 className="size-4" />
+        </Button>
+      </TableCell>
+    </TableRow>
   );
 }

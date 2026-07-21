@@ -1,6 +1,33 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
+import { ArrowRight, Plus, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { ScreenHeader } from "./ui/ScreenHeader";
+import { EmptyState } from "./ui/EmptyState";
+import { FormField } from "./ui/FormField";
 
 export function SetupScreen() {
   const plan = useStore((s) => s.plans[s.currentDate]);
@@ -9,7 +36,7 @@ export function SetupScreen() {
   const setDate = useStore((s) => s.setDate);
   const addArea = useStore((s) => s.addArea);
   const removeArea = useStore((s) => s.removeArea);
-  const setTruckDayArea = useStore((s) => s.setTruckDayArea);
+  const setTruckDayAreas = useStore((s) => s.setTruckDayAreas);
   const updateTruck = useStore((s) => s.updateTruck);
   const addTruck = useStore((s) => s.addTruck);
   const deleteTruck = useStore((s) => s.deleteTruck);
@@ -19,55 +46,77 @@ export function SetupScreen() {
   const [newArea, setNewArea] = useState("");
   const [showAddTruck, setShowAddTruck] = useState(false);
   const [truckForm, setTruckForm] = useState({ name: "", maxWeight: 3000 });
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const areas = plan?.areas ?? [];
-  const truckDayMap = new Map((plan?.truckDay ?? []).map((td) => [td.truckId, td.area]));
+  const truckDayMap = new Map(
+    (plan?.truckDay ?? []).map((td) => [td.truckId, td.areas ?? []] as const),
+  );
   const activeTrucks = trucks.filter((t) => t.active);
-  const missingArea = activeTrucks.filter((t) => !truckDayMap.get(t.id));
+  const missingArea = activeTrucks.filter((t) => (truckDayMap.get(t.id) ?? []).length === 0);
   const canContinue = activeTrucks.length > 0 && missingArea.length === 0;
-
   const suggestions = areaHistory.filter((a) => !areas.includes(a));
 
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
       <div className="space-y-6">
         <section className="panel p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Today's Delivery Areas</h2>
-            <label className="text-xs text-muted-foreground flex items-center gap-2">
-              Plan date
-              <input
-                type="date"
-                value={plan?.date ?? ""}
-                onChange={(e) => setDate(e.target.value)}
-                className="bg-panel-2 border border-border rounded px-2 py-1 text-foreground"
+          <ScreenHeader
+            title="Today's Delivery Areas"
+            description="Define the delivery zones active for this plan date."
+            action={
+              <FormField label="Plan date" className="gap-1">
+                <Input
+                  type="date"
+                  value={plan?.date ?? ""}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="h-8 w-auto"
+                />
+              </FormField>
+            }
+            className="mb-4"
+          />
+
+          {areas.length === 0 ? (
+            <div className="mb-3">
+              <EmptyState
+                title="No areas yet"
+                description="Add delivery areas below or pick from previously used zones."
               />
-            </label>
-          </div>
-          <div className="flex flex-wrap gap-2 mb-3">
-            {areas.map((a) => {
-              const c = areaColor(a);
-              return (
-                <span
-                  key={a}
-                  className="chip"
-                  style={{ background: c.bg, borderColor: c.border, color: c.text }}
-                >
-                  {a}
-                  <button
-                    onClick={() => removeArea(a)}
-                    className="ml-1 text-xs opacity-70 hover:opacity-100"
-                    aria-label={`Remove ${a}`}
+            </div>
+          ) : (
+            <ul className="mb-3 divide-y divide-border overflow-hidden rounded-xl border border-border">
+              {areas.map((a) => {
+                const c = areaColor(a);
+                return (
+                  <li
+                    key={a}
+                    className="flex items-center gap-3 px-3 py-2.5 transition-colors hover:bg-panel-2/60"
                   >
-                    ×
-                  </button>
-                </span>
-              );
-            })}
-            {areas.length === 0 && (
-              <span className="text-sm text-muted-foreground">No areas yet.</span>
-            )}
-          </div>
+                    <span
+                      className="size-2.5 shrink-0 rounded-full"
+                      style={{ background: c.border }}
+                      aria-hidden
+                    />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium" style={{ color: c.text }}>
+                      {a}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => removeArea(a)}
+                      aria-label={`Remove ${a}`}
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -76,28 +125,26 @@ export function SetupScreen() {
             }}
             className="flex gap-2"
           >
-            <input
+            <Input
               value={newArea}
               onChange={(e) => setNewArea(e.target.value)}
               placeholder="Add area (e.g. Alberton)"
-              className="flex-1 bg-panel-2 border border-border rounded px-3 py-2 outline-none focus:ring-2 focus:ring-primary"
+              className="flex-1"
             />
-            <button className="px-4 py-2 rounded bg-primary text-primary-foreground font-medium">
-              + Add Area
-            </button>
+            <Button type="submit">
+              <Plus className="size-4" />
+              Add Area
+            </Button>
           </form>
+
           {suggestions.length > 0 && (
             <div className="mt-3">
-              <div className="text-xs text-muted-foreground mb-1">Previously used:</div>
+              <div className="mb-1 text-xs text-muted-foreground">Previously used</div>
               <div className="flex flex-wrap gap-1">
                 {suggestions.map((a) => (
-                  <button
-                    key={a}
-                    onClick={() => addArea(a)}
-                    className="chip hover:border-primary/70"
-                  >
+                  <Button key={a} type="button" variant="outline" size="sm" onClick={() => addArea(a)}>
                     + {a}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>
@@ -105,15 +152,22 @@ export function SetupScreen() {
         </section>
 
         <section className="panel p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Trucks</h2>
-            <button
-              onClick={() => setShowAddTruck((v) => !v)}
-              className="text-sm px-3 py-1 rounded bg-secondary text-secondary-foreground hover:bg-secondary/80"
-            >
-              {showAddTruck ? "Cancel" : "+ Add Truck"}
-            </button>
-          </div>
+          <ScreenHeader
+            title="Trucks"
+            description="Assign each active truck to a delivery area for today."
+            action={
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setShowAddTruck((v) => !v)}
+              >
+                {showAddTruck ? "Cancel" : "Add Truck"}
+              </Button>
+            }
+            className="mb-4"
+          />
+
           {showAddTruck && (
             <form
               onSubmit={(e) => {
@@ -127,161 +181,202 @@ export function SetupScreen() {
                 setTruckForm({ name: "", maxWeight: 3000 });
                 setShowAddTruck(false);
                 setTimeout(ensureTruckDay, 0);
+                toast.success(`Truck "${truckForm.name}" added`);
               }}
-              className="flex gap-2 mb-3"
+              className="mb-4 flex flex-wrap gap-2"
             >
-              <input
+              <Input
                 autoFocus
                 value={truckForm.name}
                 onChange={(e) => setTruckForm({ ...truckForm, name: e.target.value })}
                 placeholder="Truck name"
-                className="flex-1 bg-panel-2 border border-border rounded px-3 py-2"
+                className="min-w-[140px] flex-1"
               />
-              <input
+              <Input
                 type="number"
                 value={truckForm.maxWeight}
                 onChange={(e) =>
                   setTruckForm({ ...truckForm, maxWeight: Number(e.target.value) })
                 }
                 placeholder="Max kg"
-                className="w-32 bg-panel-2 border border-border rounded px-3 py-2"
+                className="w-32"
               />
-              <button className="px-4 py-2 rounded bg-primary text-primary-foreground">
-                Save
-              </button>
+              <Button type="submit">Save</Button>
             </form>
           )}
-          <div className="overflow-hidden rounded border border-border">
-            <table className="w-full text-sm">
-              <thead className="bg-panel-2 text-muted-foreground text-left">
-                <tr>
-                  <th className="p-2 w-16">Active</th>
-                  <th className="p-2">Truck</th>
-                  <th className="p-2 w-28">Max kg</th>
-                  <th className="p-2 w-64">Today's Area</th>
-                  <th className="p-2 w-32">Status</th>
-                  <th className="p-2 w-16"></th>
-                </tr>
-              </thead>
-              <tbody>
+
+          <div className="overflow-hidden rounded-xl border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-panel-2 hover:bg-panel-2">
+                  <TableHead className="w-16">Active</TableHead>
+                  <TableHead>Truck</TableHead>
+                  <TableHead className="w-28">Max kg</TableHead>
+                  <TableHead className="min-w-[220px]">Today's Areas</TableHead>
+                  <TableHead className="w-32">Status</TableHead>
+                  <TableHead className="w-12" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {trucks.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="p-4 text-center text-muted-foreground">
-                      No trucks yet. Add one above.
-                    </td>
-                  </tr>
+                  <TableRow>
+                    <TableCell colSpan={6}>
+                      <EmptyState title="No trucks yet" description="Add a truck using the button above." />
+                    </TableCell>
+                  </TableRow>
                 )}
-                {trucks.map((t) => {
-                  const dayArea = truckDayMap.get(t.id) ?? "";
+                {trucks.map((t, idx) => {
+                  const dayAreas = truckDayMap.get(t.id) ?? [];
                   const inactive = !t.active;
                   return (
-                    <tr
+                    <TableRow
                       key={t.id}
-                      className={`border-t border-border ${inactive ? "opacity-50" : ""}`}
+                      style={{ "--index": idx } as React.CSSProperties}
+                      className={`stagger-item ${inactive ? "opacity-50" : ""}`}
                     >
-                      <td className="p-2">
-                        <input
-                          type="checkbox"
+                      <TableCell>
+                        <Checkbox
                           checked={t.active}
-                          onChange={(e) => updateTruck(t.id, { active: e.target.checked })}
+                          onCheckedChange={(v) => updateTruck(t.id, { active: !!v })}
                         />
-                      </td>
-                      <td className="p-2">
-                        <input
+                      </TableCell>
+                      <TableCell>
+                        <Input
                           value={t.name}
                           onChange={(e) => updateTruck(t.id, { name: e.target.value })}
-                          className="bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-1 py-0.5 w-full"
+                          className="h-8 border-transparent bg-transparent hover:border-border focus:border-ring"
                         />
-                      </td>
-                      <td className="p-2">
-                        <input
+                      </TableCell>
+                      <TableCell>
+                        <Input
                           type="number"
                           value={t.maxWeight}
                           onChange={(e) =>
                             updateTruck(t.id, { maxWeight: Number(e.target.value) })
                           }
-                          className="bg-transparent border border-transparent hover:border-border focus:border-primary rounded px-1 py-0.5 w-24"
+                          className="h-8 w-24 border-transparent bg-transparent hover:border-border focus:border-ring metric-mono"
                         />
-                      </td>
-                      <td className="p-2">
-                        <select
-                          disabled={inactive}
-                          value={dayArea}
-                          onChange={(e) => setTruckDayArea(t.id, e.target.value)}
-                          className="bg-panel-2 border border-border rounded px-2 py-1 w-full disabled:opacity-40"
-                        >
-                          <option value="">— Select —</option>
-                          {areas.map((a) => (
-                            <option key={a} value={a}>
-                              {a}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="p-2">
-                        {inactive ? (
-                          <span className="chip" style={{ color: "var(--muted-foreground)" }}>
-                            Off Duty
-                          </span>
-                        ) : dayArea ? (
-                          <span
-                            className="chip"
-                            style={{ color: "var(--good)", borderColor: "var(--good)" }}
-                          >
-                            Ready
-                          </span>
+                      </TableCell>
+                      <TableCell>
+                        {areas.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">Add areas first</span>
                         ) : (
-                          <span
-                            className="chip"
-                            style={{ color: "var(--warn)", borderColor: "var(--warn)" }}
-                          >
-                            Needs area
-                          </span>
+                          <div className="flex flex-wrap gap-2 py-1">
+                            {areas.map((a) => {
+                              const checked = dayAreas.includes(a);
+                              return (
+                                <label
+                                  key={a}
+                                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs ${
+                                    checked
+                                      ? "border-primary/50 bg-primary/10 text-primary"
+                                      : "border-border text-muted-foreground"
+                                  } ${inactive ? "pointer-events-none opacity-40" : "cursor-pointer"}`}
+                                >
+                                  <Checkbox
+                                    disabled={inactive}
+                                    checked={checked}
+                                    onCheckedChange={(v) => {
+                                      const next = v
+                                        ? [...dayAreas, a]
+                                        : dayAreas.filter((x) => x !== a);
+                                      setTruckDayAreas(t.id, next);
+                                    }}
+                                  />
+                                  {a}
+                                </label>
+                              );
+                            })}
+                          </div>
                         )}
-                      </td>
-                      <td className="p-2 text-right">
-                        <button
-                          onClick={() => {
-                            if (confirm(`Delete truck ${t.name}?`)) deleteTruck(t.id);
-                          }}
-                          className="text-xs text-muted-foreground hover:text-destructive"
+                      </TableCell>
+                      <TableCell>
+                        {inactive ? (
+                          <Badge variant="outline">Off Duty</Badge>
+                        ) : dayAreas.length > 0 ? (
+                          <Badge variant="good">Ready</Badge>
+                        ) : (
+                          <Badge variant="warn">Needs area</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => setDeleteTarget({ id: t.id, name: t.name })}
                           aria-label="Delete truck"
                         >
-                          ✕
-                        </button>
-                      </td>
-                    </tr>
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
                   );
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
         </section>
       </div>
 
-      <aside className="panel p-5 h-fit sticky top-4">
-        <h3 className="font-semibold mb-2">Ready to continue?</h3>
-        <ul className="text-sm space-y-1 mb-4">
-          <li>Areas defined: <b>{areas.length}</b></li>
-          <li>Active trucks: <b>{activeTrucks.length}</b></li>
-          <li>Trucks missing area: <b>{missingArea.length}</b></li>
+      <aside className="panel sticky top-20 h-fit p-5">
+        <h3 className="font-semibold tracking-tight">Ready to continue?</h3>
+        <ul className="mb-4 mt-3 space-y-2 text-sm">
+          <li className="flex justify-between">
+            <span className="text-muted-foreground">Areas defined</span>
+            <span className="metric-mono font-medium">{areas.length}</span>
+          </li>
+          <li className="flex justify-between">
+            <span className="text-muted-foreground">Active trucks</span>
+            <span className="metric-mono font-medium">{activeTrucks.length}</span>
+          </li>
+          <li className="flex justify-between">
+            <span className="text-muted-foreground">Missing area</span>
+            <span className={`metric-mono font-medium ${missingArea.length ? "text-warn" : ""}`}>
+              {missingArea.length}
+            </span>
+          </li>
         </ul>
         {activeTrucks.length === 0 && (
-          <p className="text-crit text-sm mb-3">At least one truck must be active.</p>
+          <p className="mb-3 text-sm text-crit">At least one truck must be active.</p>
         )}
         {missingArea.length > 0 && (
-          <p className="text-warn text-sm mb-3">
+          <p className="mb-3 text-sm text-warn">
             Assign an area to every active truck before continuing.
           </p>
         )}
-        <button
-          disabled={!canContinue}
-          onClick={() => setStep("import")}
-          className="w-full py-3 rounded bg-primary text-primary-foreground font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          Continue to Import →
-        </button>
+        <Button disabled={!canContinue} className="w-full" size="lg" onClick={() => setStep("import")}>
+          Continue to Import
+          <ArrowRight className="size-4" />
+        </Button>
       </aside>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent className="panel border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete truck?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Remove <strong>{deleteTarget?.name}</strong> from the fleet. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deleteTarget) {
+                  deleteTruck(deleteTarget.id);
+                  toast.success(`Truck "${deleteTarget.name}" removed`);
+                  setDeleteTarget(null);
+                }
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

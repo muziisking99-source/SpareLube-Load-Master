@@ -1,8 +1,24 @@
 import { useMemo, useState } from "react";
+import { ArrowRight, Ban, Play, Undo2 } from "lucide-react";
+import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
 import { truckWeight } from "@/lib/allocation";
 import type { Invoice, Truck } from "@/lib/types";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { ScreenHeader } from "./ui/ScreenHeader";
+import { EmptyState } from "./ui/EmptyState";
+import { FormField } from "./ui/FormField";
 
 export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const plan = useStore((s) => s.plans[s.currentDate])!;
@@ -21,7 +37,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   } | null>(null);
 
   const activeTrucks = trucks.filter((t) => t.active);
-  const dayArea = new Map(plan.truckDay.map((td) => [td.truckId, td.area]));
+  const dayAreas = new Map(plan.truckDay.map((td) => [td.truckId, td.areas ?? []]));
   const inv = plan.invoices;
   const allocated = inv.filter((i) => i.truckId);
   const unallocated = inv.filter((i) => !i.truckId);
@@ -35,99 +51,93 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
     return m;
   }, [inv]);
 
-  const totalCap = activeTrucks.reduce((s, t) => s + t.maxWeight, 0);
-  const totalWeight = allocated.reduce((s, i) => s + i.weight, 0);
-  const fleetUtil = totalCap ? (totalWeight / totalCap) * 100 : 0;
-
   function toggleSelect(id: string) {
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   }
-  function clearSel() { setSelected([]); }
+  function clearSel() {
+    setSelected([]);
+  }
 
   return (
     <div className="space-y-5">
-      <div className="panel p-4 flex flex-wrap items-center gap-3">
+      <div className="panel sticky top-[7.5rem] z-20 flex flex-wrap items-center gap-3 p-4 no-print">
         {mode === "allocate" ? (
           <>
-            <button
-              onClick={runAllocation}
-              className="px-4 py-2 rounded bg-primary text-primary-foreground font-semibold"
+            <Button
+              onClick={() => {
+                runAllocation();
+                toast.success("Allocation complete");
+              }}
             >
-              ▶ Run Allocation (Even Balance)
-            </button>
-            <button
+              <Play className="size-4" />
+              Run Allocation (Even Balance)
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => setStep("adjust")}
               disabled={allocated.length === 0}
-              className="px-4 py-2 rounded border border-border hover:bg-panel-2 disabled:opacity-40"
             >
-              Review & Adjust →
-            </button>
+              Review and Adjust
+              <ArrowRight className="size-4" />
+            </Button>
           </>
         ) : (
           <>
-            <button
-              onClick={undo}
-              disabled={undoStack.length === 0}
-              className="px-4 py-2 rounded border border-border hover:bg-panel-2 disabled:opacity-40"
-            >
-              ↶ Undo{undoStack[0] ? ` (${undoStack[0].label})` : ""}
-            </button>
+            <Button variant="outline" onClick={undo} disabled={undoStack.length === 0}>
+              <Undo2 className="size-4" />
+              Undo{undoStack[0] ? ` (${undoStack[0].label})` : ""}
+            </Button>
             {selected.length > 0 && (
-              <div className="ml-auto flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">
-                  {selected.length} selected
-                </span>
-                <button
-                  onClick={() => setMoveTarget({ inv: null, bulk: true })}
-                  className="px-3 py-1.5 rounded bg-secondary text-secondary-foreground text-sm"
-                >
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                <span className="text-sm text-muted-foreground">{selected.length} selected</span>
+                <Button size="sm" variant="secondary" onClick={() => setMoveTarget({ inv: null, bulk: true })}>
                   Move Selected
-                </button>
-                <button
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() => {
                     bulkMove(selected, null);
                     clearSel();
                   }}
-                  className="px-3 py-1.5 rounded border border-border text-sm"
                 >
                   Move to Unallocated
-                </button>
-                <button onClick={clearSel} className="text-xs text-muted-foreground">
-                  clear
-                </button>
+                </Button>
+                <Button size="sm" variant="ghost" onClick={clearSel}>
+                  Clear
+                </Button>
               </div>
             )}
-            <button
-              onClick={() => setStep("lock")}
-              className="ml-auto px-4 py-2 rounded bg-primary text-primary-foreground font-semibold"
-            >
-              Proceed to Lock →
-            </button>
+            <Button className="ml-auto" onClick={() => setStep("lock")}>
+              Proceed to Lock
+              <ArrowRight className="size-4" />
+            </Button>
           </>
         )}
       </div>
 
-      {/* Area summary */}
       <div>
-        <h3 className="text-sm text-muted-foreground mb-2">Area Summary</h3>
+        <ScreenHeader title="Area Summary" className="mb-3" />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {[...byArea.entries()].map(([area, list]) => {
+          {[...byArea.entries()].map(([area, list], idx) => {
             const c = areaColor(area);
             const wt = list.reduce((s, i) => s + i.weight, 0);
-            const trucksHere = activeTrucks.filter((t) => dayArea.get(t.id) === area);
+            const trucksHere = activeTrucks.filter((t) =>
+              (dayAreas.get(t.id) ?? []).includes(area),
+            );
             return (
               <div
                 key={area}
-                className="panel-2 p-3"
-                style={{ borderColor: c.border }}
+                style={{ "--index": idx } as React.CSSProperties}
+                className="panel-2 stagger-item p-4"
               >
                 <div className="text-sm font-semibold" style={{ color: c.text }}>
                   {area}
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {list.length} invoices · {wt.toFixed(0)} kg
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {list.length} invoices · <span className="metric-mono">{wt.toFixed(0)} kg</span>
                 </div>
-                <div className="text-xs mt-1">
+                <div className="mt-2 text-xs text-muted-foreground">
                   Trucks: {trucksHere.length ? trucksHere.map((t) => t.name).join(", ") : "—"}
                 </div>
               </div>
@@ -136,16 +146,16 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
         </div>
       </div>
 
-      {/* Trucks */}
       <div className="grid gap-4 lg:grid-cols-2">
-        {activeTrucks.map((t) => (
+        {activeTrucks.map((t, idx) => (
           <TruckCard
             key={t.id}
             truck={t}
-            area={dayArea.get(t.id) ?? ""}
+            areas={dayAreas.get(t.id) ?? []}
             invoices={inv.filter((i) => i.truckId === t.id)}
             mode={mode}
             selected={selected}
+            index={idx}
             onToggleSelect={toggleSelect}
             onMove={(i) => setMoveTarget({ inv: i })}
             onUnallocate={(i) => moveInvoice(i.id, null)}
@@ -153,17 +163,13 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
         ))}
       </div>
 
-      {/* Unallocated */}
       {unallocated.length > 0 && (
-        <section className="panel p-4 border-crit" style={{ borderColor: "var(--crit)" }}>
-          <div className="flex items-center justify-between mb-2">
-            <div className="font-semibold text-crit">
-              Unallocated ({unallocated.length})
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {unallocated.reduce((s, i) => s + i.weight, 0).toFixed(0)} kg total
-            </div>
-          </div>
+        <section className="panel border-crit/50 p-4">
+          <ScreenHeader
+            title={`Unallocated (${unallocated.length})`}
+            description={`${unallocated.reduce((s, i) => s + i.weight, 0).toFixed(0)} kg total`}
+            className="mb-3"
+          />
           <div className="flex flex-wrap gap-2">
             {unallocated.map((i) => (
               <InvoiceChip
@@ -179,12 +185,11 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
         </section>
       )}
 
-      {/* Move dialog */}
       {moveTarget && (
         <MoveDialog
           plan={plan}
           trucks={activeTrucks}
-          dayArea={dayArea}
+          dayAreas={dayAreas}
           bulk={moveTarget.bulk}
           selectedIds={selected}
           invoice={moveTarget.inv ?? undefined}
@@ -206,59 +211,80 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
 
 function TruckCard({
   truck,
-  area,
+  areas,
   invoices,
   mode,
   selected,
+  index,
   onToggleSelect,
   onMove,
   onUnallocate,
 }: {
   truck: Truck;
-  area: string;
+  areas: string[];
   invoices: Invoice[];
   mode: "allocate" | "adjust";
   selected: string[];
+  index: number;
   onToggleSelect: (id: string) => void;
   onMove: (i: Invoice) => void;
   onUnallocate: (i: Invoice) => void;
 }) {
   const weight = invoices.reduce((s, i) => s + i.weight, 0);
   const pct = truck.maxWeight ? (weight / truck.maxWeight) * 100 : 0;
-  const barColor =
-    pct >= 95 ? "var(--crit)" : pct >= 80 ? "var(--warn)" : "var(--good)";
-  const c = areaColor(area || "—");
+  const barTone = pct >= 95 ? "bg-crit" : pct >= 80 ? "bg-warn" : "bg-good";
+  const countByArea = new Map<string, number>();
+  for (const inv of invoices) {
+    const key = inv.area || "—";
+    countByArea.set(key, (countByArea.get(key) ?? 0) + 1);
+  }
+
   return (
-    <div className="panel p-4">
-      <div className="flex items-center justify-between sticky top-0 bg-panel py-1">
+    <div
+      style={{ "--index": index } as React.CSSProperties}
+      className="panel stagger-item p-4 transition-transform hover:-translate-y-0.5"
+    >
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="font-semibold">{truck.name}</div>
-          <div className="text-xs text-muted-foreground">
-            <span
-              className="chip mr-2"
-              style={{ borderColor: c.border, color: c.text, background: c.bg }}
-            >
-              {area || "no area"}
-            </span>
-            {invoices.length} invoices
+          <div className="font-semibold tracking-tight">{truck.name}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {areas.length === 0 ? (
+              <span className="chip">no area</span>
+            ) : (
+              areas.map((area) => {
+                const c = areaColor(area);
+                const n = countByArea.get(area) ?? 0;
+                return (
+                  <span
+                    key={area}
+                    className="chip"
+                    style={{ borderColor: c.border, color: c.text, background: c.bg }}
+                  >
+                    {area}
+                    <span className="metric-mono opacity-80">{n}</span>
+                  </span>
+                );
+              })
+            )}
+            <span>{invoices.length} invoices</span>
           </div>
         </div>
         <div className="text-right">
-          <div className="font-mono">
+          <div className="metric-mono text-sm font-medium">
             {weight.toFixed(0)} / {truck.maxWeight} kg
           </div>
-          <div className="text-xs text-muted-foreground">{pct.toFixed(0)}%</div>
+          <div className="text-xs text-muted-foreground metric-mono">{pct.toFixed(0)}%</div>
         </div>
       </div>
-      <div className="mt-2 h-2 bg-panel-2 rounded overflow-hidden">
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-panel-2">
         <div
-          className="h-full transition-all"
-          style={{ width: `${Math.min(100, pct)}%`, background: barColor }}
+          className={`h-full transition-all duration-500 ${barTone}`}
+          style={{ width: `${Math.min(100, pct)}%` }}
         />
       </div>
       <div className="mt-3 flex flex-wrap gap-1.5">
         {invoices.length === 0 && (
-          <span className="text-xs text-muted-foreground">No invoices assigned.</span>
+          <EmptyState title="No invoices assigned" className="w-full py-4" />
         )}
         {invoices.map((i) => (
           <InvoiceChip
@@ -294,39 +320,34 @@ function InvoiceChip({
   const c = areaColor(inv.area || "—");
   return (
     <span
-      className="chip"
+      className="chip transition-colors"
       style={{
         borderColor: selected ? "var(--primary)" : c.border,
-        background: selected ? "color-mix(in oklab, var(--primary) 20%, transparent)" : c.bg,
+        background: selected ? "color-mix(in oklab, var(--primary) 15%, transparent)" : c.bg,
       }}
     >
       {mode === "adjust" && (
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggleSelect}
-          className="mr-1"
-        />
+        <Checkbox checked={selected} onCheckedChange={onToggleSelect} className="mr-1" />
       )}
-      <span className="font-mono text-[11px]">{inv.doc}</span>
-      <span className="opacity-80 truncate max-w-[14ch]">{inv.customer}</span>
-      <span className="font-mono opacity-80">{inv.weight}kg</span>
+      <span className="metric-mono text-[11px]">{inv.doc}</span>
+      <span className="max-w-[14ch] truncate opacity-80">{inv.customer}</span>
+      <span className="metric-mono opacity-80">{inv.weight}kg</span>
       {mode === "adjust" && (
         <>
-          <button
-            onClick={onMove}
-            className="ml-1 text-[10px] px-1.5 py-0.5 rounded bg-primary/20 hover:bg-primary/30"
-          >
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={onMove}>
             Move
-          </button>
+          </Button>
           {inv.truckId && onUnallocate && (
-            <button
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-6"
               onClick={onUnallocate}
-              className="text-[10px] px-1 py-0.5 rounded hover:bg-panel"
               title="Move to unallocated"
             >
-              ⊘
-            </button>
+              <Ban className="size-3" />
+            </Button>
           )}
         </>
       )}
@@ -337,7 +358,7 @@ function InvoiceChip({
 function MoveDialog({
   plan,
   trucks,
-  dayArea,
+  dayAreas,
   bulk,
   invoice,
   selectedIds,
@@ -346,7 +367,7 @@ function MoveDialog({
 }: {
   plan: import("@/lib/types").Plan;
   trucks: Truck[];
-  dayArea: Map<string, string>;
+  dayAreas: Map<string, string[]>;
   bulk?: boolean;
   invoice?: Invoice;
   selectedIds: string[];
@@ -357,43 +378,58 @@ function MoveDialog({
   const [reason, setReason] = useState("Weight Balance");
   const [reasonText, setReasonText] = useState("");
 
-  const movingWeight = bulk
-    ? plan.invoices
-        .filter((i) => selectedIds.includes(i.id))
-        .reduce((s, i) => s + i.weight, 0)
-    : invoice?.weight ?? 0;
+  const movingInvoices = bulk
+    ? plan.invoices.filter((i) => selectedIds.includes(i.id))
+    : invoice
+      ? [invoice]
+      : [];
+  const movingWeight = movingInvoices.reduce((s, i) => s + i.weight, 0);
+  const movingAreas = [...new Set(movingInvoices.map((i) => i.area).filter(Boolean))];
 
   const reasonFinal = reason === "Other" ? reasonText : reason;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="panel p-5 w-full max-w-xl">
-        <h3 className="text-lg font-semibold mb-2">
-          {bulk ? `Move ${selectedIds.length} invoices` : `Move ${invoice?.doc}`}
-        </h3>
-        <p className="text-xs text-muted-foreground mb-3">
-          Moving {movingWeight.toFixed(0)} kg
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="panel max-w-xl border-border">
+        <DialogHeader>
+          <DialogTitle>
+            {bulk ? `Move ${selectedIds.length} invoices` : `Move ${invoice?.doc}`}
+          </DialogTitle>
+        </DialogHeader>
+        <p className="text-xs text-muted-foreground">
+          Moving <span className="metric-mono">{movingWeight.toFixed(0)} kg</span>
+          {movingAreas.length > 0 && (
+            <>
+              {" "}
+              · areas: <span className="text-foreground">{movingAreas.join(", ")}</span>
+            </>
+          )}
         </p>
-        <div className="space-y-1 max-h-72 overflow-auto mb-3">
+        <div className="max-h-72 space-y-1 overflow-auto">
           {trucks.map((t) => {
             const currentWeight = truckWeight(plan.invoices, t.id);
             const remaining = t.maxWeight - currentWeight;
             const fits = remaining >= movingWeight;
             const pct = ((currentWeight + movingWeight) / t.maxWeight) * 100;
+            const truckAreas = dayAreas.get(t.id) ?? [];
+            const crossArea =
+              movingAreas.length > 0 &&
+              movingAreas.some((a) => !truckAreas.includes(a));
             return (
               <button
                 key={t.id}
+                type="button"
                 disabled={!fits}
                 onClick={() => setTarget(t.id)}
-                className={`w-full text-left p-2 rounded border ${
-                  target === t.id ? "border-primary" : "border-border"
-                } ${!fits ? "opacity-40" : "hover:bg-panel-2"}`}
+                className={`w-full rounded-lg border p-3 text-left transition-colors ${
+                  target === t.id ? "border-primary bg-primary/5" : "border-border hover:bg-panel-2"
+                } ${!fits ? "opacity-40" : ""}`}
               >
                 <div className="flex justify-between text-sm">
                   <span>
-                    <b>{t.name}</b> · {dayArea.get(t.id) || "—"}
+                    <b>{t.name}</b> · {truckAreas.join(", ") || "—"}
                   </span>
-                  <span className="font-mono">
+                  <span className="metric-mono">
                     {currentWeight.toFixed(0)} / {t.maxWeight} kg
                   </span>
                 </div>
@@ -403,63 +439,50 @@ function MoveDialog({
                   </div>
                 )}
                 {fits && (
-                  <div className="text-xs text-muted-foreground">
-                    After move: {pct.toFixed(0)}%
+                  <div className="text-xs text-muted-foreground">After move: {pct.toFixed(0)}%</div>
+                )}
+                {crossArea && (
+                  <div className="mt-1 text-xs text-warn">
+                    Invoice area is not on this truck&apos;s route
                   </div>
                 )}
               </button>
             );
           })}
         </div>
-        <div className="grid grid-cols-2 gap-3 mb-3">
-          <label className="text-sm">
-            Reason
+        <div className="grid grid-cols-2 gap-3">
+          <FormField label="Reason">
             <select
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              className="mt-1 w-full bg-panel-2 border border-border rounded px-2 py-1.5"
+              className="h-9 w-full rounded-lg border border-input bg-panel-2 px-2 text-sm"
             >
               <option>Customer Request</option>
               <option>Weight Balance</option>
               <option>Route Optimisation</option>
               <option>Other</option>
             </select>
-          </label>
+          </FormField>
           {reason === "Other" && (
-            <label className="text-sm">
-              Detail
-              <input
-                value={reasonText}
-                onChange={(e) => setReasonText(e.target.value)}
-                className="mt-1 w-full bg-panel-2 border border-border rounded px-2 py-1.5"
-              />
-            </label>
+            <FormField label="Detail">
+              <Input value={reasonText} onChange={(e) => setReasonText(e.target.value)} />
+            </FormField>
           )}
         </div>
-        <div className="flex items-center justify-between">
-          <button
-            onClick={() => onSubmit(null, reasonFinal)}
-            className="text-sm text-muted-foreground hover:text-crit"
-          >
+        <DialogFooter className="flex-row justify-between sm:justify-between">
+          <Button type="button" variant="ghost" className="text-muted-foreground" onClick={() => onSubmit(null, reasonFinal)}>
             Move to Unallocated
-          </button>
+          </Button>
           <div className="flex gap-2">
-            <button
-              onClick={onClose}
-              className="px-3 py-1.5 rounded border border-border"
-            >
+            <Button type="button" variant="outline" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              disabled={!target}
-              onClick={() => onSubmit(target, reasonFinal)}
-              className="px-4 py-1.5 rounded bg-primary text-primary-foreground font-medium disabled:opacity-40"
-            >
+            </Button>
+            <Button type="button" disabled={!target} onClick={() => onSubmit(target, reasonFinal)}>
               Move
-            </button>
+            </Button>
           </div>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,5 +1,38 @@
+import { useState } from "react";
+import { ArrowLeft, ArrowRight, Lock, TriangleAlert, Unlock } from "lucide-react";
+import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { StatTile } from "./ui/StatTile";
+import { FormField } from "./ui/FormField";
 
 export function LockScreen() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
@@ -9,167 +42,188 @@ export function LockScreen() {
   const setStep = useStore((s) => s.setStep);
   const checkPin = useStore((s) => s.checkPin);
 
+  const [showLockConfirm, setShowLockConfirm] = useState(false);
+  const [showUnlock, setShowUnlock] = useState(false);
+  const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState("");
+
   const active = trucks.filter((t) => t.active);
-  const dayArea = new Map(plan.truckDay.map((td) => [td.truckId, td.area]));
+  const dayAreas = new Map(plan.truckDay.map((td) => [td.truckId, td.areas ?? []]));
   const allocated = plan.invoices.filter((i) => i.truckId);
   const unallocated = plan.invoices.filter((i) => !i.truckId);
   const totalWeight = plan.invoices.reduce((s, i) => s + i.weight, 0);
   const cap = active.reduce((s, t) => s + t.maxWeight, 0);
   const util = cap ? (allocated.reduce((s, i) => s + i.weight, 0) / cap) * 100 : 0;
 
-  function confirmLock() {
-    if (unallocated.length > 0) {
-      if (
-        !confirm(
-          `${unallocated.length} invoices are unallocated. Lock anyway?`,
-        )
-      )
-        return;
-    } else if (!confirm("Lock manifests? No further edits without admin unlock.")) return;
+  function doLock() {
     lockPlan();
+    setShowLockConfirm(false);
+    toast.success("Manifests locked");
   }
 
   function doUnlock() {
-    const pin = prompt("Admin PIN to unlock:") ?? "";
-    if (checkPin(pin)) unlockPlan();
-    else alert("Incorrect PIN.");
+    if (checkPin(pin)) {
+      unlockPlan();
+      setShowUnlock(false);
+      setPin("");
+      setPinError("");
+      toast.success("Plan unlocked");
+    } else {
+      setPinError("Incorrect PIN");
+      toast.error("Incorrect PIN");
+    }
   }
 
   return (
     <div className="space-y-5">
       <div className="grid gap-3 md:grid-cols-5">
-        <StatCard label="Total Invoices" value={plan.invoices.length} />
-        <StatCard label="Allocated" value={allocated.length} tone="good" />
-        <StatCard
+        <StatTile label="Total Invoices" value={plan.invoices.length} />
+        <StatTile label="Allocated" value={allocated.length} tone="good" />
+        <StatTile
           label="Unallocated"
           value={unallocated.length}
           tone={unallocated.length ? "crit" : "muted"}
         />
-        <StatCard label="Total Weight" value={`${totalWeight.toFixed(0)} kg`} />
-        <StatCard label="Fleet Utilisation" value={`${util.toFixed(0)}%`} />
+        <StatTile label="Total Weight" value={`${totalWeight.toFixed(0)} kg`} />
+        <StatTile label="Fleet Utilisation" value={`${util.toFixed(0)}%`} />
       </div>
 
       {unallocated.length > 0 && (
-        <div
-          className="panel p-4"
-          style={{ borderColor: "var(--crit)", background: "color-mix(in oklab, var(--crit) 10%, transparent)" }}
-        >
-          ⚠ {unallocated.length} invoice(s) are not yet on a truck.
+        <div className="panel flex items-center gap-2 border-crit/40 bg-crit/5 p-4 text-sm text-crit">
+          <TriangleAlert className="size-4 shrink-0" />
+          {unallocated.length} invoice(s) are not yet on a truck.
         </div>
       )}
 
       <section className="panel p-4">
-        <h3 className="font-semibold mb-3">Truck Summary</h3>
-        <div className="overflow-auto">
-          <table className="w-full text-sm">
-            <thead className="text-muted-foreground text-left">
-              <tr>
-                <th className="p-2">Truck</th>
-                <th className="p-2">Area</th>
-                <th className="p-2">Invoices</th>
-                <th className="p-2">Weight</th>
-                <th className="p-2">Capacity</th>
-                <th className="p-2">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {active.map((t) => {
+        <h3 className="mb-3 font-semibold tracking-tight">Truck Summary</h3>
+        <div className="overflow-auto rounded-xl border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Truck</TableHead>
+                <TableHead>Area</TableHead>
+                <TableHead>Invoices</TableHead>
+                <TableHead>Weight</TableHead>
+                <TableHead>Capacity</TableHead>
+                <TableHead>Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {active.map((t, idx) => {
                 const list = plan.invoices.filter((i) => i.truckId === t.id);
                 const wt = list.reduce((s, i) => s + i.weight, 0);
                 const pct = (wt / t.maxWeight) * 100;
                 const status =
                   pct >= 95 ? "text-crit" : pct >= 80 ? "text-warn" : "text-good";
-                const area = dayArea.get(t.id) ?? "—";
-                const c = areaColor(area);
+                const areas = dayAreas.get(t.id) ?? [];
                 return (
-                  <tr key={t.id} className="border-t border-border">
-                    <td className="p-2 font-medium">{t.name}</td>
-                    <td className="p-2">
-                      <span
-                        className="chip"
-                        style={{ borderColor: c.border, color: c.text, background: c.bg }}
-                      >
-                        {area}
-                      </span>
-                    </td>
-                    <td className="p-2 font-mono">{list.length}</td>
-                    <td className="p-2 font-mono">
+                  <TableRow
+                    key={t.id}
+                    style={{ "--index": idx } as React.CSSProperties}
+                    className="stagger-item"
+                  >
+                    <TableCell className="font-medium">{t.name}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {areas.length === 0 ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          areas.map((area) => {
+                            const c = areaColor(area);
+                            return (
+                              <span
+                                key={area}
+                                className="chip"
+                                style={{ borderColor: c.border, color: c.text, background: c.bg }}
+                              >
+                                {area}
+                              </span>
+                            );
+                          })
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="metric-mono">{list.length}</TableCell>
+                    <TableCell className="metric-mono">
                       {wt.toFixed(0)} / {t.maxWeight}
-                    </td>
-                    <td className="p-2 font-mono">{pct.toFixed(0)}%</td>
-                    <td className={`p-2 font-semibold ${status}`}>
+                    </TableCell>
+                    <TableCell className="metric-mono">{pct.toFixed(0)}%</TableCell>
+                    <TableCell className={`font-medium ${status}`}>
                       {pct >= 95 ? "Overfilling" : pct >= 80 ? "Near max" : "OK"}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 );
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       </section>
 
-      <div className="panel p-4 flex flex-wrap items-center gap-3">
-        <button
-          onClick={() => setStep("adjust")}
-          className="px-4 py-2 rounded border border-border hover:bg-panel-2"
-        >
-          ← Back to Adjust
-        </button>
+      <div className="panel flex flex-wrap items-center gap-3 p-4">
+        <Button variant="outline" onClick={() => setStep("adjust")}>
+          <ArrowLeft className="size-4" />
+          Back to Adjust
+        </Button>
         {!plan.locked ? (
-          <button
-            onClick={confirmLock}
-            className="ml-auto px-6 py-2 rounded bg-primary text-primary-foreground font-semibold"
-          >
-            🔒 Lock Manifests
-          </button>
+          <Button className="ml-auto" onClick={() => setShowLockConfirm(true)}>
+            <Lock className="size-4" />
+            Lock Manifests
+          </Button>
         ) : (
           <>
-            <span
-              className="chip ml-auto"
-              style={{ color: "var(--good)", borderColor: "var(--good)" }}
-            >
-              LOCKED
-            </span>
-            <button
-              onClick={doUnlock}
-              className="px-4 py-2 rounded border border-border hover:bg-panel-2"
-            >
+            <Badge variant="good" className="ml-auto gap-1">
+              <Lock className="size-3" />
+              Locked
+            </Badge>
+            <Button variant="outline" onClick={() => setShowUnlock(true)}>
+              <Unlock className="size-4" />
               Admin Unlock
-            </button>
-            <button
-              onClick={() => setStep("print")}
-              className="px-4 py-2 rounded bg-primary text-primary-foreground font-semibold"
-            >
-              Print / Export →
-            </button>
+            </Button>
+            <Button onClick={() => setStep("print")}>
+              Print / Export
+              <ArrowRight className="size-4" />
+            </Button>
           </>
         )}
       </div>
-    </div>
-  );
-}
 
-function StatCard({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string | number;
-  tone?: "good" | "warn" | "crit" | "muted";
-}) {
-  const color =
-    tone === "good"
-      ? "text-good"
-      : tone === "warn"
-        ? "text-warn"
-        : tone === "crit"
-          ? "text-crit"
-          : "";
-  return (
-    <div className="panel p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className={`text-2xl font-mono ${color}`}>{value}</div>
+      <AlertDialog open={showLockConfirm} onOpenChange={setShowLockConfirm}>
+        <AlertDialogContent className="panel border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Lock manifests?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {unallocated.length > 0
+                ? `${unallocated.length} invoices are still unallocated. Locking will prevent further edits without admin unlock.`
+                : "No further edits will be allowed without admin unlock."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={doLock}>Lock manifests</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={showUnlock} onOpenChange={(o) => { setShowUnlock(o); if (!o) { setPin(""); setPinError(""); } }}>
+        <DialogContent className="panel max-w-sm border-border">
+          <DialogHeader>
+            <DialogTitle>Admin unlock</DialogTitle>
+          </DialogHeader>
+          <FormField label="Admin PIN" error={pinError}>
+            <Input
+              type="password"
+              value={pin}
+              onChange={(e) => { setPin(e.target.value); setPinError(""); }}
+              autoFocus
+            />
+          </FormField>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowUnlock(false)}>Cancel</Button>
+            <Button onClick={doUnlock}>Unlock</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

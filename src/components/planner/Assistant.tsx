@@ -1,5 +1,12 @@
+"use client";
+
 import { useState } from "react";
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useStore } from "@/lib/store";
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
+import { AnimatedNumber } from "./ui/AnimatedNumber";
 
 export function Assistant() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
@@ -39,36 +46,48 @@ export function Assistant() {
   }
   const areaSorted = [...areaTotals.entries()].sort((a, b) => b[1] - a[1]);
 
-  const post = plan.step === "allocate" || plan.step === "adjust" || plan.step === "lock" || plan.step === "print";
+  const post =
+    plan.step === "allocate" ||
+    plan.step === "adjust" ||
+    plan.step === "lock" ||
+    plan.step === "print";
 
   if (!open) {
     return (
-      <button
+      <Button
+        type="button"
+        variant="outline"
         onClick={() => setOpen(true)}
-        className="fixed right-0 top-1/2 -translate-y-1/2 bg-panel border border-border border-r-0 rounded-l px-2 py-3 text-xs no-print"
+        className="fixed right-0 top-1/2 z-30 h-auto -translate-y-1/2 rounded-l-xl rounded-r-none border-r-0 px-2 py-4 no-print"
       >
-        ‹ Planner
-      </button>
+        <PanelRightOpen className="size-4" />
+        <span className="sr-only">Open planner assistant</span>
+      </Button>
     );
   }
 
   return (
-    <aside className="panel p-4 sticky top-4 h-fit no-print">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="font-semibold">Planning Assistant</h3>
-        <button onClick={() => setOpen(false)} className="text-xs text-muted-foreground">
-          collapse ›
-        </button>
+    <aside className="panel sticky top-20 h-fit p-4 no-print">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="font-semibold tracking-tight">Planning Assistant</h3>
+        <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)} className="h-8 gap-1 px-2 text-xs text-muted-foreground">
+          <PanelRightClose className="size-3.5" />
+          Collapse
+        </Button>
       </div>
-      <div className="text-xs text-muted-foreground mb-3">
-        Plan for <b className="text-foreground">{plan.date}</b>
-      </div>
+
+      <p className="mb-4 text-xs text-muted-foreground">
+        Plan for <span className="font-medium text-foreground">{plan.date}</span>
+      </p>
+
       <Section title="Overview">
         <Row label="Total invoices" value={plan.invoices.length} />
         <Row label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />
         <Row label="Active trucks" value={active.length} />
         <Row label="Fleet capacity" value={`${cap} kg`} />
       </Section>
+
+      <Separator className="my-3 bg-border/60" />
 
       {!post ? (
         <Section title="Import health">
@@ -95,8 +114,16 @@ export function Assistant() {
             value={unallocated.length}
             tone={unallocated.length ? "crit" : "good"}
           />
-          <Row label="Fleet utilisation" value={`${util.toFixed(0)}%`} />
-          <Row label="Trucks ≥ 90%" value={above90} tone={above90 ? "warn" : undefined} />
+          <div className="space-y-1.5 py-1">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Fleet utilisation</span>
+              <span className="metric-mono text-foreground">
+                <AnimatedNumber value={Math.round(util)} suffix="%" />
+              </span>
+            </div>
+            <Progress value={util} className="animate-breathe h-1.5" />
+          </div>
+          <Row label="Trucks at 90%+" value={above90} tone={above90 ? "warn" : undefined} />
           {heaviest && (
             <Row label="Heaviest" value={`${heaviest.t.name} (${heaviest.w.toFixed(0)}kg)`} />
           )}
@@ -120,14 +147,15 @@ export function Assistant() {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="mb-4">
-      <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
+    <div className="mb-1">
+      <div className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
         {title}
       </div>
       <div className="space-y-1">{children}</div>
     </div>
   );
 }
+
 function Row({
   label,
   value,
@@ -148,7 +176,7 @@ function Row({
   return (
     <div className="flex justify-between text-sm">
       <span className="text-muted-foreground">{label}</span>
-      <span className={`font-mono ${color}`}>{value}</span>
+      <span className={`metric-mono font-medium ${color}`}>{value}</span>
     </div>
   );
 }

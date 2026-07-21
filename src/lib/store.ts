@@ -6,8 +6,15 @@ import type {
   Invoice,
   Plan,
   Truck,
+  TruckDay,
 } from "./types";
+import { normalizeCustomer, normalizeTruckDay } from "./types";
 import { allocate } from "./allocation";
+import {
+  assignCustomerArea,
+  reorderCustomersInArea,
+  setCustomerLoadingNumber as applyLoadingNumber,
+} from "./loadingOrder";
 
 const K = {
   trucks: "lp:trucks",
@@ -69,10 +76,20 @@ type State = {
   // plan
   setStep: (step: Plan["step"]) => void;
   setDate: (date: string) => void;
+  setTruckDayAreas: (truckId: string, areas: string[]) => void;
+  /** @deprecated use setTruckDayAreas — kept as convenience for single area */
   setTruckDayArea: (truckId: string, area: string) => void;
   ensureTruckDay: () => void;
   dismissResume: () => void;
   newPlan: (date?: string) => void;
+
+  // customers
+  importCustomers: (names: string[]) => { added: number; skipped: number };
+  setCustomerArea: (name: string, area: string) => void;
+  setCustomerLoadingNumber: (name: string, area: string, n: number) => void;
+  reorderCustomersInArea: (area: string, orderedNames: string[]) => void;
+  ensureArea: (name: string) => void;
+  deleteCustomer: (name: string) => void;
 
   // invoices
   addInvoices: (list: Omit<Invoice, "id" | "truckId">[]) => void;
@@ -162,29 +179,49 @@ export const useStore = create<State>((set, get) => {
     adminPin: "",
 
     hydrate: async () => {
-      const [trucks, customers, areaHistory, plans, audit, currentDate, adminPin] =
-        await Promise.all([
-          loadKey<Truck[]>(K.trucks, []),
-          loadKey<Record<string, CustomerMemory>>(K.customers, {}),
-          loadKey<string[]>(K.areaHistory, []),
-          loadKey<Record<string, Plan>>(K.plans, {}),
-          loadKey<AuditEntry[]>(K.audit, []),
-          loadKey<string>(K.currentDate, tomorrowISO()),
-          loadKey<string>(K.adminPin, ""),
-        ]);
-      const existing = plans[currentDate];
-      const showResume = !!existing && !existing.locked && existing.invoices.length > 0;
-      set({
-        hydrated: true,
-        trucks,
-        customers,
-        areaHistory,
-        plans,
-        audit,
-        currentDate,
-        adminPin,
-        showResume,
-      });
+      try {
+        const [trucks, customersRaw, areaHistory, plansRaw, audit, currentDate, adminPin] =
+          await Promise.all([
+            loadKey<Truck[]>(K.trucks, []),
+            loadKey<Record<string, CustomerMemory>>(K.customers, {}),
+            loadKey<string[]>(K.areaHistory, []),
+            loadKey<Record<string, Plan>>(K.plans, {}),
+            loadKey<AuditEntry[]>(K.audit, []),
+            loadKey<string>(K.currentDate, tomorrowISO()),
+            loadKey<string>(K.adminPin, ""),
+          ]);
+
+        const customers: Record<string, CustomerMemory> = {};
+        for (const [k, v] of Object.entries(customersRaw ?? {})) {
+          customers[k] = normalizeCustomer({ ...v, name: v?.name ?? k });
+        }
+
+        const plans: Record<string, Plan> = {};
+        for (const [date, p] of Object.entries(plansRaw ?? {})) {
+          plans[date] = {
+            ...p,
+            truckDay: (p.truckDay ?? []).map((td) =>
+              normalizeTruckDay(td as TruckDay & { area?: string }),
+            ),
+          };
+        }
+
+        const existing = plans[currentDate];
+        const showResume = !!existing && !existing.locked && existing.invoices.length > 0;
+        set({
+          hydrated: true,
+          trucks,
+          customers,
+          areaHistory,
+          plans,
+          audit,
+          currentDate,
+          adminPin,
+          showResume,
+        });
+      } catch {
+        set({ hydrated: true });
+      }
     },
 
     currentPlan: () => {
@@ -224,7 +261,10 @@ export const useStore = create<State>((set, get) => {
       patchPlan((p) => ({
         ...p,
         areas: p.areas.filter((a) => a !== name),
-        truckDay: p.truckDay.map((td) => (td.area === name ? { ...td, area: "" } : td)),
+        truckDay: p.truckDay.map((td) => ({
+          ...td,
+          areas: (td.areas ?? []).filter((a) => a !== name),
+        })),
       }));
     },
 
@@ -237,22 +277,26 @@ export const useStore = create<State>((set, get) => {
           showResume: !!existing && !existing.locked && existing.invoices.length > 0,
         };
       }),
-    setTruckDayArea: (truckId, area) => {
+    setTruckDayAreas: (truckId, areas) => {
+      const clean = [...new Set(areas.filter(Boolean))];
       patchPlan((p) => {
         const exists = p.truckDay.find((t) => t.truckId === truckId);
         const truckDay = exists
-          ? p.truckDay.map((t) => (t.truckId === truckId ? { ...t, area } : t))
-          : [...p.truckDay, { truckId, area }];
+          ? p.truckDay.map((t) => (t.truckId === truckId ? { ...t, areas: clean } : t))
+          : [...p.truckDay, { truckId, areas: clean }];
         return { ...p, truckDay };
       });
+    },
+    setTruckDayArea: (truckId, area) => {
+      get().setTruckDayAreas(truckId, area ? [area] : []);
     },
     ensureTruckDay: () => {
       const s = get();
       patchPlan((p) => {
         const known = new Set(p.truckDay.map((t) => t.truckId));
-        const additions: { truckId: string; area: string }[] = [];
+        const additions: TruckDay[] = [];
         for (const t of s.trucks) {
-          if (!known.has(t.id)) additions.push({ truckId: t.id, area: "" });
+          if (!known.has(t.id)) additions.push({ truckId: t.id, areas: [] });
         }
         if (!additions.length) return p;
         return { ...p, truckDay: [...p.truckDay, ...additions] };
@@ -267,6 +311,88 @@ export const useStore = create<State>((set, get) => {
         plans: { ...s.plans, [d]: emptyPlan(d) },
       }));
       log("plan.new", `Started new plan for ${d}`);
+    },
+
+    importCustomers: (names) => {
+      const s = get();
+      const customers = { ...s.customers };
+      let added = 0;
+      let skipped = 0;
+      const now = new Date().toISOString();
+      for (const raw of names) {
+        const name = raw.trim();
+        if (!name) continue;
+        if (customers[name]) {
+          skipped++;
+          continue;
+        }
+        customers[name] = {
+          name,
+          defaultArea: "",
+          loadingNumber: 0,
+          firstSeen: now,
+        };
+        added++;
+      }
+      mutate(() => ({ customers }));
+      log("customers.import", `Imported ${added} customers (${skipped} skipped)`);
+      return { added, skipped };
+    },
+    setCustomerArea: (name, area) => {
+      mutate((s) => {
+        if (!s.customers[name]) return {};
+        const customers = assignCustomerArea(s.customers, name, area);
+        const history =
+          area && !s.areaHistory.includes(area) ? [...s.areaHistory, area] : s.areaHistory;
+        return { customers, areaHistory: history };
+      });
+      log("customers.area", `Set ${name} → ${area || "(none)"}`);
+    },
+    setCustomerLoadingNumber: (name, area, n) => {
+      mutate((s) => {
+        if (!s.customers[name] || !area) return {};
+        const customers = applyLoadingNumber(s.customers, name, area, n);
+        const history = !s.areaHistory.includes(area) ? [...s.areaHistory, area] : s.areaHistory;
+        return { customers, areaHistory: history };
+      });
+      log("customers.loading", `Set ${name} loading #${n} in ${area}`);
+    },
+    reorderCustomersInArea: (area, orderedNames) => {
+      mutate((s) => {
+        if (!area || orderedNames.length === 0) return {};
+        return {
+          customers: reorderCustomersInArea(s.customers, area, orderedNames),
+        };
+      });
+      log("customers.reorder", `Reordered ${orderedNames.length} in ${area}`);
+    },
+    ensureArea: (name) => {
+      const area = name.trim();
+      if (!area) return;
+      mutate((s) => {
+        if (s.areaHistory.includes(area)) return {};
+        return { areaHistory: [...s.areaHistory, area] };
+      });
+      log("area.ensure", `Added area ${area}`);
+    },
+    deleteCustomer: (name) => {
+      mutate((s) => {
+        const cur = s.customers[name];
+        if (!cur) return {};
+        const area = cur.defaultArea;
+        const customers = { ...s.customers };
+        delete customers[name];
+        if (area) {
+          const inArea = Object.values(customers)
+            .filter((c) => c.defaultArea === area && c.loadingNumber > 0)
+            .sort((a, b) => a.loadingNumber - b.loadingNumber);
+          inArea.forEach((c, i) => {
+            customers[c.name] = { ...c, loadingNumber: i + 1 };
+          });
+        }
+        return { customers };
+      });
+      log("customers.delete", `Deleted customer ${name}`);
     },
 
     addInvoices: (list) => {
@@ -307,7 +433,7 @@ export const useStore = create<State>((set, get) => {
     confirmImport: () => {
       const s = get();
       const plan = s.plans[s.currentDate] ?? emptyPlan(s.currentDate);
-      const customers = { ...s.customers };
+      let customers = { ...s.customers };
       let known = 0;
       let learned = 0;
       const now = new Date().toISOString();
@@ -315,19 +441,18 @@ export const useStore = create<State>((set, get) => {
         if (!inv.customer) continue;
         if (customers[inv.customer]) {
           known++;
-          // ensure area recorded
           if (!customers[inv.customer].defaultArea && inv.area) {
-            customers[inv.customer].defaultArea = inv.area;
+            customers = assignCustomerArea(customers, inv.customer, inv.area);
           }
-        } else {
-          if (inv.area) {
-            customers[inv.customer] = {
-              name: inv.customer,
-              defaultArea: inv.area,
-              firstSeen: now,
-            };
-            learned++;
-          }
+        } else if (inv.area) {
+          customers[inv.customer] = {
+            name: inv.customer,
+            defaultArea: "",
+            loadingNumber: 0,
+            firstSeen: now,
+          };
+          customers = assignCustomerArea(customers, inv.customer, inv.area);
+          learned++;
         }
       }
       mutate(() => ({ customers }));
@@ -337,7 +462,7 @@ export const useStore = create<State>((set, get) => {
 
     runAllocation: () => {
       const s = get();
-      patchPlan((p) => allocate(p, s.trucks));
+      patchPlan((p) => allocate(p, s.trucks, s.customers));
       log("allocate.run", "Ran auto allocation");
     },
     moveInvoice: (invId, truckId, reason) => {

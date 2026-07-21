@@ -1,6 +1,26 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Download, FileSpreadsheet, Lock, Upload } from "lucide-react";
+import { toast } from "sonner";
 import { useStore } from "@/lib/store";
+import { parseCustomerExcelFile } from "@/lib/parse";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { FormField } from "@/components/planner/ui/FormField";
+import { EmptyState } from "@/components/planner/ui/EmptyState";
+import { CustomerAreaBoard } from "@/components/planner/CustomerAreaBoard";
+import { customersInArea } from "@/lib/loadingOrder";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -20,37 +40,64 @@ function AdminPage() {
   const setPin = useStore((s) => s.setPin);
   const [unlocked, setUnlocked] = useState(false);
   const [pin, setPinInput] = useState("");
+  const [pinError, setPinError] = useState("");
 
   useEffect(() => {
-    hydrate();
+    void hydrate();
   }, [hydrate]);
 
-  if (!hydrated) return <div className="p-8 text-muted-foreground">Loading…</div>;
+  if (!hydrated) {
+    return (
+      <div className="grid min-h-[100dvh] place-items-center p-4">
+        <p className="text-sm text-muted-foreground">Loading admin…</p>
+      </div>
+    );
+  }
 
   if (adminPin && !unlocked) {
     return (
-      <div className="min-h-screen grid place-items-center p-4">
+      <div className="grid min-h-[100dvh] place-items-center p-4">
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (pin === adminPin) setUnlocked(true);
-            else alert("Incorrect PIN");
+            if (pin === adminPin) {
+              setUnlocked(true);
+              setPinError("");
+            } else {
+              setPinError("Incorrect PIN");
+              toast.error("Incorrect PIN");
+            }
           }}
-          className="panel p-6 w-full max-w-sm space-y-3"
+          className="panel w-full max-w-sm space-y-4 p-6"
         >
-          <h1 className="text-lg font-semibold">Admin PIN</h1>
-          <input
-            type="password"
-            value={pin}
-            onChange={(e) => setPinInput(e.target.value)}
-            className="w-full bg-panel-2 border border-border rounded px-3 py-2"
-            autoFocus
-          />
-          <button className="w-full py-2 rounded bg-primary text-primary-foreground font-semibold">
+          <div className="flex items-center gap-3">
+            <div className="grid size-10 place-items-center rounded-lg bg-primary text-primary-foreground">
+              <Lock className="size-5" />
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight">Admin PIN</h1>
+              <p className="text-sm text-muted-foreground">Enter PIN to access the console</p>
+            </div>
+          </div>
+          <FormField label="PIN" error={pinError}>
+            <Input
+              type="password"
+              value={pin}
+              onChange={(e) => {
+                setPinInput(e.target.value);
+                setPinError("");
+              }}
+              autoFocus
+            />
+          </FormField>
+          <Button type="submit" className="w-full">
             Unlock
-          </button>
-          <Link to="/" className="block text-center text-xs text-muted-foreground">
-            ← Back to planner
+          </Button>
+          <Link
+            to="/"
+            className="block text-center text-xs text-muted-foreground hover:text-foreground"
+          >
+            Back to planner
           </Link>
         </form>
       </div>
@@ -68,9 +115,10 @@ function AdminConsole({
   currentPin: string;
 }) {
   const customers = useStore((s) => s.customers);
+  const areaHistory = useStore((s) => s.areaHistory);
+  const plans = useStore((s) => s.plans);
   const trucks = useStore((s) => s.trucks);
   const audit = useStore((s) => s.audit);
-  const plans = useStore((s) => s.plans);
   const exportJSON = useStore((s) => s.exportJSON);
   const deleteDay = useStore((s) => s.deleteDay);
   const unlockPlan = useStore((s) => s.unlockPlan);
@@ -78,9 +126,96 @@ function AdminConsole({
   const addTruck = useStore((s) => s.addTruck);
   const updateTruck = useStore((s) => s.updateTruck);
   const deleteTruck = useStore((s) => s.deleteTruck);
-  const [tab, setTab] = useState<"customers" | "trucks" | "audit" | "plans" | "settings">(
-    "customers",
+  const importCustomers = useStore((s) => s.importCustomers);
+  const setCustomerArea = useStore((s) => s.setCustomerArea);
+  const setCustomerLoadingNumber = useStore((s) => s.setCustomerLoadingNumber);
+  const reorderCustomersInArea = useStore((s) => s.reorderCustomersInArea);
+  const ensureArea = useStore((s) => s.ensureArea);
+  const deleteCustomer = useStore((s) => s.deleteCustomer);
+
+  const [areaFilter, setAreaFilter] = useState<string>("all");
+  const [importing, setImporting] = useState(false);
+  const [newArea, setNewArea] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const areaOptions = useMemo(() => {
+    const set = new Set<string>(areaHistory);
+    for (const p of Object.values(plans)) {
+      for (const a of p.areas ?? []) set.add(a);
+    }
+    for (const c of Object.values(customers)) {
+      if (c.defaultArea) set.add(c.defaultArea);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [areaHistory, plans, customers]);
+
+  const unassigned = useMemo(
+    () =>
+      Object.values(customers)
+        .filter((c) => !c.defaultArea)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [customers],
   );
+
+  const customersByArea = useMemo(() => {
+    const map: Record<string, typeof unassigned> = {};
+    for (const a of areaOptions) {
+      map[a] = customersInArea(customers, a);
+    }
+    return map;
+  }, [customers, areaOptions]);
+
+  const visibleAreas = useMemo(() => {
+    if (areaFilter === "all") return areaOptions;
+    if (areaFilter === "unassigned") return [];
+    return areaOptions.filter((a) => a === areaFilter);
+  }, [areaFilter, areaOptions]);
+
+  const showUnassigned = areaFilter === "all" || areaFilter === "unassigned";
+
+  const emptyMessage = useMemo(() => {
+    if (Object.keys(customers).length === 0) {
+      return {
+        title: "No customers yet",
+        description:
+          "Import an Excel sheet with a Customer column, then assign areas and drag to set loading order.",
+      };
+    }
+    if (areaFilter === "unassigned" && unassigned.length === 0) {
+      return {
+        title: "No unassigned customers",
+        description: "Every customer has an area. Switch to All or pick an area to reorder.",
+      };
+    }
+    if (areaFilter !== "all" && areaFilter !== "unassigned") {
+      const list = customersByArea[areaFilter] ?? [];
+      if (list.length === 0) {
+        return {
+          title: `No customers in ${areaFilter}`,
+          description: "Assign customers to this area from Unassigned, or import more names.",
+        };
+      }
+    }
+    return null;
+  }, [customers, areaFilter, unassigned.length, customersByArea]);
+
+  async function handleCustomerExcel(file: File) {
+    setImporting(true);
+    try {
+      const names = await parseCustomerExcelFile(file);
+      if (names.length === 0) {
+        toast.error("No customer names found in sheet");
+        return;
+      }
+      const { added, skipped } = importCustomers(names);
+      toast.success(`Imported ${added} customers (${skipped} already existed)`);
+    } catch {
+      toast.error("Could not read Excel file");
+    } finally {
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
 
   function download() {
     const data = exportJSON();
@@ -91,251 +226,347 @@ function AdminConsole({
     a.download = `loadplanner-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    toast.success("Export downloaded");
   }
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-border">
-        <div className="mx-auto max-w-6xl px-4 h-14 flex items-center gap-4">
-          <Link to="/" className="font-semibold">
-            ← Load Planner
-          </Link>
-          <div className="text-muted-foreground text-sm">Admin</div>
-          <button
-            onClick={download}
-            className="ml-auto px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm"
+    <div className="min-h-[100dvh]">
+      <header className="sticky top-0 z-40 border-b border-white/5 bg-background/80 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4">
+          <Link
+            to="/"
+            className="inline-flex h-8 items-center gap-2 rounded-lg px-3 text-sm font-medium text-foreground hover:bg-secondary/50"
           >
-            Export All (JSON)
-          </button>
+            <ArrowLeft className="size-4" />
+            Load Planner
+          </Link>
+          <span className="text-sm text-muted-foreground">Admin Console</span>
+          <Button variant="outline" size="sm" className="ml-auto" onClick={download}>
+            <Download className="size-4" />
+            Export JSON
+          </Button>
         </div>
       </header>
-      <nav className="border-b border-border">
-        <div className="mx-auto max-w-6xl px-4 flex gap-1">
-          {(["customers", "trucks", "audit", "plans", "settings"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-3 py-2 text-sm border-b-2 capitalize ${
-                tab === t
-                  ? "border-primary text-primary"
-                  : "border-transparent text-muted-foreground"
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-      </nav>
 
       <main className="mx-auto max-w-6xl p-4">
-        {tab === "customers" && (
-          <div className="panel p-4">
-            <div className="text-sm text-muted-foreground mb-2">
-              {Object.keys(customers).length} customers remembered
-            </div>
-            <div className="overflow-auto max-h-[70vh]">
-              <table className="w-full text-sm">
-                <thead className="text-left text-muted-foreground">
-                  <tr>
-                    <th className="p-2">Customer</th>
-                    <th className="p-2">Default Area</th>
-                    <th className="p-2">First Seen</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.values(customers).map((c) => (
-                    <tr key={c.name} className="border-t border-border">
-                      <td className="p-2">{c.name}</td>
-                      <td className="p-2">{c.defaultArea}</td>
-                      <td className="p-2 text-muted-foreground">
-                        {c.firstSeen.slice(0, 10)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
+        <Tabs defaultValue="customers" className="w-full">
+          <TabsList className="mb-4 h-auto w-full flex-wrap justify-start gap-1 bg-secondary p-1">
+            <TabsTrigger value="customers">Customers</TabsTrigger>
+            <TabsTrigger value="trucks">Trucks</TabsTrigger>
+            <TabsTrigger value="audit">Audit</TabsTrigger>
+            <TabsTrigger value="plans">Plans</TabsTrigger>
+            <TabsTrigger value="settings">Settings</TabsTrigger>
+          </TabsList>
 
-        {tab === "trucks" && (
-          <div className="panel p-4">
-            <div className="flex justify-between mb-3">
-              <div className="text-sm text-muted-foreground">
-                {trucks.length} trucks
+          <TabsContent value="customers">
+            <div className="space-y-4">
+              <div className="panel p-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold tracking-tight">Customers</h3>
+                    <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
+                      Import names, create areas here, then drag within an area to set loading order
+                      (1…n). Numbers are unique per area.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void handleCustomerExcel(f);
+                      }}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={importing}
+                      onClick={() => fileRef.current?.click()}
+                    >
+                      {importing ? (
+                        <Upload className="size-4 animate-pulse" />
+                      ) : (
+                        <FileSpreadsheet className="size-4" />
+                      )}
+                      Import Excel
+                    </Button>
+                    <Badge variant="outline">{Object.keys(customers).length} total</Badge>
+                  </div>
+                </div>
+
+                <form
+                  className="mb-4 flex flex-wrap gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const name = newArea.trim();
+                    if (!name) return;
+                    ensureArea(name);
+                    setNewArea("");
+                    setAreaFilter(name);
+                    toast.success(`Area "${name}" ready`);
+                  }}
+                >
+                  <Input
+                    value={newArea}
+                    onChange={(e) => setNewArea(e.target.value)}
+                    placeholder="New area name (e.g. Brits)"
+                    className="max-w-xs"
+                  />
+                  <Button type="submit" variant="secondary" size="sm">
+                    Add area
+                  </Button>
+                </form>
+
+                <div className="mb-3 flex flex-wrap gap-1.5">
+                  <Button
+                    size="sm"
+                    variant={areaFilter === "all" ? "default" : "outline"}
+                    onClick={() => setAreaFilter("all")}
+                  >
+                    All
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={areaFilter === "unassigned" ? "default" : "outline"}
+                    onClick={() => setAreaFilter("unassigned")}
+                  >
+                    Unassigned ({unassigned.length})
+                  </Button>
+                  {areaOptions.map((a) => (
+                    <Button
+                      key={a}
+                      size="sm"
+                      variant={areaFilter === a ? "default" : "outline"}
+                      onClick={() => setAreaFilter(a)}
+                    >
+                      {a} ({customersByArea[a]?.length ?? 0})
+                    </Button>
+                  ))}
+                </div>
+
+                {emptyMessage ? (
+                  <EmptyState title={emptyMessage.title} description={emptyMessage.description} />
+                ) : (
+                  <CustomerAreaBoard
+                    areas={visibleAreas}
+                    unassigned={showUnassigned ? unassigned : []}
+                    customersByArea={customersByArea}
+                    areaOptions={areaOptions}
+                    onSetArea={(name, area) => {
+                      setCustomerArea(name, area);
+                      toast.success(area ? `${name} → ${area}` : `${name} unassigned`);
+                    }}
+                    onReorder={(area, names) => reorderCustomersInArea(area, names)}
+                    onSetLoadingNumber={(name, area, n) => {
+                      setCustomerLoadingNumber(name, area, n);
+                    }}
+                    onDelete={(name) => {
+                      if (confirm(`Delete ${name}?`)) {
+                        deleteCustomer(name);
+                        toast.success("Customer removed");
+                      }
+                    }}
+                  />
+                )}
               </div>
-              <button
-                onClick={() => addTruck({ name: "New Truck", maxWeight: 3000, active: true })}
-                className="text-sm px-3 py-1 rounded bg-secondary text-secondary-foreground"
-              >
-                + Add Truck
-              </button>
             </div>
-            <table className="w-full text-sm">
-              <thead className="text-left text-muted-foreground">
-                <tr>
-                  <th className="p-2">Active</th>
-                  <th className="p-2">Name</th>
-                  <th className="p-2">Max Weight</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {trucks.map((t) => (
-                  <tr key={t.id} className="border-t border-border">
-                    <td className="p-2">
-                      <input
-                        type="checkbox"
-                        checked={t.active}
-                        onChange={(e) => updateTruck(t.id, { active: e.target.checked })}
-                      />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        value={t.name}
-                        onChange={(e) => updateTruck(t.id, { name: e.target.value })}
-                        className="bg-panel-2 border border-border rounded px-2 py-1"
-                      />
-                    </td>
-                    <td className="p-2">
-                      <input
-                        type="number"
-                        value={t.maxWeight}
-                        onChange={(e) =>
-                          updateTruck(t.id, { maxWeight: Number(e.target.value) })
-                        }
-                        className="bg-panel-2 border border-border rounded px-2 py-1 w-28"
-                      />
-                    </td>
-                    <td className="p-2 text-right">
-                      <button
-                        onClick={() => confirm(`Delete ${t.name}?`) && deleteTruck(t.id)}
-                        className="text-muted-foreground hover:text-destructive text-xs"
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+          </TabsContent>
 
-        {tab === "audit" && (
-          <div className="panel p-4">
-            <div className="overflow-auto max-h-[70vh]">
-              <table className="w-full text-sm">
-                <thead className="text-left text-muted-foreground">
-                  <tr>
-                    <th className="p-2">Time</th>
-                    <th className="p-2">Type</th>
-                    <th className="p-2">Message</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {audit.map((a) => (
-                    <tr key={a.id} className="border-t border-border">
-                      <td className="p-2 font-mono text-xs">
-                        {new Date(a.ts).toLocaleString()}
-                      </td>
-                      <td className="p-2 font-mono text-xs">{a.type}</td>
-                      <td className="p-2">{a.message}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {tab === "plans" && (
-          <div className="panel p-4">
-            <table className="w-full text-sm">
-              <thead className="text-left text-muted-foreground">
-                <tr>
-                  <th className="p-2">Date</th>
-                  <th className="p-2">Invoices</th>
-                  <th className="p-2">Locked</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.values(plans)
-                  .sort((a, b) => (a.date < b.date ? 1 : -1))
-                  .map((p) => (
-                    <tr key={p.date} className="border-t border-border">
-                      <td className="p-2 font-mono">{p.date}</td>
-                      <td className="p-2">{p.invoices.length}</td>
-                      <td className="p-2">
-                        {p.locked ? (
-                          <span className="chip" style={{ color: "var(--good)" }}>
-                            Locked
-                          </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="p-2 text-right space-x-2">
-                        <button
-                          onClick={() => setDate(p.date)}
-                          className="text-primary text-xs"
-                        >
-                          Open
-                        </button>
-                        {p.locked && (
-                          <button
+          <TabsContent value="trucks">
+            <div className="panel p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">{trucks.length} trucks</p>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    addTruck({ name: "New Truck", maxWeight: 3000, active: true });
+                    toast.success("Truck added");
+                  }}
+                >
+                  Add Truck
+                </Button>
+              </div>
+              <div className="overflow-auto rounded-xl border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Active</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Max Weight</TableHead>
+                      <TableHead className="w-20" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {trucks.map((t) => (
+                      <TableRow key={t.id}>
+                        <TableCell>
+                          <Checkbox
+                            checked={t.active}
+                            onCheckedChange={(v) => updateTruck(t.id, { active: !!v })}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            value={t.name}
+                            onChange={(e) => updateTruck(t.id, { name: e.target.value })}
+                            className="h-8"
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            value={t.maxWeight}
+                            onChange={(e) =>
+                              updateTruck(t.id, { maxWeight: Number(e.target.value) })
+                            }
+                            className="h-8 w-28 metric-mono"
+                          />
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive"
                             onClick={() => {
-                              setDate(p.date);
-                              unlockPlan();
+                              if (confirm(`Delete ${t.name}?`)) {
+                                deleteTruck(t.id);
+                                toast.success("Truck deleted");
+                              }
                             }}
-                            className="text-xs text-warn"
                           >
-                            Unlock
-                          </button>
-                        )}
-                        <button
-                          onClick={() => confirm(`Delete plan ${p.date}?`) && deleteDay(p.date)}
-                          className="text-xs text-destructive"
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                            Delete
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          </TabsContent>
 
-        {tab === "settings" && (
-          <div className="panel p-4 max-w-md space-y-3">
-            <h3 className="font-semibold">Admin PIN</h3>
-            <p className="text-sm text-muted-foreground">
-              {currentPin ? "PIN is set." : "No PIN set — admin is open."}
-            </p>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const fd = new FormData(e.currentTarget);
-                onSetPin(String(fd.get("pin") ?? ""));
-                (e.currentTarget as HTMLFormElement).reset();
-                alert("Updated.");
-              }}
-              className="flex gap-2"
-            >
-              <input
-                name="pin"
-                type="password"
-                placeholder="New PIN (blank to clear)"
-                className="flex-1 bg-panel-2 border border-border rounded px-3 py-2"
-              />
-              <button className="px-4 py-2 rounded bg-primary text-primary-foreground">
-                Save
-              </button>
-            </form>
-          </div>
-        )}
+          <TabsContent value="audit">
+            <div className="panel p-4">
+              <div className="max-h-[70vh] overflow-auto rounded-xl border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Time</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Message</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {audit.map((a) => (
+                      <TableRow key={a.id}>
+                        <TableCell className="metric-mono text-xs">
+                          {new Date(a.ts).toLocaleString()}
+                        </TableCell>
+                        <TableCell className="metric-mono text-xs">{a.type}</TableCell>
+                        <TableCell>{a.message}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="plans">
+            <div className="panel p-4">
+              <div className="overflow-auto rounded-xl border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead>Date</TableHead>
+                      <TableHead>Invoices</TableHead>
+                      <TableHead>Locked</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Object.values(plans)
+                      .sort((a, b) => (a.date < b.date ? 1 : -1))
+                      .map((p) => (
+                        <TableRow key={p.date}>
+                          <TableCell className="metric-mono">{p.date}</TableCell>
+                          <TableCell>{p.invoices.length}</TableCell>
+                          <TableCell>
+                            {p.locked ? <Badge variant="good">Locked</Badge> : "—"}
+                          </TableCell>
+                          <TableCell className="space-x-2 text-right">
+                            <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setDate(p.date)}>
+                              Open
+                            </Button>
+                            {p.locked && (
+                              <Button
+                                variant="link"
+                                size="sm"
+                                className="h-auto p-0 text-warn"
+                                onClick={() => {
+                                  setDate(p.date);
+                                  unlockPlan();
+                                  toast.success("Plan unlocked");
+                                }}
+                              >
+                                Unlock
+                              </Button>
+                            )}
+                            <Button
+                              variant="link"
+                              size="sm"
+                              className="h-auto p-0 text-destructive"
+                              onClick={() => {
+                                if (confirm(`Delete plan ${p.date}?`)) {
+                                  deleteDay(p.date);
+                                  toast.success("Plan deleted");
+                                }
+                              }}
+                            >
+                              Delete
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="settings">
+            <div className="panel max-w-md space-y-4 p-4">
+              <div>
+                <h3 className="font-semibold tracking-tight">Admin PIN</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {currentPin ? "PIN is set and required for admin access." : "No PIN set — admin is open."}
+                </p>
+              </div>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const fd = new FormData(e.currentTarget);
+                  onSetPin(String(fd.get("pin") ?? ""));
+                  (e.currentTarget as HTMLFormElement).reset();
+                  toast.success("PIN updated");
+                }}
+                className="flex gap-2"
+              >
+                <Input
+                  name="pin"
+                  type="password"
+                  placeholder="New PIN (blank to clear)"
+                  className="flex-1"
+                />
+                <Button type="submit">Save</Button>
+              </form>
+            </div>
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   );

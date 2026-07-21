@@ -4,8 +4,8 @@ export function areaColor(name: string): { bg: string; border: string; text: str
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   const hue = h % 360;
   return {
-    bg: `hsl(${hue} 70% 20% / 0.7)`,
-    border: `hsl(${hue} 80% 55%)`,
-    text: `hsl(${hue} 90% 82%)`,
+    bg: `hsl(${hue} 45% 18% / 0.75)`,
+    border: `hsl(${hue} 55% 48%)`,
+    text: `hsl(${hue} 65% 78%)`,
   };
 }

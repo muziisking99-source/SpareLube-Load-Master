@@ -1,5 +1,8 @@
 import { useState } from "react";
+import { ArrowLeft, Printer } from "lucide-react";
 import { useStore } from "@/lib/store";
+import { Button } from "@/components/ui/button";
+import { ScreenHeader } from "./ui/ScreenHeader";
 
 export function PrintScreen() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
@@ -8,63 +11,75 @@ export function PrintScreen() {
   const [view, setView] = useState<"truck" | "master" | null>(null);
 
   const active = trucks.filter((t) => t.active);
-  const dayArea = new Map(plan.truckDay.map((td) => [td.truckId, td.area]));
+  const customers = useStore((s) => s.customers);
+  const dayAreas = new Map(plan.truckDay.map((td) => [td.truckId, td.areas ?? []]));
 
   function print(v: "truck" | "master") {
     setView(v);
     setTimeout(() => window.print(), 100);
   }
 
+  function sortInvoices(list: typeof plan.invoices) {
+    return [...list].sort((a, b) => {
+      const la = customers[a.customer]?.defaultArea === a.area
+        ? customers[a.customer]?.loadingNumber ?? 0
+        : 0;
+      const lb = customers[b.customer]?.defaultArea === b.area
+        ? customers[b.customer]?.loadingNumber ?? 0
+        : 0;
+      const aUnset = la <= 0 ? 1 : 0;
+      const bUnset = lb <= 0 ? 1 : 0;
+      if (aUnset !== bUnset) return aUnset - bUnset;
+      if (la !== lb) return la - lb;
+      return a.doc.localeCompare(b.doc);
+    });
+  }
+
   return (
     <div className="space-y-4">
-      <div className="panel p-4 flex flex-wrap gap-3 no-print">
-        <button
-          onClick={() => setStep("lock")}
-          className="px-4 py-2 rounded border border-border hover:bg-panel-2"
-        >
-          ← Back
-        </button>
-        <button
-          onClick={() => print("truck")}
-          className="px-4 py-2 rounded bg-primary text-primary-foreground font-semibold"
-        >
-          🖨 Truck Load Sheets
-        </button>
-        <button
-          onClick={() => print("master")}
-          className="px-4 py-2 rounded bg-primary text-primary-foreground font-semibold"
-        >
-          🖨 Master Reconciliation
-        </button>
+      <div className="panel flex flex-wrap gap-3 p-4 no-print">
+        <Button variant="outline" onClick={() => setStep("lock")}>
+          <ArrowLeft className="size-4" />
+          Back
+        </Button>
+        <Button onClick={() => print("truck")}>
+          <Printer className="size-4" />
+          Truck Load Sheets
+        </Button>
+        <Button onClick={() => print("master")}>
+          <Printer className="size-4" />
+          Master Reconciliation
+        </Button>
       </div>
 
       <div className="panel p-4 no-print">
-        <p className="text-sm text-muted-foreground">
-          Print previews open in the browser's print dialog. Adjust the print
-          view to preview here:
-        </p>
-        <div className="flex gap-2 mt-2">
-          <button
+        <ScreenHeader
+          title="Print preview"
+          description="Print previews open in the browser print dialog. Select a view below to preview on screen."
+          className="mb-3"
+        />
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant={view === "truck" ? "default" : "outline"}
+            size="sm"
             onClick={() => setView("truck")}
-            className={`px-3 py-1.5 rounded border ${view === "truck" ? "border-primary" : "border-border"}`}
           >
             Preview Truck Sheets
-          </button>
-          <button
+          </Button>
+          <Button
+            variant={view === "master" ? "default" : "outline"}
+            size="sm"
             onClick={() => setView("master")}
-            className={`px-3 py-1.5 rounded border ${view === "master" ? "border-primary" : "border-border"}`}
           >
             Preview Master Report
-          </button>
+          </Button>
         </div>
       </div>
 
       {view === "truck" && (
         <div className="print-root" style={{ display: "block" }}>
           {active.map((t, idx) => {
-            const list = plan.invoices
-              .filter((i) => i.truckId === t.id)
-              .sort((a, b) => a.doc.localeCompare(b.doc));
+            const list = sortInvoices(plan.invoices.filter((i) => i.truckId === t.id));
             const wt = list.reduce((s, i) => s + i.weight, 0);
             return (
               <div
@@ -76,30 +91,44 @@ export function PrintScreen() {
               >
                 <h1 style={{ fontSize: 22, marginBottom: 6 }}>Truck Load Sheet</h1>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                  <div>Date: <b>{plan.date}</b></div>
-                  <div>Truck: <b>{t.name}</b></div>
-                  <div>Area: <b>{dayArea.get(t.id) ?? "—"}</b></div>
+                  <div>
+                    Date: <b>{plan.date}</b>
+                  </div>
+                  <div>
+                    Truck: <b>{t.name}</b>
+                  </div>
+                  <div>
+                    Areas: <b>{(dayAreas.get(t.id) ?? []).join(", ") || "—"}</b>
+                  </div>
                   <div>Driver: ______________</div>
                 </div>
                 <table style={{ marginTop: 12 }}>
                   <thead>
                     <tr>
+                      <th style={{ width: 60 }}>Load #</th>
                       <th style={{ width: 100 }}>Document</th>
                       <th>Customer</th>
                       <th style={{ width: 100 }}>Weight (kg)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {list.map((i) => (
-                      <tr key={i.id}>
-                        <td>{i.doc}</td>
-                        <td>{i.customer}</td>
-                        <td style={{ textAlign: "right" }}>{i.weight}</td>
-                      </tr>
-                    ))}
+                    {list.map((i) => {
+                      const loadNo =
+                        customers[i.customer]?.defaultArea === i.area
+                          ? customers[i.customer]?.loadingNumber || ""
+                          : "";
+                      return (
+                        <tr key={i.id}>
+                          <td style={{ textAlign: "right" }}>{loadNo}</td>
+                          <td>{i.doc}</td>
+                          <td>{i.customer}</td>
+                          <td style={{ textAlign: "right" }}>{i.weight}</td>
+                        </tr>
+                      );
+                    })}
                     {list.length === 0 && (
                       <tr>
-                        <td colSpan={3} style={{ textAlign: "center" }}>
+                        <td colSpan={4} style={{ textAlign: "center" }}>
                           No invoices
                         </td>
                       </tr>
@@ -107,14 +136,17 @@ export function PrintScreen() {
                   </tbody>
                   <tfoot>
                     <tr>
-                      <td colSpan={2}><b>Total Weight</b></td>
-                      <td style={{ textAlign: "right" }}><b>{wt.toFixed(0)}</b></td>
+                      <td colSpan={3}>
+                        <b>Total Weight</b>
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <b>{wt.toFixed(0)}</b>
+                      </td>
                     </tr>
                   </tfoot>
                 </table>
                 <div style={{ marginTop: 20, fontSize: 12 }}>
-                  Loader Signature: ______________________ Time Departed:
-                  ______________
+                  Loader Signature: ______________________ Time Departed: ______________
                 </div>
               </div>
             );
@@ -126,10 +158,13 @@ export function PrintScreen() {
         <div className="print-root" style={{ display: "block" }}>
           <div style={{ padding: "24px" }}>
             <h1 style={{ fontSize: 22, marginBottom: 6 }}>Master Reconciliation</h1>
-            <div style={{ fontSize: 13, marginBottom: 12 }}>Date: <b>{plan.date}</b></div>
+            <div style={{ fontSize: 13, marginBottom: 12 }}>
+              Date: <b>{plan.date}</b>
+            </div>
             <table>
               <thead>
                 <tr>
+                  <th style={{ width: 60 }}>Load #</th>
                   <th style={{ width: 100 }}>Document</th>
                   <th>Customer</th>
                   <th style={{ width: 100 }}>Weight</th>
@@ -137,23 +172,23 @@ export function PrintScreen() {
                 </tr>
               </thead>
               <tbody>
-                {[...plan.invoices]
-                  .sort((a, b) => a.doc.localeCompare(b.doc))
-                  .map((i) => (
+                {sortInvoices(plan.invoices).map((i) => (
                     <tr key={i.id}>
+                      <td>
+                        {customers[i.customer]?.defaultArea === i.area
+                          ? customers[i.customer]?.loadingNumber || ""
+                          : ""}
+                      </td>
                       <td>{i.doc}</td>
                       <td>{i.customer}</td>
                       <td style={{ textAlign: "right" }}>{i.weight}</td>
-                      <td>
-                        {trucks.find((t) => t.id === i.truckId)?.name ?? "UNALLOCATED"}
-                      </td>
+                      <td>{trucks.find((t) => t.id === i.truckId)?.name ?? "UNALLOCATED"}</td>
                     </tr>
                   ))}
               </tbody>
             </table>
             <div style={{ marginTop: 24, fontSize: 12 }}>
-              Reconciled By: ______________________ Signature:
-              ______________________
+              Reconciled By: ______________________ Signature: ______________________
             </div>
           </div>
         </div>
