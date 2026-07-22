@@ -21,12 +21,14 @@ export function PrintScreen() {
 
   function sortInvoices(list: typeof plan.invoices) {
     return [...list].sort((a, b) => {
-      const la = customers[a.customer]?.defaultArea === a.area
-        ? customers[a.customer]?.loadingNumber ?? 0
-        : 0;
-      const lb = customers[b.customer]?.defaultArea === b.area
-        ? customers[b.customer]?.loadingNumber ?? 0
-        : 0;
+      const la =
+        customers[a.customer]?.defaultArea === a.area
+          ? (customers[a.customer]?.loadingNumber ?? 0)
+          : 0;
+      const lb =
+        customers[b.customer]?.defaultArea === b.area
+          ? (customers[b.customer]?.loadingNumber ?? 0)
+          : 0;
       const aUnset = la <= 0 ? 1 : 0;
       const bUnset = lb <= 0 ? 1 : 0;
       if (aUnset !== bUnset) return aUnset - bUnset;
@@ -34,6 +36,17 @@ export function PrintScreen() {
       return a.doc.localeCompare(b.doc);
     });
   }
+
+  const truckSheets = active.flatMap((t) => {
+    const onTruck = plan.invoices.filter((i) => i.truckId === t.id);
+    const r1 = sortInvoices(onTruck.filter((i) => (i.round ?? 1) === 1));
+    const r2 = sortInvoices(onTruck.filter((i) => (i.round ?? 1) === 2));
+    const sheets: { truck: (typeof active)[0]; round: number; list: typeof r1 }[] = [
+      { truck: t, round: 1, list: r1 },
+    ];
+    if (r2.length > 0) sheets.push({ truck: t, round: 2, list: r2 });
+    return sheets;
+  });
 
   return (
     <div className="space-y-4">
@@ -78,24 +91,29 @@ export function PrintScreen() {
 
       {view === "truck" && (
         <div className="print-root" style={{ display: "block" }}>
-          {active.map((t, idx) => {
-            const list = sortInvoices(plan.invoices.filter((i) => i.truckId === t.id));
+          {truckSheets.map((sheet, idx) => {
+            const { truck: t, round, list } = sheet;
             const wt = list.reduce((s, i) => s + i.weight, 0);
             return (
               <div
-                key={t.id}
+                key={`${t.id}-r${round}`}
                 style={{
                   padding: "24px",
-                  pageBreakAfter: idx < active.length - 1 ? "always" : "auto",
+                  pageBreakAfter: idx < truckSheets.length - 1 ? "always" : "auto",
                 }}
               >
-                <h1 style={{ fontSize: 22, marginBottom: 6 }}>Truck Load Sheet</h1>
+                <h1 style={{ fontSize: 22, marginBottom: 6 }}>
+                  Truck Load Sheet{round === 2 ? " — Round 2" : ""}
+                </h1>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                   <div>
                     Date: <b>{plan.date}</b>
                   </div>
                   <div>
                     Truck: <b>{t.name}</b>
+                  </div>
+                  <div>
+                    Round: <b>{round}</b>
                   </div>
                   <div>
                     Areas: <b>{(dayAreas.get(t.id) ?? []).join(", ") || "—"}</b>
@@ -169,22 +187,24 @@ export function PrintScreen() {
                   <th>Customer</th>
                   <th style={{ width: 100 }}>Weight</th>
                   <th style={{ width: 160 }}>Truck</th>
+                  <th style={{ width: 70 }}>Round</th>
                 </tr>
               </thead>
               <tbody>
                 {sortInvoices(plan.invoices).map((i) => (
-                    <tr key={i.id}>
-                      <td>
-                        {customers[i.customer]?.defaultArea === i.area
-                          ? customers[i.customer]?.loadingNumber || ""
-                          : ""}
-                      </td>
-                      <td>{i.doc}</td>
-                      <td>{i.customer}</td>
-                      <td style={{ textAlign: "right" }}>{i.weight}</td>
-                      <td>{trucks.find((t) => t.id === i.truckId)?.name ?? "UNALLOCATED"}</td>
-                    </tr>
-                  ))}
+                  <tr key={i.id}>
+                    <td>
+                      {customers[i.customer]?.defaultArea === i.area
+                        ? customers[i.customer]?.loadingNumber || ""
+                        : ""}
+                    </td>
+                    <td>{i.doc}</td>
+                    <td>{i.customer}</td>
+                    <td style={{ textAlign: "right" }}>{i.weight}</td>
+                    <td>{trucks.find((t) => t.id === i.truckId)?.name ?? "UNALLOCATED"}</td>
+                    <td style={{ textAlign: "center" }}>{i.truckId ? (i.round ?? 1) : "—"}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
             <div style={{ marginTop: 24, fontSize: 12 }}>

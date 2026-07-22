@@ -8,8 +8,8 @@ import type {
   Truck,
   TruckDay,
 } from "./types";
-import { normalizeCustomer, normalizeTruckDay } from "./types";
-import { allocate } from "./allocation";
+import { normalizeCustomer, normalizeInvoice, normalizeTruckDay } from "./types";
+import { allocate, overflowInvoiceIds } from "./allocation";
 import {
   assignCustomerArea,
   reorderCustomersInArea,
@@ -92,7 +92,7 @@ type State = {
   deleteCustomer: (name: string) => void;
 
   // invoices
-  addInvoices: (list: Omit<Invoice, "id" | "truckId">[]) => void;
+  addInvoices: (list: Omit<Invoice, "id" | "truckId" | "round">[]) => void;
   addAdhoc: () => void;
   updateInvoice: (id: string, patch: Partial<Invoice>) => void;
   removeInvoice: (id: string) => void;
@@ -102,6 +102,9 @@ type State = {
   runAllocation: () => void;
   moveInvoice: (invId: string, truckId: string | null, reason?: string) => void;
   bulkMove: (ids: string[], truckId: string | null) => void;
+  /** Move selected (or capacity overflow) invoices on a truck to round 2. Returns count moved. */
+  sendToSecondRound: (truckId: string, invoiceIds?: string[]) => number;
+  setInvoiceRound: (ids: string[], round: number) => void;
 
   // undo
   pushUndo: (a: UndoAction) => void;
@@ -202,6 +205,9 @@ export const useStore = create<State>((set, get) => {
             ...p,
             truckDay: (p.truckDay ?? []).map((td) =>
               normalizeTruckDay(td as TruckDay & { area?: string }),
+            ),
+            invoices: (p.invoices ?? []).map((i) =>
+              normalizeInvoice(i as Parameters<typeof normalizeInvoice>[0]),
             ),
           };
         }
@@ -400,7 +406,12 @@ export const useStore = create<State>((set, get) => {
         ...p,
         invoices: [
           ...p.invoices,
-          ...list.map((l) => ({ ...l, id: uid(), truckId: null as string | null })),
+          ...list.map((l) => ({
+            ...l,
+            id: uid(),
+            truckId: null as string | null,
+            round: 1,
+          })),
         ],
       }));
     },
@@ -415,8 +426,9 @@ export const useStore = create<State>((set, get) => {
             customer: "",
             weight: 0,
             area: "",
-            source: "ADHOC",
+            source: "ADHOC" as const,
             truckId: null,
+            round: 1,
           },
         ],
       }));
@@ -468,10 +480,14 @@ export const useStore = create<State>((set, get) => {
     moveInvoice: (invId, truckId, reason) => {
       const s = get();
       const plan = s.plans[s.currentDate];
-      const before = plan?.invoices.find((i) => i.id === invId)?.truckId ?? null;
+      const prev = plan?.invoices.find((i) => i.id === invId);
+      const beforeTruck = prev?.truckId ?? null;
+      const beforeRound = prev?.round ?? 1;
       patchPlan((p) => ({
         ...p,
-        invoices: p.invoices.map((i) => (i.id === invId ? { ...i, truckId } : i)),
+        invoices: p.invoices.map((i) =>
+          i.id === invId ? { ...i, truckId, round: 1 } : i,
+        ),
       }));
       log(
         "invoice.move",
@@ -479,19 +495,29 @@ export const useStore = create<State>((set, get) => {
       );
       get().pushUndo({
         label: "Undo move",
-        undo: () => get().moveInvoice(invId, before),
+        undo: () => {
+          patchPlan((p) => ({
+            ...p,
+            invoices: p.invoices.map((i) =>
+              i.id === invId ? { ...i, truckId: beforeTruck, round: beforeRound } : i,
+            ),
+          }));
+          log("undo", "Undid move");
+        },
       });
     },
     bulkMove: (ids, truckId) => {
       const s = get();
       const plan = s.plans[s.currentDate];
-      const before = new Map<string, string | null>();
+      const before = new Map<string, { truckId: string | null; round: number }>();
       plan?.invoices.forEach((i) => {
-        if (ids.includes(i.id)) before.set(i.id, i.truckId);
+        if (ids.includes(i.id)) before.set(i.id, { truckId: i.truckId, round: i.round ?? 1 });
       });
       patchPlan((p) => ({
         ...p,
-        invoices: p.invoices.map((i) => (ids.includes(i.id) ? { ...i, truckId } : i)),
+        invoices: p.invoices.map((i) =>
+          ids.includes(i.id) ? { ...i, truckId, round: 1 } : i,
+        ),
       }));
       log("invoice.bulkMove", `Bulk moved ${ids.length} → ${truckId ?? "UNALLOCATED"}`);
       get().pushUndo({
@@ -500,12 +526,59 @@ export const useStore = create<State>((set, get) => {
           patchPlan((p) => ({
             ...p,
             invoices: p.invoices.map((i) =>
-              before.has(i.id) ? { ...i, truckId: before.get(i.id)! } : i,
+              before.has(i.id)
+                ? { ...i, truckId: before.get(i.id)!.truckId, round: before.get(i.id)!.round }
+                : i,
             ),
           }));
           log("undo", "Undid bulk move");
         },
       });
+    },
+    setInvoiceRound: (ids, round) => {
+      const r = round === 2 ? 2 : 1;
+      const s = get();
+      const plan = s.plans[s.currentDate];
+      const before = new Map<string, number>();
+      plan?.invoices.forEach((i) => {
+        if (ids.includes(i.id)) before.set(i.id, i.round ?? 1);
+      });
+      patchPlan((p) => ({
+        ...p,
+        invoices: p.invoices.map((i) => (ids.includes(i.id) ? { ...i, round: r } : i)),
+      }));
+      log("invoice.round", `Set ${ids.length} invoice(s) to round ${r}`);
+      get().pushUndo({
+        label: r === 2 ? "Undo second round" : "Undo round change",
+        undo: () => {
+          patchPlan((p) => ({
+            ...p,
+            invoices: p.invoices.map((i) =>
+              before.has(i.id) ? { ...i, round: before.get(i.id)! } : i,
+            ),
+          }));
+          log("undo", "Undid round change");
+        },
+      });
+    },
+    sendToSecondRound: (truckId, invoiceIds) => {
+      const s = get();
+      const plan = s.plans[s.currentDate] ?? emptyPlan(s.currentDate);
+      const truck = s.trucks.find((t) => t.id === truckId);
+      if (!truck) return 0;
+
+      let ids: string[];
+      if (invoiceIds && invoiceIds.length > 0) {
+        ids = invoiceIds.filter((id) => {
+          const inv = plan.invoices.find((i) => i.id === id);
+          return inv?.truckId === truckId && (inv.round ?? 1) !== 2;
+        });
+      } else {
+        ids = overflowInvoiceIds(plan.invoices, truckId, truck.maxWeight, s.customers);
+      }
+      if (ids.length === 0) return 0;
+      get().setInvoiceRound(ids, 2);
+      return ids.length;
     },
 
     pushUndo: (a) =>

@@ -33,7 +33,9 @@ export function Assistant() {
 
   const truckWeights = active.map((t) => ({
     t,
-    w: plan.invoices.filter((i) => i.truckId === t.id).reduce((s, i) => s + i.weight, 0),
+    w: plan.invoices
+      .filter((i) => i.truckId === t.id && (i.round ?? 1) === 1)
+      .reduce((s, i) => s + i.weight, 0),
   }));
   truckWeights.sort((a, b) => b.w - a.w);
   const heaviest = truckWeights[0];

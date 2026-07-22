@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowRight, Ban, Play, Undo2 } from "lucide-react";
+import { ArrowRight, Ban, Play, RotateCcw, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
@@ -7,7 +7,6 @@ import { truckWeight } from "@/lib/allocation";
 import type { Invoice, Truck } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -159,6 +158,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
             onToggleSelect={toggleSelect}
             onMove={(i) => setMoveTarget({ inv: i })}
             onUnallocate={(i) => moveInvoice(i.id, null)}
+            onClearSelected={clearSel}
           />
         ))}
       </div>
@@ -219,6 +219,7 @@ function TruckCard({
   onToggleSelect,
   onMove,
   onUnallocate,
+  onClearSelected,
 }: {
   truck: Truck;
   areas: string[];
@@ -229,14 +230,57 @@ function TruckCard({
   onToggleSelect: (id: string) => void;
   onMove: (i: Invoice) => void;
   onUnallocate: (i: Invoice) => void;
+  onClearSelected: () => void;
 }) {
-  const weight = invoices.reduce((s, i) => s + i.weight, 0);
+  const sendToSecondRound = useStore((s) => s.sendToSecondRound);
+  const setInvoiceRound = useStore((s) => s.setInvoiceRound);
+
+  const round1 = invoices.filter((i) => (i.round ?? 1) === 1);
+  const round2 = invoices.filter((i) => (i.round ?? 1) === 2);
+  const weight = round1.reduce((s, i) => s + i.weight, 0);
+  const round2Weight = round2.reduce((s, i) => s + i.weight, 0);
   const pct = truck.maxWeight ? (weight / truck.maxWeight) * 100 : 0;
   const barTone = pct >= 95 ? "bg-crit" : pct >= 80 ? "bg-warn" : "bg-good";
   const countByArea = new Map<string, number>();
   for (const inv of invoices) {
     const key = inv.area || "—";
     countByArea.set(key, (countByArea.get(key) ?? 0) + 1);
+  }
+
+  const selectedOnTruck = selected.filter((id) => invoices.some((i) => i.id === id));
+  const selectedRound1 = selectedOnTruck.filter((id) =>
+    round1.some((i) => i.id === id),
+  );
+  const selectedRound2 = selectedOnTruck.filter((id) =>
+    round2.some((i) => i.id === id),
+  );
+
+  function handleSecondRound() {
+    const n = sendToSecondRound(
+      truck.id,
+      selectedRound1.length > 0 ? selectedRound1 : undefined,
+    );
+    if (n === 0) {
+      toast.message(
+        selectedRound1.length > 0
+          ? "No selected invoices to send to Round 2"
+          : "Nothing overflows capacity — select invoices or add more weight",
+      );
+      return;
+    }
+    toast.success(
+      selectedRound1.length > 0
+        ? `Moved ${n} invoice${n === 1 ? "" : "s"} to Round 2`
+        : `Sent ${n} overflow invoice${n === 1 ? "" : "s"} to Round 2`,
+    );
+    onClearSelected();
+  }
+
+  function handleBackToRound1() {
+    if (selectedRound2.length === 0) return;
+    setInvoiceRound(selectedRound2, 1);
+    toast.success(`Restored ${selectedRound2.length} to Round 1`);
+    onClearSelected();
   }
 
   return (
@@ -267,6 +311,9 @@ function TruckCard({
               })
             )}
             <span>{invoices.length} invoices</span>
+            {round2.length > 0 && (
+              <span className="chip border-warn/40 text-warn">R2 · {round2.length}</span>
+            )}
           </div>
         </div>
         <div className="text-right">
@@ -274,6 +321,9 @@ function TruckCard({
             {weight.toFixed(0)} / {truck.maxWeight} kg
           </div>
           <div className="text-xs text-muted-foreground metric-mono">{pct.toFixed(0)}%</div>
+          {round2.length > 0 && (
+            <div className="text-xs text-warn metric-mono">R2 {round2Weight.toFixed(0)} kg</div>
+          )}
         </div>
       </div>
       <div className="mt-3 h-2 overflow-hidden rounded-full bg-panel-2">
@@ -282,11 +332,87 @@ function TruckCard({
           style={{ width: `${Math.min(100, pct)}%` }}
         />
       </div>
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        {invoices.length === 0 && (
+
+      {mode === "adjust" && invoices.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button type="button" size="sm" variant="secondary" onClick={handleSecondRound}>
+            <RotateCcw className="size-3.5" />
+            Second Round
+            {selectedRound1.length > 0 ? ` (${selectedRound1.length})` : ""}
+          </Button>
+          {selectedRound2.length > 0 && (
+            <Button type="button" size="sm" variant="outline" onClick={handleBackToRound1}>
+              Back to Round 1 ({selectedRound2.length})
+            </Button>
+          )}
+        </div>
+      )}
+
+      {invoices.length === 0 ? (
+        <div className="mt-3">
           <EmptyState title="No invoices assigned" className="w-full py-4" />
-        )}
-        {invoices.map((i) => (
+        </div>
+      ) : (
+        <div className="mt-3 space-y-3">
+          <RoundGroup
+            label="Round 1"
+            list={round1}
+            mode={mode}
+            selected={selected}
+            onToggleSelect={onToggleSelect}
+            onMove={onMove}
+            onUnallocate={onUnallocate}
+          />
+          {round2.length > 0 && (
+            <RoundGroup
+              label="Round 2"
+              list={round2}
+              mode={mode}
+              selected={selected}
+              onToggleSelect={onToggleSelect}
+              onMove={onMove}
+              onUnallocate={onUnallocate}
+              accent
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RoundGroup({
+  label,
+  list,
+  mode,
+  selected,
+  onToggleSelect,
+  onMove,
+  onUnallocate,
+  accent,
+}: {
+  label: string;
+  list: Invoice[];
+  mode: "allocate" | "adjust";
+  selected: string[];
+  onToggleSelect: (id: string) => void;
+  onMove: (i: Invoice) => void;
+  onUnallocate: (i: Invoice) => void;
+  accent?: boolean;
+}) {
+  if (list.length === 0 && !accent) return null;
+  return (
+    <div>
+      <div
+        className={`mb-1.5 text-[11px] font-medium uppercase tracking-wider ${
+          accent ? "text-warn" : "text-muted-foreground"
+        }`}
+      >
+        {label}
+        <span className="metric-mono ml-1.5 opacity-80">{list.length}</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {list.map((i) => (
           <InvoiceChip
             key={i.id}
             inv={i}
@@ -407,7 +533,7 @@ function MoveDialog({
         </p>
         <div className="max-h-72 space-y-1 overflow-auto">
           {trucks.map((t) => {
-            const currentWeight = truckWeight(plan.invoices, t.id);
+            const currentWeight = truckWeight(plan.invoices, t.id, 1);
             const remaining = t.maxWeight - currentWeight;
             const fits = remaining >= movingWeight;
             const pct = ((currentWeight + movingWeight) / t.maxWeight) * 100;

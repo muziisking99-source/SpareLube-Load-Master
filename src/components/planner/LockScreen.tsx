@@ -112,7 +112,9 @@ export function LockScreen() {
             <TableBody>
               {active.map((t, idx) => {
                 const list = plan.invoices.filter((i) => i.truckId === t.id);
-                const wt = list.reduce((s, i) => s + i.weight, 0);
+                const r1 = list.filter((i) => (i.round ?? 1) === 1);
+                const r2 = list.filter((i) => (i.round ?? 1) === 2);
+                const wt = r1.reduce((s, i) => s + i.weight, 0);
                 const pct = (wt / t.maxWeight) * 100;
                 const status =
                   pct >= 95 ? "text-crit" : pct >= 80 ? "text-warn" : "text-good";
@@ -144,7 +146,10 @@ export function LockScreen() {
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="metric-mono">{list.length}</TableCell>
+                    <TableCell className="metric-mono">
+                      {list.length}
+                      {r2.length > 0 ? ` (R2: ${r2.length})` : ""}
+                    </TableCell>
                     <TableCell className="metric-mono">
                       {wt.toFixed(0)} / {t.maxWeight}
                     </TableCell>

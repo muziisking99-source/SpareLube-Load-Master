@@ -23,6 +23,8 @@ export type Invoice = {
   area: string; // "" means unset
   source: InvoiceSource;
   truckId: string | null; // null = unallocated
+  /** 1 = first trip, 2 = second round for the same truck */
+  round: number;
 };
 
 export type TruckDay = {
@@ -69,5 +71,18 @@ export function normalizeCustomer(raw: Partial<CustomerMemory> & { name: string 
     defaultArea: raw.defaultArea ?? "",
     loadingNumber: typeof raw.loadingNumber === "number" ? raw.loadingNumber : 0,
     firstSeen: raw.firstSeen ?? new Date().toISOString(),
+  };
+}
+
+export function normalizeInvoice(raw: Partial<Invoice> & Pick<Invoice, "id" | "doc" | "customer">): Invoice {
+  return {
+    id: raw.id,
+    doc: raw.doc,
+    customer: raw.customer,
+    weight: raw.weight ?? 0,
+    area: raw.area ?? "",
+    source: raw.source ?? "SYSTEM",
+    truckId: raw.truckId ?? null,
+    round: raw.round === 2 ? 2 : 1,
   };
 }
