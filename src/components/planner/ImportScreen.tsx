@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -136,116 +136,119 @@ export function ImportScreen() {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className="panel p-5">
-          <ScreenHeader
-            title="Excel Import"
-            description="Upload an .xlsx or .xls sheet with Doc and Customer columns. Optional Load # column sets sequence when areas are assigned."
-            className="mb-4"
-          />
+      <section className="panel p-5">
+        <ScreenHeader
+          title="Excel Import"
+            description="Upload an .xlsx or .xls sheet with Doc and Customer columns. Optional Load # is stored as you enter it; truck sheets print lowest → highest."
+          className="mb-4"
+        />
 
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void handleExcelFile(f);
-            }}
-          />
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleExcelFile(f);
+          }}
+        />
 
-          <button
-            type="button"
-            disabled={parsing}
-            onClick={() => fileRef.current?.click()}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragOver(false);
-              const f = e.dataTransfer.files?.[0];
-              if (f) void handleExcelFile(f);
-            }}
-            className={cn(
-              "flex w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-4 py-10 text-center transition-colors",
-              dragOver
-                ? "border-primary bg-primary/5"
-                : "border-border bg-panel-2/50 hover:border-primary/50 hover:bg-panel-2",
-              parsing && "opacity-60",
-            )}
-          >
-            <div className="grid size-12 place-items-center rounded-xl bg-primary/10 text-primary">
-              {parsing ? (
-                <Upload className="size-6 animate-pulse" />
-              ) : (
-                <FileSpreadsheet className="size-6" />
-              )}
-            </div>
-            <div>
-              <p className="text-sm font-medium text-foreground">
-                {parsing ? "Reading workbook…" : "Drop Excel file here, or click to browse"}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                .xlsx / .xls — Doc, Customer, optional Load #
-              </p>
-            </div>
-            {fileName && !parsing && (
-              <Badge variant="outline" className="metric-mono font-normal">
-                {fileName}
-              </Badge>
-            )}
-          </button>
-
-          {message && <p className="mt-3 text-sm text-muted-foreground">{message}</p>}
-        </section>
-
-        <section className="panel p-5">
-          <ScreenHeader
-            title="Adhoc Invoices"
-            description="Manually add one-off deliveries not in the system export."
-            action={
-              <Button variant="secondary" size="sm" onClick={addAdhoc}>
-                Add Row
-              </Button>
-            }
-            className="mb-4"
-          />
-          {adhocInvoices.length === 0 ? (
-            <EmptyState title="No adhoc invoices" description="Use Add Row for manual entries." />
-          ) : (
-            <div className="max-h-80 overflow-auto rounded-xl border border-border">
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead>Doc</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead className="w-24">Weight</TableHead>
-                    <TableHead className="w-40">Area</TableHead>
-                    <TableHead className="w-10" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {adhocInvoices.map((i) => (
-                    <InvoiceRow
-                      key={i.id}
-                      inv={i}
-                      areas={areas}
-                      onChange={(patch) => updateInvoice(i.id, patch)}
-                      onRemove={() => removeInvoice(i.id)}
-                      known={false}
-                      adhoc
-                    />
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+        <button
+          type="button"
+          disabled={parsing}
+          onClick={() => fileRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) void handleExcelFile(f);
+          }}
+          className={cn(
+            "flex w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-4 py-10 text-center transition-colors",
+            dragOver
+              ? "border-primary bg-primary/5"
+              : "border-border bg-panel-2/50 hover:border-primary/50 hover:bg-panel-2",
+            parsing && "opacity-60",
           )}
-        </section>
-      </div>
+        >
+          <div className="grid size-12 place-items-center rounded-xl bg-primary/10 text-primary">
+            {parsing ? (
+              <Upload className="size-6 animate-pulse" />
+            ) : (
+              <FileSpreadsheet className="size-6" />
+            )}
+          </div>
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              {parsing ? "Reading workbook…" : "Drop Excel file here, or click to browse"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              .xlsx / .xls — Doc, Customer, optional Load #
+            </p>
+          </div>
+          {fileName && !parsing && (
+            <Badge variant="outline" className="metric-mono font-normal">
+              {fileName}
+            </Badge>
+          )}
+        </button>
+
+        {message && <p className="mt-3 text-sm text-muted-foreground">{message}</p>}
+      </section>
+
+      <section className="panel p-5">
+        <ScreenHeader
+          title="Adhoc Invoices"
+          description="Manually add one-off deliveries not in the system export."
+          action={
+            <Button variant="secondary" size="sm" onClick={addAdhoc}>
+              Add Row
+            </Button>
+          }
+          className="mb-4"
+        />
+        {adhocInvoices.length === 0 ? (
+          <EmptyState title="No adhoc invoices" description="Use Add Row for manual entries." />
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <table className="w-full min-w-[720px] border-collapse text-sm">
+              <thead className="bg-panel-2">
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
+                  <th className="px-3 py-2.5 font-medium w-[9rem]">Doc</th>
+                  <th className="px-3 py-2.5 font-medium">Customer</th>
+                  <th className="px-3 py-2.5 font-medium w-[7rem]">Weight</th>
+                  <th className="px-3 py-2.5 font-medium w-[11rem]">Area</th>
+                  <th className="px-3 py-2.5 font-medium w-[4.5rem]">Load #</th>
+                  <th className="px-3 py-2.5 font-medium w-[3rem]" />
+                </tr>
+              </thead>
+              <tbody>
+                {adhocInvoices.map((i) => (
+                  <AdhocRow
+                    key={i.id}
+                    inv={i}
+                    areas={areas}
+                    loadNumber={
+                      (i.area &&
+                        customers[i.customer]?.defaultArea === i.area &&
+                        customers[i.customer]?.loadingNumber) ||
+                      0
+                    }
+                    onChange={(patch) => updateInvoice(i.id, patch)}
+                    onRemove={() => removeInvoice(i.id)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {invoices.length > 0 && (
         <section className="panel p-5">
@@ -347,12 +350,132 @@ export function ImportScreen() {
   );
 }
 
+function AdhocRow({
+  inv,
+  areas,
+  loadNumber,
+  onChange,
+  onRemove,
+}: {
+  inv: Invoice;
+  areas: string[];
+  loadNumber: number;
+  onChange: (p: Partial<Invoice>) => void;
+  onRemove: () => void;
+}) {
+  const customers = useStore((s) => s.customers);
+  const [docDraft, setDocDraft] = useState(inv.doc);
+  const [customerDraft, setCustomerDraft] = useState(inv.customer);
+
+  useEffect(() => {
+    setDocDraft(inv.doc);
+  }, [inv.doc]);
+  useEffect(() => {
+    setCustomerDraft(inv.customer);
+  }, [inv.customer]);
+
+  const badWeight = !inv.weight || inv.weight <= 0;
+  const badArea = !inv.area;
+
+  function commitCustomer() {
+    const name = customerDraft.trim();
+    if (name === inv.customer) return;
+    const known = customers[name];
+    onChange({
+      customer: name,
+      ...(known?.defaultArea && areas.includes(known.defaultArea)
+        ? { area: known.defaultArea }
+        : {}),
+    });
+  }
+
+  return (
+    <tr className="border-b border-border last:border-0">
+      <td className="px-3 py-2 align-middle">
+        <Input
+          value={docDraft}
+          onChange={(e) => setDocDraft(e.target.value)}
+          onBlur={() => {
+            if (docDraft !== inv.doc) onChange({ doc: docDraft });
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+          placeholder="Doc #"
+          className="h-9 min-w-[7rem] metric-mono text-foreground"
+          autoComplete="off"
+        />
+      </td>
+      <td className="px-3 py-2 align-middle">
+        <Input
+          value={customerDraft}
+          onChange={(e) => setCustomerDraft(e.target.value)}
+          onBlur={commitCustomer}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+          placeholder="Customer"
+          className="h-9 min-w-[10rem] text-foreground"
+          autoComplete="off"
+        />
+      </td>
+      <td className="px-3 py-2 align-middle">
+        <Input
+          type="number"
+          min={0}
+          value={inv.weight || ""}
+          onChange={(e) => onChange({ weight: Number(e.target.value) })}
+          className={`weight-input h-9 w-full min-w-[5.5rem] metric-mono text-foreground ${
+            badWeight ? "border-crit" : ""
+          }`}
+          placeholder="0"
+        />
+      </td>
+      <td className="px-3 py-2 align-middle">
+        <select
+          value={inv.area}
+          onChange={(e) => onChange({ area: e.target.value })}
+          className={`h-9 w-full min-w-[9rem] rounded-lg border bg-panel-2 px-2 text-sm text-foreground ${
+            badArea ? "border-warn" : "border-input"
+          }`}
+        >
+          <option value="">Select area</option>
+          {areas.map((a) => {
+            const c = areaColor(a);
+            return (
+              <option key={a} value={a} style={{ color: c.text }}>
+                {a}
+              </option>
+            );
+          })}
+        </select>
+      </td>
+      <td className="px-3 py-2 align-middle">
+        <span className="metric-mono text-muted-foreground">
+          {loadNumber > 0 ? loadNumber : "—"}
+        </span>
+      </td>
+      <td className="px-3 py-2 align-middle">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-8 text-muted-foreground hover:text-destructive"
+          onClick={onRemove}
+          aria-label="Remove"
+        >
+          <Trash2 className="size-4" />
+        </Button>
+      </td>
+    </tr>
+  );
+}
+
 function InvoiceRow({
   inv,
   areas,
   known,
   duplicate,
-  adhoc,
   index,
   loadNumber,
   onChange,
@@ -362,7 +485,6 @@ function InvoiceRow({
   areas: string[];
   known: boolean;
   duplicate?: boolean;
-  adhoc?: boolean;
   index?: number;
   loadNumber?: number;
   onChange: (p: Partial<Invoice>) => void;
@@ -391,38 +513,23 @@ function InvoiceRow({
 
   return (
     <TableRow
-      style={{ ...rowStyle, ...(index !== undefined ? { "--index": index } : {}) } as React.CSSProperties}
+      style={
+        {
+          ...rowStyle,
+          ...(index !== undefined ? { "--index": index } : {}),
+        } as React.CSSProperties
+      }
       className={index !== undefined ? "stagger-item" : undefined}
     >
-      {!adhoc && (
-        <TableCell className="metric-mono text-muted-foreground">
-          {loadNumber && loadNumber > 0 ? loadNumber : "—"}
-        </TableCell>
-      )}
-      <TableCell className="metric-mono">
-        {adhoc ? (
-          <Input
-            value={inv.doc}
-            onChange={(e) => onChange({ doc: e.target.value })}
-            className="h-8"
-          />
-        ) : (
-          inv.doc
-        )}
+      <TableCell className="metric-mono text-muted-foreground">
+        {loadNumber && loadNumber > 0 ? loadNumber : "—"}
       </TableCell>
+      <TableCell className="metric-mono text-foreground">{inv.doc}</TableCell>
       <TableCell>
-        {adhoc ? (
-          <Input
-            value={inv.customer}
-            onChange={(e) => onChange({ customer: e.target.value })}
-            className="h-8"
-          />
-        ) : (
-          <span className="flex flex-wrap items-center gap-2">
-            {inv.customer}
-            {duplicate && <Badge variant="crit">Duplicate</Badge>}
-          </span>
-        )}
+        <span className="flex flex-wrap items-center gap-2">
+          {inv.customer}
+          {duplicate && <Badge variant="crit">Duplicate</Badge>}
+        </span>
       </TableCell>
       <TableCell>
         <Input
@@ -431,7 +538,7 @@ function InvoiceRow({
           value={inv.weight || ""}
           onChange={(e) => onChange({ weight: Number(e.target.value) })}
           onKeyDown={onKey}
-          className={`weight-input h-8 w-24 metric-mono ${badWeight ? "border-crit" : ""}`}
+          className={`weight-input h-8 w-24 metric-mono text-foreground ${badWeight ? "border-crit" : ""}`}
           placeholder="0"
         />
       </TableCell>
@@ -439,7 +546,7 @@ function InvoiceRow({
         <select
           value={inv.area}
           onChange={(e) => onChange({ area: e.target.value })}
-          className={`h-9 w-full rounded-lg border bg-panel-2 px-2 text-sm ${
+          className={`h-9 w-full rounded-lg border bg-panel-2 px-2 text-sm text-foreground ${
             badArea ? "border-warn" : "border-input"
           }`}
         >
@@ -455,12 +562,11 @@ function InvoiceRow({
         </select>
       </TableCell>
       <TableCell>
-        {adhoc ? (
-          <Badge variant="outline">Adhoc</Badge>
-        ) : known ? (
-          <Badge variant="good">Known</Badge>
-        ) : (
-          <Badge variant="warn">New</Badge>
+        {known ? <Badge variant="good">Known</Badge> : <Badge variant="warn">New</Badge>}
+        {inv.source === "ADHOC" && (
+          <Badge variant="outline" className="ml-1">
+            Adhoc
+          </Badge>
         )}
       </TableCell>
       <TableCell>

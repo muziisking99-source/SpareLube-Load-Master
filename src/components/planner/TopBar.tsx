@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { Settings } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import type { Invoice } from "@/lib/types";
 
@@ -15,7 +16,7 @@ export function TopBar({
   searchResults: Invoice[] | null;
 }) {
   return (
-    <header className="sticky top-0 z-40 border-b border-white/5 bg-background/80 backdrop-blur-md no-print">
+    <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md no-print">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4">
         <div className="flex min-w-0 items-center gap-3">
           <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
@@ -58,6 +59,7 @@ export function TopBar({
           )}
         </div>
 
+        <ThemeToggle />
         <Link
           to="/admin"
           className={cn(

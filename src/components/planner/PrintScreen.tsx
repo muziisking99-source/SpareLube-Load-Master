@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ArrowLeft, Printer } from "lucide-react";
 import { useStore } from "@/lib/store";
+import { compareByLoadingNumber, loadingNumberFor } from "@/lib/loadingOrder";
 import { Button } from "@/components/ui/button";
 import { ScreenHeader } from "./ui/ScreenHeader";
 
@@ -19,22 +20,9 @@ export function PrintScreen() {
     setTimeout(() => window.print(), 100);
   }
 
+  /** Truck sheets: load # lowest → highest; invoices without a load # last. */
   function sortInvoices(list: typeof plan.invoices) {
-    return [...list].sort((a, b) => {
-      const la =
-        customers[a.customer]?.defaultArea === a.area
-          ? (customers[a.customer]?.loadingNumber ?? 0)
-          : 0;
-      const lb =
-        customers[b.customer]?.defaultArea === b.area
-          ? (customers[b.customer]?.loadingNumber ?? 0)
-          : 0;
-      const aUnset = la <= 0 ? 1 : 0;
-      const bUnset = lb <= 0 ? 1 : 0;
-      if (aUnset !== bUnset) return aUnset - bUnset;
-      if (la !== lb) return la - lb;
-      return a.doc.localeCompare(b.doc);
-    });
+    return [...list].sort((a, b) => compareByLoadingNumber(customers, a, b));
   }
 
   const truckSheets = active.flatMap((t) => {
@@ -131,13 +119,10 @@ export function PrintScreen() {
                   </thead>
                   <tbody>
                     {list.map((i) => {
-                      const loadNo =
-                        customers[i.customer]?.defaultArea === i.area
-                          ? customers[i.customer]?.loadingNumber || ""
-                          : "";
+                      const loadNo = loadingNumberFor(customers, i.customer, i.area);
                       return (
                         <tr key={i.id}>
-                          <td style={{ textAlign: "right" }}>{loadNo}</td>
+                          <td style={{ textAlign: "right" }}>{loadNo > 0 ? loadNo : ""}</td>
                           <td>{i.doc}</td>
                           <td>{i.customer}</td>
                           <td style={{ textAlign: "right" }}>{i.weight}</td>
@@ -191,20 +176,19 @@ export function PrintScreen() {
                 </tr>
               </thead>
               <tbody>
-                {sortInvoices(plan.invoices).map((i) => (
-                  <tr key={i.id}>
-                    <td>
-                      {customers[i.customer]?.defaultArea === i.area
-                        ? customers[i.customer]?.loadingNumber || ""
-                        : ""}
-                    </td>
-                    <td>{i.doc}</td>
-                    <td>{i.customer}</td>
-                    <td style={{ textAlign: "right" }}>{i.weight}</td>
-                    <td>{trucks.find((t) => t.id === i.truckId)?.name ?? "UNALLOCATED"}</td>
-                    <td style={{ textAlign: "center" }}>{i.truckId ? (i.round ?? 1) : "—"}</td>
-                  </tr>
-                ))}
+                {sortInvoices(plan.invoices).map((i) => {
+                  const loadNo = loadingNumberFor(customers, i.customer, i.area);
+                  return (
+                    <tr key={i.id}>
+                      <td style={{ textAlign: "right" }}>{loadNo > 0 ? loadNo : ""}</td>
+                      <td>{i.doc}</td>
+                      <td>{i.customer}</td>
+                      <td style={{ textAlign: "right" }}>{i.weight}</td>
+                      <td>{trucks.find((t) => t.id === i.truckId)?.name ?? "UNALLOCATED"}</td>
+                      <td style={{ textAlign: "center" }}>{i.truckId ? (i.round ?? 1) : "—"}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             <div style={{ marginTop: 24, fontSize: 12 }}>

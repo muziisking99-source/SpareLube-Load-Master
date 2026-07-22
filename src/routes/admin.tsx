@@ -20,6 +20,7 @@ import {
 import { FormField } from "@/components/planner/ui/FormField";
 import { EmptyState } from "@/components/planner/ui/EmptyState";
 import { CustomerAreaBoard } from "@/components/planner/CustomerAreaBoard";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { customersInArea } from "@/lib/loadingOrder";
 
 export const Route = createFileRoute("/admin")({
@@ -129,7 +130,6 @@ function AdminConsole({
   const importCustomers = useStore((s) => s.importCustomers);
   const setCustomerArea = useStore((s) => s.setCustomerArea);
   const setCustomerLoadingNumber = useStore((s) => s.setCustomerLoadingNumber);
-  const reorderCustomersInArea = useStore((s) => s.reorderCustomersInArea);
   const ensureArea = useStore((s) => s.ensureArea);
   const deleteCustomer = useStore((s) => s.deleteCustomer);
 
@@ -178,13 +178,13 @@ function AdminConsole({
       return {
         title: "No customers yet",
         description:
-          "Import an Excel sheet with a Customer column, then assign areas and drag to set loading order.",
+          "Import an Excel sheet with a Customer column, then assign areas and enter load numbers manually.",
       };
     }
     if (areaFilter === "unassigned" && unassigned.length === 0) {
       return {
         title: "No unassigned customers",
-        description: "Every customer has an area. Switch to All or pick an area to reorder.",
+        description: "Every customer has an area. Switch to All or pick an area to edit load numbers.",
       };
     }
     if (areaFilter !== "all" && areaFilter !== "unassigned") {
@@ -231,7 +231,7 @@ function AdminConsole({
 
   return (
     <div className="min-h-[100dvh]">
-      <header className="sticky top-0 z-40 border-b border-white/5 bg-background/80 backdrop-blur-md">
+      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4">
           <Link
             to="/"
@@ -241,7 +241,8 @@ function AdminConsole({
             Load Planner
           </Link>
           <span className="text-sm text-muted-foreground">Admin Console</span>
-          <Button variant="outline" size="sm" className="ml-auto" onClick={download}>
+          <ThemeToggle className="ml-auto" />
+          <Button variant="outline" size="sm" onClick={download}>
             <Download className="size-4" />
             Export JSON
           </Button>
@@ -265,8 +266,8 @@ function AdminConsole({
                   <div>
                     <h3 className="font-semibold tracking-tight">Customers</h3>
                     <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
-                      Import names, create areas here, then drag within an area to set loading order
-                      (1…n). Numbers are unique per area.
+                      Import names, assign areas, then type each customer&apos;s load # yourself.
+                      Truck sheets print invoices from lowest load # to highest.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -359,7 +360,6 @@ function AdminConsole({
                       setCustomerArea(name, area);
                       toast.success(area ? `${name} → ${area}` : `${name} unassigned`);
                     }}
-                    onReorder={(area, names) => reorderCustomersInArea(area, names)}
                     onSetLoadingNumber={(name, area, n) => {
                       setCustomerLoadingNumber(name, area, n);
                     }}

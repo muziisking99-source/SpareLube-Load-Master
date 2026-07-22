@@ -1,47 +1,38 @@
 import type { CustomerMemory } from "./types";
 
+/** Customers in an area, sorted by load # ascending (unset last). */
 export function customersInArea(
   customers: Record<string, CustomerMemory>,
   area: string,
 ): CustomerMemory[] {
   if (!area) return [];
   return Object.values(customers)
-    .filter((c) => c.defaultArea === area && c.loadingNumber > 0)
-    .sort((a, b) => a.loadingNumber - b.loadingNumber || a.name.localeCompare(b.name));
+    .filter((c) => c.defaultArea === area)
+    .sort((a, b) => {
+      const aUnset = a.loadingNumber <= 0 ? 1 : 0;
+      const bUnset = b.loadingNumber <= 0 ? 1 : 0;
+      if (aUnset !== bUnset) return aUnset - bUnset;
+      if (a.loadingNumber !== b.loadingNumber) return a.loadingNumber - b.loadingNumber;
+      return a.name.localeCompare(b.name);
+    });
 }
 
-function renumberArea(
-  customers: Record<string, CustomerMemory>,
-  area: string,
-): Record<string, CustomerMemory> {
-  const next = { ...customers };
-  const list = Object.values(next)
-    .filter((c) => c.defaultArea === area && c.loadingNumber > 0)
-    .sort((a, b) => a.loadingNumber - b.loadingNumber || a.name.localeCompare(b.name));
-  list.forEach((c, i) => {
-    next[c.name] = { ...c, loadingNumber: i + 1 };
-  });
-  return next;
-}
-
-/** Remove customer from their area sequence and compact numbers. */
+/** Clear area assignment; leaves other customers' load numbers untouched. */
 export function clearCustomerArea(
   customers: Record<string, CustomerMemory>,
   name: string,
 ): Record<string, CustomerMemory> {
   const cur = customers[name];
   if (!cur) return customers;
-  const oldArea = cur.defaultArea;
-  let next = {
+  return {
     ...customers,
     [name]: { ...cur, defaultArea: "", loadingNumber: 0 },
   };
-  if (oldArea) next = renumberArea(next, oldArea);
-  return next;
 }
 
 /**
- * Assign customer to an area at the end of that area's loading sequence.
+ * Assign customer to an area only — does not invent a load #.
+ * Load numbers are entered manually. Changing area clears the previous load #.
  */
 export function assignCustomerArea(
   customers: Record<string, CustomerMemory>,
@@ -52,29 +43,22 @@ export function assignCustomerArea(
   if (!cur) return customers;
   if (!area) return clearCustomerArea(customers, name);
 
-  let next = customers;
-  if (cur.defaultArea && cur.defaultArea !== area) {
-    next = clearCustomerArea(next, name);
+  if (cur.defaultArea === area) {
+    return customers;
   }
-  const existing = next[name] ?? cur;
-  if (existing.defaultArea === area && existing.loadingNumber > 0) {
-    return next;
-  }
-  const max = customersInArea(next, area).length;
+
   return {
-    ...next,
+    ...customers,
     [name]: {
-      ...existing,
+      ...cur,
       defaultArea: area,
-      loadingNumber: max + 1,
+      loadingNumber: 0,
     },
   };
 }
 
 /**
- * Insert customer at loadingNumber within area (1-based).
- * Existing customers at >= newNumber shift up by 1.
- * If already in the same area, remove first then insert.
+ * Set the exact load # the user typed. Does not renumber other customers.
  */
 export function setCustomerLoadingNumber(
   customers: Record<string, CustomerMemory>,
@@ -85,36 +69,22 @@ export function setCustomerLoadingNumber(
   const cur = customers[name];
   if (!cur || !area) return customers;
 
-  let next = customers;
-  // Leave current slot if moving within same area
-  if (cur.defaultArea === area && cur.loadingNumber > 0) {
-    next = {
-      ...next,
-      [name]: { ...cur, loadingNumber: 0 },
+  const n = Math.floor(newNumber);
+  if (!Number.isFinite(n) || n < 1) {
+    return {
+      ...customers,
+      [name]: { ...cur, defaultArea: area, loadingNumber: 0 },
     };
-    next = renumberArea(next, area);
-  } else if (cur.defaultArea && cur.defaultArea !== area) {
-    next = clearCustomerArea(next, name);
   }
 
-  const count = customersInArea(next, area).length;
-  const target = Math.max(1, Math.min(newNumber, count + 1));
-
-  // Shift everyone at >= target
-  const shifted: Record<string, CustomerMemory> = { ...next };
-  for (const c of Object.values(shifted)) {
-    if (c.defaultArea === area && c.loadingNumber >= target && c.name !== name) {
-      shifted[c.name] = { ...c, loadingNumber: c.loadingNumber + 1 };
-    }
-  }
-
-  const base = shifted[name] ?? cur;
-  shifted[name] = {
-    ...base,
-    defaultArea: area,
-    loadingNumber: target,
+  return {
+    ...customers,
+    [name]: {
+      ...cur,
+      defaultArea: area,
+      loadingNumber: n,
+    },
   };
-  return renumberArea(shifted, area);
 }
 
 export function loadingNumberFor(
@@ -127,7 +97,10 @@ export function loadingNumberFor(
   return c.loadingNumber || 0;
 }
 
-/** Set loading numbers 1..n from an ordered name list within an area. */
+/**
+ * Optional: rewrite load numbers 1…n from a drag order.
+ * Prefer manual entry; kept for explicit reorder actions.
+ */
 export function reorderCustomersInArea(
   customers: Record<string, CustomerMemory>,
   area: string,
@@ -145,4 +118,19 @@ export function reorderCustomersInArea(
     };
   });
   return next;
+}
+
+/** Compare invoices for truck sheets: load # lowest → highest, unset last. */
+export function compareByLoadingNumber(
+  customers: Record<string, CustomerMemory>,
+  a: { customer: string; area: string; doc: string },
+  b: { customer: string; area: string; doc: string },
+): number {
+  const la = loadingNumberFor(customers, a.customer, a.area);
+  const lb = loadingNumberFor(customers, b.customer, b.area);
+  const aUnset = la <= 0 ? 1 : 0;
+  const bUnset = lb <= 0 ? 1 : 0;
+  if (aUnset !== bUnset) return aUnset - bUnset;
+  if (la !== lb) return la - lb;
+  return a.doc.localeCompare(b.doc);
 }

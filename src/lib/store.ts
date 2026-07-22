@@ -383,19 +383,9 @@ export const useStore = create<State>((set, get) => {
     },
     deleteCustomer: (name) => {
       mutate((s) => {
-        const cur = s.customers[name];
-        if (!cur) return {};
-        const area = cur.defaultArea;
+        if (!s.customers[name]) return {};
         const customers = { ...s.customers };
         delete customers[name];
-        if (area) {
-          const inArea = Object.values(customers)
-            .filter((c) => c.defaultArea === area && c.loadingNumber > 0)
-            .sort((a, b) => a.loadingNumber - b.loadingNumber);
-          inArea.forEach((c, i) => {
-            customers[c.name] = { ...c, loadingNumber: i + 1 };
-          });
-        }
         return { customers };
       });
       log("customers.delete", `Deleted customer ${name}`);

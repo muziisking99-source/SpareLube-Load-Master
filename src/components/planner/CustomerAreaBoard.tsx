@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Reorder } from "framer-motion";
-import { ChevronDown, ChevronRight, GripVertical, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import type { CustomerMemory } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +14,6 @@ export function CustomerAreaBoard({
   customersByArea,
   areaOptions,
   onSetArea,
-  onReorder,
   onSetLoadingNumber,
   onDelete,
 }: {
@@ -24,7 +22,6 @@ export function CustomerAreaBoard({
   customersByArea: Record<string, CustomerMemory[]>;
   areaOptions: string[];
   onSetArea: (name: string, area: string) => void;
-  onReorder: (area: string, orderedNames: string[]) => void;
   onSetLoadingNumber: (name: string, area: string, n: number) => void;
   onDelete: (name: string) => void;
 }) {
@@ -68,7 +65,7 @@ export function CustomerAreaBoard({
                   onChange={(e) => {
                     if (e.target.value) onSetArea(c.name, e.target.value);
                   }}
-                  className="h-8 rounded-lg border border-input bg-panel-2 px-2 text-xs"
+                  className="h-8 rounded-lg border border-input bg-panel-2 px-2 text-xs text-foreground"
                 >
                   <option value="">Assign area…</option>
                   {areaOptions.map((a) => (
@@ -100,36 +97,32 @@ export function CustomerAreaBoard({
             count={list.length}
             open={open[area] !== false}
             onToggle={() => toggle(area)}
-            badge={`${list.length} in sequence`}
+            badge="Enter load # manually · sheets print low → high"
           >
             {list.length === 0 ? (
               <p className="px-3 py-4 text-sm text-muted-foreground">No customers in this area.</p>
             ) : (
-              <Reorder.Group
-                axis="y"
-                values={list.map((c) => c.name)}
-                onReorder={(names) => onReorder(area, names)}
-                className="divide-y divide-border"
-              >
+              <ul className="divide-y divide-border">
                 {list.map((c) => (
-                  <Reorder.Item
-                    key={c.name}
-                    value={c.name}
-                    className="flex items-center gap-2 bg-panel px-3 py-2"
-                  >
-                    <GripVertical className="size-4 shrink-0 cursor-grab text-muted-foreground active:cursor-grabbing" />
-                    <Badge variant="outline" className="metric-mono w-8 justify-center px-1">
-                      {c.loadingNumber}
+                  <li key={c.name} className="flex items-center gap-2 bg-panel px-3 py-2">
+                    <Badge
+                      variant="outline"
+                      className="metric-mono w-10 shrink-0 justify-center px-1"
+                    >
+                      {c.loadingNumber > 0 ? c.loadingNumber : "—"}
                     </Badge>
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">{c.name}</span>
-                    <LoadingNumberInput
-                      value={c.loadingNumber || 0}
-                      onCommit={(n) => onSetLoadingNumber(c.name, area, n)}
-                    />
+                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      Load #
+                      <LoadingNumberInput
+                        value={c.loadingNumber || 0}
+                        onCommit={(n) => onSetLoadingNumber(c.name, area, n)}
+                      />
+                    </label>
                     <select
                       value={area}
                       onChange={(e) => onSetArea(c.name, e.target.value)}
-                      className="h-8 max-w-[9rem] rounded-lg border border-input bg-panel-2 px-2 text-xs"
+                      className="h-8 max-w-[9rem] rounded-lg border border-input bg-panel-2 px-2 text-xs text-foreground"
                     >
                       <option value="">Unassign</option>
                       {areaOptions.map((a) => (
@@ -146,9 +139,9 @@ export function CustomerAreaBoard({
                     >
                       <Trash2 className="size-4" />
                     </Button>
-                  </Reorder.Item>
+                  </li>
                 ))}
-              </Reorder.Group>
+              </ul>
             )}
           </AreaSection>
         );
@@ -209,12 +202,14 @@ function LoadingNumberInput({
   }, [value]);
 
   function commit() {
-    const n = Number(draft);
-    if (!n || n < 1) {
-      setDraft(value > 0 ? String(value) : "");
+    const n = Math.floor(Number(draft));
+    if (!Number.isFinite(n) || n < 1) {
+      if (value > 0) onCommit(0);
+      setDraft("");
       return;
     }
     if (n !== value) onCommit(n);
+    else setDraft(String(value));
   }
 
   return (
@@ -223,13 +218,15 @@ function LoadingNumberInput({
       min={1}
       value={draft}
       placeholder="#"
-      className="h-8 w-16 metric-mono"
+      className="h-8 w-16 metric-mono text-foreground"
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
       }}
-      onPointerDown={(e) => e.stopPropagation()}
     />
   );
 }
