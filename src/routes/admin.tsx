@@ -26,8 +26,15 @@ import { EmptyState } from "@/components/planner/ui/EmptyState";
 import { CustomerAreaBoard } from "@/components/planner/CustomerAreaBoard";
 import { LoadingNumbersBoard } from "@/components/planner/LoadingNumbersBoard";
 import { TripsAdminPanel } from "@/components/planner/TripsAdminPanel";
+import { TownFilterBar } from "@/components/planner/TownFilterBar";
+import {
+  AdminSearchInput,
+  customerMatchesQuery,
+  matchesQuery,
+} from "@/components/planner/AdminSearchInput";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { customersInArea } from "@/lib/loadingOrder";
+import type { CustomerMemory } from "@/lib/types";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -145,6 +152,12 @@ function AdminConsole({
   const [importing, setImporting] = useState(false);
   const [importingAreas, setImportingAreas] = useState(false);
   const [newArea, setNewArea] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [townSearch, setTownSearch] = useState("");
+  const [loadingSearch, setLoadingSearch] = useState("");
+  const [truckSearch, setTruckSearch] = useState("");
+  const [auditSearch, setAuditSearch] = useState("");
+  const [planSearch, setPlanSearch] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const areaFileRef = useRef<HTMLInputElement>(null);
 
@@ -175,6 +188,14 @@ function AdminConsole({
     return map;
   }, [customers, areaOptions]);
 
+  const townCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const a of areaOptions) {
+      counts[a] = customersByArea[a]?.length ?? 0;
+    }
+    return counts;
+  }, [areaOptions, customersByArea]);
+
   const visibleAreas = useMemo(() => {
     if (areaFilter === "all") return areaOptions;
     if (areaFilter === "unassigned") return [];
@@ -183,6 +204,78 @@ function AdminConsole({
 
   const showUnassigned = areaFilter === "all" || areaFilter === "unassigned";
 
+  const filteredUnassigned = useMemo(
+    () => unassigned.filter((c) => customerMatchesQuery(c, customerSearch)),
+    [unassigned, customerSearch],
+  );
+
+  const filteredCustomersByArea = useMemo(() => {
+    const map: Record<string, CustomerMemory[]> = {};
+    for (const a of areaOptions) {
+      map[a] = (customersByArea[a] ?? []).filter((c) =>
+        customerMatchesQuery(c, customerSearch),
+      );
+    }
+    return map;
+  }, [areaOptions, customersByArea, customerSearch]);
+
+  const customerBoardAreas = useMemo(() => {
+    if (!customerSearch.trim()) return visibleAreas;
+    return visibleAreas.filter((a) => (filteredCustomersByArea[a]?.length ?? 0) > 0);
+  }, [visibleAreas, customerSearch, filteredCustomersByArea]);
+
+  const filteredTowns = useMemo(
+    () => areaOptions.filter((a) => matchesQuery(a, townSearch)),
+    [areaOptions, townSearch],
+  );
+
+  const loadingCustomersByArea = useMemo(() => {
+    const map: Record<string, CustomerMemory[]> = {};
+    for (const a of areaOptions) {
+      map[a] = (customersByArea[a] ?? []).filter((c) =>
+        customerMatchesQuery(c, loadingSearch),
+      );
+    }
+    return map;
+  }, [areaOptions, customersByArea, loadingSearch]);
+
+  const loadingBoardAreas = useMemo(() => {
+    const base =
+      areaFilter !== "all" && areaFilter !== "unassigned"
+        ? areaOptions.filter((a) => a === areaFilter)
+        : areaOptions.filter((a) => (customersByArea[a]?.length ?? 0) > 0);
+    if (!loadingSearch.trim()) return base;
+    return base.filter((a) => (loadingCustomersByArea[a]?.length ?? 0) > 0);
+  }, [areaFilter, areaOptions, customersByArea, loadingSearch, loadingCustomersByArea]);
+
+  const filteredTrucks = useMemo(
+    () => trucks.filter((t) => matchesQuery(t.name, truckSearch)),
+    [trucks, truckSearch],
+  );
+
+  const filteredAudit = useMemo(
+    () =>
+      audit.filter(
+        (a) =>
+          matchesQuery(a.type, auditSearch) ||
+          matchesQuery(a.message, auditSearch) ||
+          matchesQuery(new Date(a.ts).toLocaleString(), auditSearch),
+      ),
+    [audit, auditSearch],
+  );
+
+  const filteredPlans = useMemo(() => {
+    const list = Object.values(plans).sort((a, b) => (a.date < b.date ? 1 : -1));
+    const q = planSearch.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(
+      (p) =>
+        p.date.includes(q) ||
+        (p.locked && "locked".includes(q)) ||
+        String(p.invoices.length).includes(q),
+    );
+  }, [plans, planSearch]);
+
   const emptyMessage = useMemo(() => {
     if (Object.keys(customers).length === 0) {
       return {
@@ -190,6 +283,17 @@ function AdminConsole({
         description:
           "Import Excel with Customer Code and Customer Name columns, then assign towns. Set load numbers on the Load # tab.",
       };
+    }
+    if (customerSearch.trim()) {
+      const any =
+        (showUnassigned && filteredUnassigned.length > 0) ||
+        customerBoardAreas.some((a) => (filteredCustomersByArea[a]?.length ?? 0) > 0);
+      if (!any) {
+        return {
+          title: "No matching customers",
+          description: `Nothing matched “${customerSearch.trim()}”. Try another code or name.`,
+        };
+      }
     }
     if (areaFilter === "unassigned" && unassigned.length === 0) {
       return {
@@ -213,7 +317,18 @@ function AdminConsole({
       };
     }
     return null;
-  }, [customers, areaFilter, unassigned.length, customersByArea, areaOptions.length]);
+  }, [
+    customers,
+    areaFilter,
+    unassigned.length,
+    customersByArea,
+    areaOptions.length,
+    customerSearch,
+    showUnassigned,
+    filteredUnassigned.length,
+    customerBoardAreas,
+    filteredCustomersByArea,
+  ]);
 
   async function handleCustomerExcel(file: File) {
     setImporting(true);
@@ -360,41 +475,29 @@ function AdminConsole({
                   </p>
                 )}
 
-                <div className="mb-3 flex flex-wrap gap-1.5">
-                  <Button
-                    size="sm"
-                    variant={areaFilter === "all" ? "default" : "outline"}
-                    onClick={() => setAreaFilter("all")}
-                  >
-                    All
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={areaFilter === "unassigned" ? "default" : "outline"}
-                    onClick={() => setAreaFilter("unassigned")}
-                  >
-                    Unassigned ({unassigned.length})
-                  </Button>
-                  {areaOptions.map((a) => (
-                    <Button
-                      key={a}
-                      size="sm"
-                      variant={areaFilter === a ? "default" : "outline"}
-                      onClick={() => setAreaFilter(a)}
-                    >
-                      {a} ({customersByArea[a]?.length ?? 0})
-                    </Button>
-                  ))}
-                </div>
+                <TownFilterBar
+                  value={areaFilter}
+                  onChange={setAreaFilter}
+                  towns={areaOptions}
+                  counts={townCounts}
+                  unassignedCount={unassigned.length}
+                />
+
+                <AdminSearchInput
+                  value={customerSearch}
+                  onChange={setCustomerSearch}
+                  placeholder="Search customers by code or name…"
+                />
 
                 {emptyMessage ? (
                   <EmptyState title={emptyMessage.title} description={emptyMessage.description} />
                 ) : (
                   <CustomerAreaBoard
-                    areas={visibleAreas}
-                    unassigned={showUnassigned ? unassigned : []}
-                    customersByArea={customersByArea}
+                    areas={customerBoardAreas}
+                    unassigned={showUnassigned ? filteredUnassigned : []}
+                    customersByArea={filteredCustomersByArea}
                     areaOptions={areaOptions}
+                    hideEmptyUnassigned={!!customerSearch.trim()}
                     onSetArea={(name, area) => {
                       setCustomerArea(name, area);
                       toast.success(area ? `${name} → ${area}` : `${name} unassigned`);
@@ -486,10 +589,21 @@ function AdminConsole({
                 </Button>
               </form>
 
+              <AdminSearchInput
+                value={townSearch}
+                onChange={setTownSearch}
+                placeholder="Search towns…"
+              />
+
               {areaOptions.length === 0 ? (
                 <EmptyState
                   title="No towns yet"
                   description="Import an Excel sheet or add towns used on trips, then assign customers to them."
+                />
+              ) : filteredTowns.length === 0 ? (
+                <EmptyState
+                  title="No matching towns"
+                  description={`Nothing matched “${townSearch.trim()}”.`}
                 />
               ) : (
                 <div className="overflow-auto rounded-xl border border-border">
@@ -502,7 +616,7 @@ function AdminConsole({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {areaOptions.map((area) => {
+                      {filteredTowns.map((area) => {
                         const count = customersByArea[area]?.length ?? 0;
                         return (
                           <TableRow key={area}>
@@ -568,38 +682,32 @@ function AdminConsole({
                 />
               ) : (
                 <>
-                  <div className="mb-3 flex flex-wrap gap-1.5">
-                    <Button
-                      size="sm"
-                      variant={areaFilter === "all" || areaFilter === "unassigned" ? "default" : "outline"}
-                      onClick={() => setAreaFilter("all")}
-                    >
-                      All towns
-                    </Button>
-                    {areaOptions
-                      .filter((a) => (customersByArea[a]?.length ?? 0) > 0)
-                      .map((a) => (
-                        <Button
-                          key={a}
-                          size="sm"
-                          variant={areaFilter === a ? "default" : "outline"}
-                          onClick={() => setAreaFilter(a)}
-                        >
-                          {a} ({customersByArea[a]?.length ?? 0})
-                        </Button>
-                      ))}
-                  </div>
-                  <LoadingNumbersBoard
-                    areas={
-                      areaFilter !== "all" && areaFilter !== "unassigned"
-                        ? areaOptions.filter((a) => a === areaFilter)
-                        : areaOptions.filter((a) => (customersByArea[a]?.length ?? 0) > 0)
-                    }
-                    customersByArea={customersByArea}
-                    onSetLoadingNumber={(name, area, n) => {
-                      setCustomerLoadingNumber(name, area, n);
-                    }}
+                  <TownFilterBar
+                    value={areaFilter === "unassigned" ? "all" : areaFilter}
+                    onChange={setAreaFilter}
+                    towns={areaOptions.filter((a) => (customersByArea[a]?.length ?? 0) > 0)}
+                    counts={townCounts}
+                    showUnassigned={false}
                   />
+                  <AdminSearchInput
+                    value={loadingSearch}
+                    onChange={setLoadingSearch}
+                    placeholder="Search customers by code or name…"
+                  />
+                  {loadingSearch.trim() && loadingBoardAreas.length === 0 ? (
+                    <EmptyState
+                      title="No matching customers"
+                      description={`Nothing matched “${loadingSearch.trim()}”.`}
+                    />
+                  ) : (
+                    <LoadingNumbersBoard
+                      areas={loadingBoardAreas}
+                      customersByArea={loadingCustomersByArea}
+                      onSetLoadingNumber={(name, area, n) => {
+                        setCustomerLoadingNumber(name, area, n);
+                      }}
+                    />
+                  )}
                 </>
               )}
             </div>
@@ -607,7 +715,7 @@ function AdminConsole({
 
           <TabsContent value="trucks">
             <div className="panel p-4">
-              <div className="mb-3 flex items-center justify-between">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm text-muted-foreground">{trucks.length} trucks</p>
                 <Button
                   size="sm"
@@ -620,108 +728,153 @@ function AdminConsole({
                   Add Truck
                 </Button>
               </div>
-              <div className="overflow-auto rounded-xl border border-border">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead>Active</TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Max Weight</TableHead>
-                      <TableHead className="w-20" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {trucks.map((t) => (
-                      <TableRow key={t.id}>
-                        <TableCell>
-                          <Checkbox
-                            checked={t.active}
-                            onCheckedChange={(v) => updateTruck(t.id, { active: !!v })}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            value={t.name}
-                            onChange={(e) => updateTruck(t.id, { name: e.target.value })}
-                            className="h-8"
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Input
-                            type="number"
-                            value={t.maxWeight}
-                            onChange={(e) =>
-                              updateTruck(t.id, { maxWeight: Number(e.target.value) })
-                            }
-                            className="h-8 w-28 metric-mono"
-                          />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-destructive"
-                            onClick={() => {
-                              if (confirm(`Delete ${t.name}?`)) {
-                                deleteTruck(t.id);
-                                toast.success("Truck deleted");
-                              }
-                            }}
-                          >
-                            Delete
-                          </Button>
-                        </TableCell>
+              <AdminSearchInput
+                value={truckSearch}
+                onChange={setTruckSearch}
+                placeholder="Search trucks by name…"
+              />
+              {filteredTrucks.length === 0 ? (
+                <EmptyState
+                  title={trucks.length === 0 ? "No trucks yet" : "No matching trucks"}
+                  description={
+                    trucks.length === 0
+                      ? "Add a truck to get started."
+                      : `Nothing matched “${truckSearch.trim()}”.`
+                  }
+                />
+              ) : (
+                <div className="overflow-auto rounded-xl border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>Active</TableHead>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Max Weight</TableHead>
+                        <TableHead className="w-20" />
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredTrucks.map((t) => (
+                        <TableRow key={t.id}>
+                          <TableCell>
+                            <Checkbox
+                              checked={t.active}
+                              onCheckedChange={(v) => updateTruck(t.id, { active: !!v })}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              value={t.name}
+                              onChange={(e) => updateTruck(t.id, { name: e.target.value })}
+                              className="h-8"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type="number"
+                              value={t.maxWeight}
+                              onChange={(e) =>
+                                updateTruck(t.id, { maxWeight: Number(e.target.value) })
+                              }
+                              className="h-8 w-28 metric-mono"
+                            />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive"
+                              onClick={() => {
+                                if (confirm(`Delete ${t.name}?`)) {
+                                  deleteTruck(t.id);
+                                  toast.success("Truck deleted");
+                                }
+                              }}
+                            >
+                              Delete
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </div>
           </TabsContent>
 
           <TabsContent value="audit">
             <div className="panel p-4">
-              <div className="max-h-[70vh] overflow-auto rounded-xl border border-border">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead>Time</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Message</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {audit.map((a) => (
-                      <TableRow key={a.id}>
-                        <TableCell className="metric-mono text-xs">
-                          {new Date(a.ts).toLocaleString()}
-                        </TableCell>
-                        <TableCell className="metric-mono text-xs">{a.type}</TableCell>
-                        <TableCell>{a.message}</TableCell>
+              <AdminSearchInput
+                value={auditSearch}
+                onChange={setAuditSearch}
+                placeholder="Search audit by type or message…"
+              />
+              {filteredAudit.length === 0 ? (
+                <EmptyState
+                  title={audit.length === 0 ? "No audit entries" : "No matching entries"}
+                  description={
+                    audit.length === 0
+                      ? "Actions will appear here as you use the planner."
+                      : `Nothing matched “${auditSearch.trim()}”.`
+                  }
+                />
+              ) : (
+                <div className="max-h-[70vh] overflow-auto rounded-xl border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>Time</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Message</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredAudit.map((a) => (
+                        <TableRow key={a.id}>
+                          <TableCell className="metric-mono text-xs">
+                            {new Date(a.ts).toLocaleString()}
+                          </TableCell>
+                          <TableCell className="metric-mono text-xs">{a.type}</TableCell>
+                          <TableCell>{a.message}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </div>
           </TabsContent>
 
           <TabsContent value="plans">
             <div className="panel p-4">
-              <div className="overflow-auto rounded-xl border border-border">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead>Date</TableHead>
-                      <TableHead>Invoices</TableHead>
-                      <TableHead>Locked</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {Object.values(plans)
-                      .sort((a, b) => (a.date < b.date ? 1 : -1))
-                      .map((p) => (
+              <AdminSearchInput
+                value={planSearch}
+                onChange={setPlanSearch}
+                placeholder="Search plans by date…"
+              />
+              {filteredPlans.length === 0 ? (
+                <EmptyState
+                  title={Object.keys(plans).length === 0 ? "No plans yet" : "No matching plans"}
+                  description={
+                    Object.keys(plans).length === 0
+                      ? "Daily plans will show up here once created."
+                      : `Nothing matched “${planSearch.trim()}”.`
+                  }
+                />
+              ) : (
+                <div className="overflow-auto rounded-xl border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>Date</TableHead>
+                        <TableHead>Invoices</TableHead>
+                        <TableHead>Locked</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredPlans.map((p) => (
                         <TableRow key={p.date}>
                           <TableCell className="metric-mono">{p.date}</TableCell>
                           <TableCell>{p.invoices.length}</TableCell>
@@ -762,9 +915,10 @@ function AdminConsole({
                           </TableCell>
                         </TableRow>
                       ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </div>
           </TabsContent>
 

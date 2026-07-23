@@ -71,6 +71,10 @@ type State = {
   addTrip: (name: string, towns?: string[]) => string;
   updateTrip: (id: string, patch: Partial<Pick<Trip, "name" | "towns">>) => void;
   deleteTrip: (id: string) => void;
+  /** Import trip names (towns optional). Merges towns onto existing names. */
+  importTrips: (
+    rows: { name: string; towns?: string[] }[],
+  ) => { added: number; skipped: number; updated: number };
 
   // areas / towns catalog
   addArea: (name: string) => void;
@@ -288,6 +292,65 @@ export const useStore = create<State>((set, get) => {
         };
       });
       log("trip.delete", `Deleted trip ${id}`);
+    },
+    importTrips: (rows) => {
+      let added = 0;
+      let skipped = 0;
+      let updated = 0;
+      mutate((s) => {
+        const trips = [...s.trips];
+        const byName = new Map(trips.map((t) => [t.name.toLowerCase(), t]));
+        let history = [...s.areaHistory];
+        const historySet = new Set(history.map((a) => a.toLowerCase()));
+
+        for (const raw of rows) {
+          const name = raw.name.trim();
+          if (!name) continue;
+          const towns = [...new Set((raw.towns ?? []).map((t) => t.trim()).filter(Boolean))];
+          for (const town of towns) {
+            if (!historySet.has(town.toLowerCase())) {
+              historySet.add(town.toLowerCase());
+              history.push(town);
+            }
+          }
+
+          const existing = byName.get(name.toLowerCase());
+          if (!existing) {
+            const trip = normalizeTrip({ id: uid(), name, towns });
+            trips.push(trip);
+            byName.set(name.toLowerCase(), trip);
+            added++;
+            continue;
+          }
+
+          if (towns.length === 0) {
+            skipped++;
+            continue;
+          }
+          const seen = new Set(existing.towns.map((t) => t.toLowerCase()));
+          const merged = [...existing.towns];
+          let changed = false;
+          for (const town of towns) {
+            if (seen.has(town.toLowerCase())) continue;
+            seen.add(town.toLowerCase());
+            merged.push(town);
+            changed = true;
+          }
+          if (!changed) {
+            skipped++;
+            continue;
+          }
+          const next = normalizeTrip({ ...existing, towns: merged });
+          const idx = trips.findIndex((t) => t.id === existing.id);
+          if (idx >= 0) trips[idx] = next;
+          byName.set(name.toLowerCase(), next);
+          updated++;
+        }
+
+        return { trips, areaHistory: history };
+      });
+      log("trip.import", `Imported trips (+${added}, ~${updated}, =${skipped})`);
+      return { added, skipped, updated };
     },
 
     addArea: (nameRaw) => {

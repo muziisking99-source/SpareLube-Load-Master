@@ -279,3 +279,86 @@ export async function parseAreaExcelFile(file: File): Promise<string[]> {
   const buffer = await file.arrayBuffer();
   return parseAreaExcel(buffer);
 }
+
+const TRIP_HEADERS = ["trip", "trip name", "name", "run", "route name"];
+const TRIP_TOWN_HEADERS = ["town", "towns", "area", "areas"];
+
+export type ParsedTrip = {
+  name: string;
+  towns: string[];
+};
+
+/**
+ * Parse trips from Excel.
+ * - Trip column (or first column): trip names
+ * - Optional Town column: one town per row (order preserved), or comma-separated list
+ */
+export function parseTripExcel(buffer: ArrayBuffer): ParsedTrip[] {
+  const workbook = XLSX.read(buffer, { type: "array" });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) return [];
+
+  const sheet = workbook.Sheets[sheetName];
+  const matrix = XLSX.utils.sheet_to_json<(string | number | null)[]>(sheet, {
+    header: 1,
+    defval: "",
+    blankrows: false,
+  });
+  if (matrix.length === 0) return [];
+
+  const first = (matrix[0] ?? []).map(normalizeHeader);
+  let tripIdx = findColumnIndex(first, TRIP_HEADERS);
+  let townIdx = findColumnIndex(first, TRIP_TOWN_HEADERS);
+  let startRow = 0;
+
+  if (tripIdx >= 0) {
+    startRow = 1;
+    // Avoid matching the same column as both trip and town
+    if (townIdx === tripIdx) townIdx = -1;
+  } else {
+    tripIdx = 0;
+    startRow = 0;
+    if (matrix[0] && TRIP_HEADERS.includes(normalizeHeader(matrix[0][0]))) {
+      startRow = 1;
+    }
+  }
+
+  const order: string[] = [];
+  const byKey = new Map<string, { name: string; towns: string[]; seenTown: Set<string> }>();
+
+  for (let r = startRow; r < matrix.length; r++) {
+    const row = matrix[r] ?? [];
+    const name = cellToString(row[tripIdx]);
+    if (!name) continue;
+    if (TRIP_HEADERS.includes(normalizeHeader(name))) continue;
+
+    const key = name.toLowerCase();
+    let entry = byKey.get(key);
+    if (!entry) {
+      entry = { name, towns: [], seenTown: new Set() };
+      byKey.set(key, entry);
+      order.push(key);
+    }
+
+    if (townIdx < 0) continue;
+    const rawTown = cellToString(row[townIdx]);
+    if (!rawTown) continue;
+    const parts = rawTown.split(/[,;|/]+/).map((t) => t.trim()).filter(Boolean);
+    for (const town of parts) {
+      const tKey = town.toLowerCase();
+      if (entry.seenTown.has(tKey)) continue;
+      entry.seenTown.add(tKey);
+      entry.towns.push(town);
+    }
+  }
+
+  return order.map((key) => {
+    const e = byKey.get(key)!;
+    return { name: e.name, towns: e.towns };
+  });
+}
+
+export async function parseTripExcelFile(file: File): Promise<ParsedTrip[]> {
+  const buffer = await file.arrayBuffer();
+  return parseTripExcel(buffer);
+}

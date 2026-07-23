@@ -27,6 +27,7 @@ export function CustomerAreaBoard({
   unassigned,
   customersByArea,
   areaOptions,
+  hideEmptyUnassigned = false,
   onSetArea,
   onDelete,
 }: {
@@ -34,6 +35,7 @@ export function CustomerAreaBoard({
   unassigned: CustomerMemory[];
   customersByArea: Record<string, CustomerMemory[]>;
   areaOptions: string[];
+  hideEmptyUnassigned?: boolean;
   onSetArea: (key: string, area: string) => void;
   onDelete: (key: string) => void;
 }) {
@@ -59,6 +61,7 @@ export function CustomerAreaBoard({
 
   return (
     <div className="space-y-3">
+      {!(hideEmptyUnassigned && unassigned.length === 0) && (
       <AreaSection
         title="Unassigned"
         count={unassigned.length}
@@ -102,6 +105,7 @@ export function CustomerAreaBoard({
           </ul>
         )}
       </AreaSection>
+      )}
 
       {areas.map((area) => {
         const list = customersByArea[area] ?? [];

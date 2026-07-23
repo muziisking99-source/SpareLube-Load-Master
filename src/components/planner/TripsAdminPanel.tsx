@@ -1,26 +1,43 @@
-import { useState } from "react";
-import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, Download, FileSpreadsheet, Plus, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
+import { parseTripExcelFile } from "@/lib/parse";
+import { downloadTripTemplate } from "@/lib/excelTemplates";
 import type { Trip } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/planner/ui/EmptyState";
 import { FormField } from "@/components/planner/ui/FormField";
+import { AdminSearchInput, matchesQuery } from "@/components/planner/AdminSearchInput";
 
 export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
   const trips = useStore((s) => s.trips);
   const addTrip = useStore((s) => s.addTrip);
   const updateTrip = useStore((s) => s.updateTrip);
   const deleteTrip = useStore((s) => s.deleteTrip);
+  const importTrips = useStore((s) => s.importTrips);
 
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [draftTowns, setDraftTowns] = useState<string[]>([]);
   const [newName, setNewName] = useState("");
   const [newTowns, setNewTowns] = useState<string[]>([]);
+
+  const filteredTrips = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return trips;
+    return trips.filter(
+      (t) =>
+        matchesQuery(t.name, q) ||
+        t.towns.some((town) => matchesQuery(town, q)),
+    );
+  }, [trips, search]);
 
   function startEdit(trip: Trip) {
     setEditingId(trip.id);
@@ -59,17 +76,77 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
     setList([...list, town]);
   }
 
+  async function handleExcel(file: File) {
+    setImporting(true);
+    try {
+      const rows = await parseTripExcelFile(file);
+      if (rows.length === 0) {
+        toast.error("No trips found in the file");
+        return;
+      }
+      const { added, skipped, updated } = importTrips(rows);
+      toast.success(
+        `Trips: ${added} added` +
+          (updated ? `, ${updated} updated` : "") +
+          (skipped ? `, ${skipped} skipped` : ""),
+      );
+    } catch {
+      toast.error("Could not read that Excel file");
+    } finally {
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
   return (
     <div className="panel p-4">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="font-semibold tracking-tight">Trips</h3>
           <p className="mt-1 max-w-[65ch] text-sm text-muted-foreground">
-            Named multi-town runs. Assign one trip per truck on Daily Setup. Town order is the
-            route sequence.
+            Import trip names from Excel, then add towns with Edit. Or create a trip below.
+            Assign one trip per truck on Daily Setup.
           </p>
         </div>
-        <Badge variant="outline">{trips.length} trips</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleExcel(f);
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              downloadTripTemplate();
+              toast.success("Trip template downloaded");
+            }}
+          >
+            <Download className="size-4" />
+            Download template
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={importing}
+            onClick={() => fileRef.current?.click()}
+          >
+            {importing ? (
+              <Upload className="size-4 animate-pulse" />
+            ) : (
+              <FileSpreadsheet className="size-4" />
+            )}
+            Import Excel
+          </Button>
+          <Badge variant="outline">{trips.length} trips</Badge>
+        </div>
       </div>
 
       <form
@@ -81,14 +158,14 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
             toast.error("Enter a trip name");
             return;
           }
-          if (newTowns.length === 0) {
-            toast.error("Add at least one town");
-            return;
-          }
           addTrip(name, newTowns);
           setNewName("");
           setNewTowns([]);
-          toast.success(`Trip "${name}" created`);
+          toast.success(
+            newTowns.length
+              ? `Trip "${name}" created`
+              : `Trip "${name}" created — add towns with Edit`,
+          );
         }}
       >
         <FormField label="New trip name">
@@ -115,11 +192,23 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
       {trips.length === 0 ? (
         <EmptyState
           title="No trips yet"
-          description="Create a trip with ordered towns, then assign it to trucks on Daily Setup."
+          description="Download the template, import trip names, then Edit each trip to add towns."
         />
       ) : (
+        <>
+          <AdminSearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search trips by name or town…"
+          />
+          {filteredTrips.length === 0 ? (
+            <EmptyState
+              title="No matching trips"
+              description={`Nothing matched “${search.trim()}”.`}
+            />
+          ) : (
         <ul className="space-y-3">
-          {trips.map((trip) => {
+          {filteredTrips.map((trip) => {
             const editing = editingId === trip.id;
             return (
               <li
@@ -157,7 +246,7 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
                       <div className="font-medium tracking-tight">{trip.name}</div>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {trip.towns.length === 0 ? (
-                          <span className="text-xs text-muted-foreground">No towns</span>
+                          <span className="text-xs text-warn">No towns yet — click Edit to add</span>
                         ) : (
                           trip.towns.map((town, i) => {
                             const c = areaColor(town);
@@ -202,6 +291,8 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
             );
           })}
         </ul>
+          )}
+        </>
       )}
     </div>
   );
@@ -225,7 +316,7 @@ function TownPicker({
     <div className="space-y-2">
       <div className="text-xs font-medium text-muted-foreground">Towns (in order)</div>
       {towns.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No towns selected yet.</p>
+        <p className="text-sm text-muted-foreground">Optional — add towns now or after import.</p>
       ) : (
         <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
           {towns.map((town, i) => (

@@ -33,12 +33,25 @@ export function downloadCustomerTemplate() {
   ]);
 }
 
-/** Area import: Area column */
+/** Area import: Area / Town column */
 export function downloadAreaTemplate() {
   downloadWorkbook("area-import-template.xlsx", "Areas", [
-    ["Area"],
+    ["Town"],
     ["Brits"],
     ["Pretoria"],
     ["Johannesburg"],
+  ]);
+}
+
+/**
+ * Trip import: Trip name required; Town optional (add later in Admin).
+ * Use one row per trip, or Trip + Town rows for ordered towns.
+ */
+export function downloadTripTemplate() {
+  downloadWorkbook("trip-import-template.xlsx", "Trips", [
+    ["Trip", "Town"],
+    ["North run", ""],
+    ["South run", ""],
+    ["West loop", "Brits"],
   ]);
 }
