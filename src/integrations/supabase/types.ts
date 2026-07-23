@@ -14,7 +14,153 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      app_settings: {
+        Row: {
+          active_date: string
+          admin_pin: string
+          id: number
+          updated_at: string
+        }
+        Insert: {
+          active_date: string
+          admin_pin?: string
+          id: number
+          updated_at?: string
+        }
+        Update: {
+          active_date?: string
+          admin_pin?: string
+          id?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      areas: {
+        Row: {
+          created_at: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          name?: string
+        }
+        Relationships: []
+      }
+      audit_entries: {
+        Row: {
+          id: string
+          message: string
+          payload: Json | null
+          ts: string
+          type: string
+        }
+        Insert: {
+          id: string
+          message: string
+          payload?: Json | null
+          ts?: string
+          type: string
+        }
+        Update: {
+          id?: string
+          message?: string
+          payload?: Json | null
+          ts?: string
+          type?: string
+        }
+        Relationships: []
+      }
+      customers: {
+        Row: {
+          code: string
+          default_area: string
+          first_seen: string
+          id: string
+          loading_number: number
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          code?: string
+          default_area?: string
+          first_seen?: string
+          id: string
+          loading_number?: number
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          code?: string
+          default_area?: string
+          first_seen?: string
+          id?: string
+          loading_number?: number
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      plans: {
+        Row: {
+          areas: Json
+          created_at: string
+          date: string
+          invoices: Json
+          locked: boolean
+          step: string
+          truck_day: Json
+          updated_at: string
+        }
+        Insert: {
+          areas?: Json
+          created_at?: string
+          date: string
+          invoices?: Json
+          locked?: boolean
+          step?: string
+          truck_day?: Json
+          updated_at?: string
+        }
+        Update: {
+          areas?: Json
+          created_at?: string
+          date?: string
+          invoices?: Json
+          locked?: boolean
+          step?: string
+          truck_day?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      trucks: {
+        Row: {
+          active: boolean
+          id: string
+          max_weight: number
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          id: string
+          max_weight?: number
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          id?: string
+          max_weight?: number
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
