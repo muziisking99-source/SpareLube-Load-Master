@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  Download,
   FileSpreadsheet,
   Trash2,
   TriangleAlert,
@@ -11,6 +12,9 @@ import {
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { parseExcelFile } from "@/lib/parse";
+import { downloadInvoiceTemplate } from "@/lib/excelTemplates";
+import { customerKey, findCustomer } from "@/lib/customers";
+import { loadingNumberFor } from "@/lib/loadingOrder";
 import { areaColor } from "@/lib/colors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -88,13 +92,16 @@ export function ImportScreen() {
       const existingDocs = new Set(systemInvoices.map((i) => i.doc));
       const fresh = rows.filter((r) => !existingDocs.has(r.doc));
       addInvoices(
-        fresh.map((r) => ({
-          doc: r.doc,
-          customer: r.customer,
-          weight: 0,
-          area: customers[r.customer]?.defaultArea ?? "",
-          source: "SYSTEM",
-        })),
+        fresh.map((r) => {
+          const known = findCustomer(customers, r.customer);
+          return {
+            doc: r.doc,
+            customer: r.customer,
+            weight: 0,
+            area: known?.defaultArea ?? "",
+            source: "SYSTEM" as const,
+          };
+        }),
       );
       const loads: Record<string, number> = { ...pendingLoads };
       for (const r of fresh) {
@@ -104,8 +111,10 @@ export function ImportScreen() {
       // Apply immediately when customer already has an area
       for (const r of fresh) {
         if (!r.loadingNumber) continue;
-        const area = customers[r.customer]?.defaultArea;
-        if (area) setCustomerLoadingNumber(r.customer, area, r.loadingNumber);
+        const known = findCustomer(customers, r.customer);
+        if (known?.defaultArea) {
+          setCustomerLoadingNumber(customerKey(known), known.defaultArea, r.loadingNumber);
+        }
       }
       const withLoad = fresh.filter((r) => r.loadingNumber).length;
       const msg = `Parsed ${rows.length} row${rows.length === 1 ? "" : "s"} from ${file.name}. Added ${fresh.length}${withLoad ? ` (${withLoad} with load #)` : ""}.`;
@@ -127,7 +136,10 @@ export function ImportScreen() {
     const s = useStore.getState();
     for (const inv of s.plans[s.currentDate]?.invoices ?? []) {
       const n = pendingLoads[inv.customer];
-      if (n && inv.area) setCustomerLoadingNumber(inv.customer, inv.area, n);
+      if (n && inv.area) {
+        const known = findCustomer(s.customers, inv.customer);
+        setCustomerLoadingNumber(known ? customerKey(known) : inv.customer, inv.area, n);
+      }
     }
     setPendingLoads({});
     toast.success(`Saved. ${known} known customers, ${learned} newly learned.`);
@@ -139,7 +151,21 @@ export function ImportScreen() {
       <section className="panel p-5">
         <ScreenHeader
           title="Excel Import"
-            description="Upload an .xlsx or .xls sheet with Doc and Customer columns. Optional Load # is stored as you enter it; truck sheets print lowest → highest."
+          description="Upload an .xlsx or .xls sheet with Doc and Customer columns. Optional Load # is stored as you enter it; truck sheets print lowest → highest."
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                downloadInvoiceTemplate();
+                toast.success("Invoice template downloaded");
+              }}
+            >
+              <Download className="size-4" />
+              Download template
+            </Button>
+          }
           className="mb-4"
         />
 
@@ -235,9 +261,8 @@ export function ImportScreen() {
                     inv={i}
                     areas={areas}
                     loadNumber={
-                      (i.area &&
-                        customers[i.customer]?.defaultArea === i.area &&
-                        customers[i.customer]?.loadingNumber) ||
+                      (i.area && loadingNumberFor(customers, i.customer, i.area)) ||
+                      pendingLoads[i.customer] ||
                       0
                     }
                     onChange={(patch) => updateInvoice(i.id, patch)}
@@ -272,7 +297,8 @@ export function ImportScreen() {
               </TableHeader>
               <TableBody>
                 {invoices.map((i, idx) => {
-                  const known = i.source === "SYSTEM" && !!customers[i.customer];
+                  const knownCust = findCustomer(customers, i.customer);
+                  const known = i.source === "SYSTEM" && !!knownCust;
                   const dup = (docCounts.get(i.doc) ?? 0) > 1;
                   return (
                     <InvoiceRow
@@ -283,9 +309,7 @@ export function ImportScreen() {
                       duplicate={dup}
                       index={idx}
                       loadNumber={
-                        (i.area &&
-                          customers[i.customer]?.defaultArea === i.area &&
-                          customers[i.customer]?.loadingNumber) ||
+                        (i.area && loadingNumberFor(customers, i.customer, i.area)) ||
                         pendingLoads[i.customer] ||
                         0
                       }
@@ -380,7 +404,7 @@ function AdhocRow({
   function commitCustomer() {
     const name = customerDraft.trim();
     if (name === inv.customer) return;
-    const known = customers[name];
+    const known = findCustomer(customers, name);
     onChange({
       customer: name,
       ...(known?.defaultArea && areas.includes(known.defaultArea)

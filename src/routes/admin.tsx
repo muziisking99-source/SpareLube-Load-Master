@@ -3,7 +3,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Download, FileSpreadsheet, Lock, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
-import { parseCustomerExcelFile } from "@/lib/parse";
+import { parseAreaExcelFile, parseCustomerExcelFile } from "@/lib/parse";
+import {
+  downloadAreaTemplate,
+  downloadCustomerTemplate,
+} from "@/lib/excelTemplates";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +24,7 @@ import {
 import { FormField } from "@/components/planner/ui/FormField";
 import { EmptyState } from "@/components/planner/ui/EmptyState";
 import { CustomerAreaBoard } from "@/components/planner/CustomerAreaBoard";
+import { LoadingNumbersBoard } from "@/components/planner/LoadingNumbersBoard";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { customersInArea } from "@/lib/loadingOrder";
 
@@ -131,12 +136,16 @@ function AdminConsole({
   const setCustomerArea = useStore((s) => s.setCustomerArea);
   const setCustomerLoadingNumber = useStore((s) => s.setCustomerLoadingNumber);
   const ensureArea = useStore((s) => s.ensureArea);
+  const importAreas = useStore((s) => s.importAreas);
+  const deleteAreaCatalog = useStore((s) => s.deleteAreaCatalog);
   const deleteCustomer = useStore((s) => s.deleteCustomer);
 
   const [areaFilter, setAreaFilter] = useState<string>("all");
   const [importing, setImporting] = useState(false);
+  const [importingAreas, setImportingAreas] = useState(false);
   const [newArea, setNewArea] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const areaFileRef = useRef<HTMLInputElement>(null);
 
   const areaOptions = useMemo(() => {
     const set = new Set<string>(areaHistory);
@@ -178,13 +187,13 @@ function AdminConsole({
       return {
         title: "No customers yet",
         description:
-          "Import an Excel sheet with a Customer column, then assign areas and enter load numbers manually.",
+          "Import Excel with Customer Code and Customer Name columns, then assign areas. Set load numbers on the Load # tab.",
       };
     }
     if (areaFilter === "unassigned" && unassigned.length === 0) {
       return {
         title: "No unassigned customers",
-        description: "Every customer has an area. Switch to All or pick an area to edit load numbers.",
+        description: "Every customer has an area. Switch to All or pick an area.",
       };
     }
     if (areaFilter !== "all" && areaFilter !== "unassigned") {
@@ -196,24 +205,56 @@ function AdminConsole({
         };
       }
     }
+    if (areaOptions.length === 0 && Object.keys(customers).length > 0) {
+      return {
+        title: "Add areas first",
+        description: "Create areas in the Areas tab, then come back to assign customers.",
+      };
+    }
     return null;
-  }, [customers, areaFilter, unassigned.length, customersByArea]);
+  }, [customers, areaFilter, unassigned.length, customersByArea, areaOptions.length]);
 
   async function handleCustomerExcel(file: File) {
     setImporting(true);
     try {
-      const names = await parseCustomerExcelFile(file);
-      if (names.length === 0) {
-        toast.error("No customer names found in sheet");
+      const rows = await parseCustomerExcelFile(file);
+      if (rows.length === 0) {
+        toast.error("No customers found. Need Customer Code and Customer Name columns.");
         return;
       }
-      const { added, skipped } = importCustomers(names);
-      toast.success(`Imported ${added} customers (${skipped} already existed)`);
+      const missingCode = rows.filter((r) => !r.code).length;
+      const { added, skipped, updated } = importCustomers(rows);
+      const parts = [`Added ${added}`];
+      if (updated) parts.push(`${updated} updated`);
+      if (skipped) parts.push(`${skipped} unchanged`);
+      toast.success(
+        `Imported customers: ${parts.join(", ")}${
+          missingCode ? ` (${missingCode} without code)` : ""
+        }`,
+      );
     } catch {
       toast.error("Could not read Excel file");
     } finally {
       setImporting(false);
       if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function handleAreaExcel(file: File) {
+    setImportingAreas(true);
+    try {
+      const names = await parseAreaExcelFile(file);
+      if (names.length === 0) {
+        toast.error("No area names found in sheet");
+        return;
+      }
+      const { added, skipped } = importAreas(names);
+      toast.success(`Imported ${added} areas (${skipped} already existed)`);
+    } catch {
+      toast.error("Could not read Excel file");
+    } finally {
+      setImportingAreas(false);
+      if (areaFileRef.current) areaFileRef.current.value = "";
     }
   }
 
@@ -253,6 +294,8 @@ function AdminConsole({
         <Tabs defaultValue="customers" className="w-full">
           <TabsList className="mb-4 h-auto w-full flex-wrap justify-start gap-1 bg-secondary p-1">
             <TabsTrigger value="customers">Customers</TabsTrigger>
+            <TabsTrigger value="areas">Areas</TabsTrigger>
+            <TabsTrigger value="loading">Load #</TabsTrigger>
             <TabsTrigger value="trucks">Trucks</TabsTrigger>
             <TabsTrigger value="audit">Audit</TabsTrigger>
             <TabsTrigger value="plans">Plans</TabsTrigger>
@@ -266,8 +309,8 @@ function AdminConsole({
                   <div>
                     <h3 className="font-semibold tracking-tight">Customers</h3>
                     <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
-                      Import names, assign areas, then type each customer&apos;s load # yourself.
-                      Truck sheets print invoices from lowest load # to highest.
+                      Import Customer Code + Customer Name from Excel, then assign each to an area.
+                      Set load numbers on the Load # tab.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -281,6 +324,17 @@ function AdminConsole({
                         if (f) void handleCustomerExcel(f);
                       }}
                     />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        downloadCustomerTemplate();
+                        toast.success("Customer template downloaded");
+                      }}
+                    >
+                      <Download className="size-4" />
+                      Download template
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
@@ -298,28 +352,11 @@ function AdminConsole({
                   </div>
                 </div>
 
-                <form
-                  className="mb-4 flex flex-wrap gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const name = newArea.trim();
-                    if (!name) return;
-                    ensureArea(name);
-                    setNewArea("");
-                    setAreaFilter(name);
-                    toast.success(`Area "${name}" ready`);
-                  }}
-                >
-                  <Input
-                    value={newArea}
-                    onChange={(e) => setNewArea(e.target.value)}
-                    placeholder="New area name (e.g. Brits)"
-                    className="max-w-xs"
-                  />
-                  <Button type="submit" variant="secondary" size="sm">
-                    Add area
-                  </Button>
-                </form>
+                {areaOptions.length === 0 && (
+                  <p className="mb-3 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
+                    No areas yet — add them in the Areas tab before assigning customers.
+                  </p>
+                )}
 
                 <div className="mb-3 flex flex-wrap gap-1.5">
                   <Button
@@ -360,9 +397,6 @@ function AdminConsole({
                       setCustomerArea(name, area);
                       toast.success(area ? `${name} → ${area}` : `${name} unassigned`);
                     }}
-                    onSetLoadingNumber={(name, area, n) => {
-                      setCustomerLoadingNumber(name, area, n);
-                    }}
                     onDelete={(name) => {
                       if (confirm(`Delete ${name}?`)) {
                         deleteCustomer(name);
@@ -372,6 +406,196 @@ function AdminConsole({
                   />
                 )}
               </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="areas">
+            <div className="panel p-4">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold tracking-tight">Areas</h3>
+                  <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
+                    Add areas one by one or import an Excel sheet with an Area column (or a single
+                    column of names). Assign customers on the Customers tab.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={areaFileRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void handleAreaExcel(f);
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      downloadAreaTemplate();
+                      toast.success("Area template downloaded");
+                    }}
+                  >
+                    <Download className="size-4" />
+                    Download template
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={importingAreas}
+                    onClick={() => areaFileRef.current?.click()}
+                  >
+                    {importingAreas ? (
+                      <Upload className="size-4 animate-pulse" />
+                    ) : (
+                      <FileSpreadsheet className="size-4" />
+                    )}
+                    Import Excel
+                  </Button>
+                  <Badge variant="outline">{areaOptions.length} areas</Badge>
+                </div>
+              </div>
+
+              <form
+                className="mb-4 flex flex-wrap gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const name = newArea.trim();
+                  if (!name) return;
+                  if (areaOptions.some((a) => a.toLowerCase() === name.toLowerCase())) {
+                    toast.error("That area already exists");
+                    return;
+                  }
+                  ensureArea(name);
+                  setNewArea("");
+                  toast.success(`Area "${name}" added`);
+                }}
+              >
+                <Input
+                  value={newArea}
+                  onChange={(e) => setNewArea(e.target.value)}
+                  placeholder="New area name (e.g. Brits)"
+                  className="max-w-xs"
+                />
+                <Button type="submit" variant="secondary" size="sm">
+                  Add area
+                </Button>
+              </form>
+
+              {areaOptions.length === 0 ? (
+                <EmptyState
+                  title="No areas yet"
+                  description="Import an Excel sheet or add areas used on truck routes, then assign customers to them."
+                />
+              ) : (
+                <div className="overflow-auto rounded-xl border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead>Area</TableHead>
+                        <TableHead className="w-32">Customers</TableHead>
+                        <TableHead className="w-28" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {areaOptions.map((area) => {
+                        const count = customersByArea[area]?.length ?? 0;
+                        return (
+                          <TableRow key={area}>
+                            <TableCell className="font-medium">{area}</TableCell>
+                            <TableCell className="metric-mono">{count}</TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-destructive"
+                                onClick={() => {
+                                  const msg =
+                                    count > 0
+                                      ? `Delete "${area}"? ${count} customer(s) will be unassigned.`
+                                      : `Delete area "${area}"?`;
+                                  if (!confirm(msg)) return;
+                                  deleteAreaCatalog(area);
+                                  if (areaFilter === area) setAreaFilter("all");
+                                  toast.success(`Removed ${area}`);
+                                }}
+                              >
+                                Delete
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="loading">
+            <div className="panel p-4">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold tracking-tight">Load numbers</h3>
+                  <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
+                    Enter each customer&apos;s load # for their area. Truck sheets print invoices
+                    from lowest number to highest.
+                  </p>
+                </div>
+                <Badge variant="outline">
+                  {Object.values(customers).filter((c) => c.loadingNumber > 0).length} numbered
+                </Badge>
+              </div>
+
+              {areaOptions.length === 0 ? (
+                <EmptyState
+                  title="No areas yet"
+                  description="Add areas and assign customers first, then set load numbers here."
+                />
+              ) : Object.values(customers).every((c) => !c.defaultArea) ? (
+                <EmptyState
+                  title="No customers assigned"
+                  description="Assign customers to areas on the Customers tab, then return here to set load numbers."
+                />
+              ) : (
+                <>
+                  <div className="mb-3 flex flex-wrap gap-1.5">
+                    <Button
+                      size="sm"
+                      variant={areaFilter === "all" || areaFilter === "unassigned" ? "default" : "outline"}
+                      onClick={() => setAreaFilter("all")}
+                    >
+                      All areas
+                    </Button>
+                    {areaOptions
+                      .filter((a) => (customersByArea[a]?.length ?? 0) > 0)
+                      .map((a) => (
+                        <Button
+                          key={a}
+                          size="sm"
+                          variant={areaFilter === a ? "default" : "outline"}
+                          onClick={() => setAreaFilter(a)}
+                        >
+                          {a} ({customersByArea[a]?.length ?? 0})
+                        </Button>
+                      ))}
+                  </div>
+                  <LoadingNumbersBoard
+                    areas={
+                      areaFilter !== "all" && areaFilter !== "unassigned"
+                        ? areaOptions.filter((a) => a === areaFilter)
+                        : areaOptions.filter((a) => (customersByArea[a]?.length ?? 0) > 0)
+                    }
+                    customersByArea={customersByArea}
+                    onSetLoadingNumber={(name, area, n) => {
+                      setCustomerLoadingNumber(name, area, n);
+                    }}
+                  />
+                </>
+              )}
             </div>
           </TabsContent>
 

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { AnimatedNumber } from "./ui/AnimatedNumber";
+import { findCustomer } from "@/lib/customers";
 
 export function Assistant() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
@@ -24,7 +25,7 @@ export function Assistant() {
   const util = cap ? (allocated.reduce((s, i) => s + i.weight, 0) / cap) * 100 : 0;
   const remaining = cap - allocated.reduce((s, i) => s + i.weight, 0);
 
-  const known = plan.invoices.filter((i) => customers[i.customer]).length;
+  const known = plan.invoices.filter((i) => !!findCustomer(customers, i.customer)).length;
   const newly = plan.invoices.length - known;
 
   const docCounts = new Map<string, number>();

@@ -1,4 +1,5 @@
 import type { CustomerMemory } from "./types";
+import { findCustomer } from "./customers";
 
 /** Customers in an area, sorted by load # ascending (unset last). */
 export function customersInArea(
@@ -92,7 +93,7 @@ export function loadingNumberFor(
   customerName: string,
   area: string,
 ): number {
-  const c = customers[customerName];
+  const c = findCustomer(customers, customerName);
   if (!c || !area || c.defaultArea !== area) return 0;
   return c.loadingNumber || 0;
 }
@@ -104,14 +105,14 @@ export function loadingNumberFor(
 export function reorderCustomersInArea(
   customers: Record<string, CustomerMemory>,
   area: string,
-  orderedNames: string[],
+  orderedKeys: string[],
 ): Record<string, CustomerMemory> {
   if (!area) return customers;
   const next = { ...customers };
-  orderedNames.forEach((name, i) => {
-    const cur = next[name];
+  orderedKeys.forEach((key, i) => {
+    const cur = next[key];
     if (!cur) return;
-    next[name] = {
+    next[key] = {
       ...cur,
       defaultArea: area,
       loadingNumber: i + 1,

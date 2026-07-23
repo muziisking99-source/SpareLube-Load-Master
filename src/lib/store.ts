@@ -15,6 +15,7 @@ import {
   reorderCustomersInArea,
   setCustomerLoadingNumber as applyLoadingNumber,
 } from "./loadingOrder";
+import { customerKey, findCustomerKey } from "./customers";
 
 const K = {
   trucks: "lp:trucks",
@@ -72,6 +73,11 @@ type State = {
   // areas
   addArea: (name: string) => void;
   removeArea: (name: string) => void;
+  ensureArea: (name: string) => void;
+  /** Add many areas to the catalog. Returns counts. */
+  importAreas: (names: string[]) => { added: number; skipped: number };
+  /** Remove area from the global catalog and unassign customers in it */
+  deleteAreaCatalog: (name: string) => void;
 
   // plan
   setStep: (step: Plan["step"]) => void;
@@ -84,11 +90,12 @@ type State = {
   newPlan: (date?: string) => void;
 
   // customers
-  importCustomers: (names: string[]) => { added: number; skipped: number };
+  importCustomers: (
+    rows: { code: string; name: string }[],
+  ) => { added: number; skipped: number; updated: number };
   setCustomerArea: (name: string, area: string) => void;
   setCustomerLoadingNumber: (name: string, area: string, n: number) => void;
   reorderCustomersInArea: (area: string, orderedNames: string[]) => void;
-  ensureArea: (name: string) => void;
   deleteCustomer: (name: string) => void;
 
   // invoices
@@ -196,7 +203,8 @@ export const useStore = create<State>((set, get) => {
 
         const customers: Record<string, CustomerMemory> = {};
         for (const [k, v] of Object.entries(customersRaw ?? {})) {
-          customers[k] = normalizeCustomer({ ...v, name: v?.name ?? k });
+          const c = normalizeCustomer({ ...v, name: v?.name ?? k, code: v?.code ?? "" });
+          customers[customerKey(c) || k] = c;
         }
 
         const plans: Record<string, Plan> = {};
@@ -319,20 +327,40 @@ export const useStore = create<State>((set, get) => {
       log("plan.new", `Started new plan for ${d}`);
     },
 
-    importCustomers: (names) => {
+    importCustomers: (rows) => {
       const s = get();
       const customers = { ...s.customers };
       let added = 0;
       let skipped = 0;
+      let updated = 0;
       const now = new Date().toISOString();
-      for (const raw of names) {
-        const name = raw.trim();
+      for (const raw of rows) {
+        const code = raw.code.trim();
+        const name = raw.name.trim();
         if (!name) continue;
-        if (customers[name]) {
-          skipped++;
+        const key = code || name;
+        const existingKey = findCustomerKey(customers, code || name);
+        if (existingKey && customers[existingKey]) {
+          const prev = customers[existingKey];
+          // Same code (or legacy name key): refresh name/code if needed
+          if (prev.name === name && prev.code === code) {
+            skipped++;
+            continue;
+          }
+          const next = {
+            ...prev,
+            code: code || prev.code,
+            name,
+          };
+          if (existingKey !== customerKey(next)) {
+            delete customers[existingKey];
+          }
+          customers[customerKey(next)] = next;
+          updated++;
           continue;
         }
-        customers[name] = {
+        customers[key] = {
+          code,
           name,
           defaultArea: "",
           loadingNumber: 0,
@@ -341,27 +369,32 @@ export const useStore = create<State>((set, get) => {
         added++;
       }
       mutate(() => ({ customers }));
-      log("customers.import", `Imported ${added} customers (${skipped} skipped)`);
-      return { added, skipped };
+      log(
+        "customers.import",
+        `Imported ${added} customers (${updated} updated, ${skipped} unchanged)`,
+      );
+      return { added, skipped, updated };
     },
-    setCustomerArea: (name, area) => {
+    setCustomerArea: (key, area) => {
       mutate((s) => {
-        if (!s.customers[name]) return {};
-        const customers = assignCustomerArea(s.customers, name, area);
+        const id = findCustomerKey(s.customers, key) ?? key;
+        if (!s.customers[id]) return {};
+        const customers = assignCustomerArea(s.customers, id, area);
         const history =
           area && !s.areaHistory.includes(area) ? [...s.areaHistory, area] : s.areaHistory;
         return { customers, areaHistory: history };
       });
-      log("customers.area", `Set ${name} → ${area || "(none)"}`);
+      log("customers.area", `Set ${key} → ${area || "(none)"}`);
     },
-    setCustomerLoadingNumber: (name, area, n) => {
+    setCustomerLoadingNumber: (key, area, n) => {
       mutate((s) => {
-        if (!s.customers[name] || !area) return {};
-        const customers = applyLoadingNumber(s.customers, name, area, n);
+        const id = findCustomerKey(s.customers, key) ?? key;
+        if (!s.customers[id] || !area) return {};
+        const customers = applyLoadingNumber(s.customers, id, area, n);
         const history = !s.areaHistory.includes(area) ? [...s.areaHistory, area] : s.areaHistory;
         return { customers, areaHistory: history };
       });
-      log("customers.loading", `Set ${name} loading #${n} in ${area}`);
+      log("customers.loading", `Set ${key} loading #${n} in ${area}`);
     },
     reorderCustomersInArea: (area, orderedNames) => {
       mutate((s) => {
@@ -381,14 +414,68 @@ export const useStore = create<State>((set, get) => {
       });
       log("area.ensure", `Added area ${area}`);
     },
-    deleteCustomer: (name) => {
+    importAreas: (names) => {
+      let added = 0;
+      let skipped = 0;
       mutate((s) => {
-        if (!s.customers[name]) return {};
+        const history = [...s.areaHistory];
+        const existing = new Set(history.map((a) => a.toLowerCase()));
+        for (const raw of names) {
+          const area = raw.trim();
+          if (!area) continue;
+          if (existing.has(area.toLowerCase())) {
+            skipped++;
+            continue;
+          }
+          existing.add(area.toLowerCase());
+          history.push(area);
+          added++;
+        }
+        if (added === 0) return {};
+        return { areaHistory: history };
+      });
+      log("area.import", `Imported ${added} areas (${skipped} skipped)`);
+      return { added, skipped };
+    },
+    deleteAreaCatalog: (name) => {
+      const area = name.trim();
+      if (!area) return;
+      mutate((s) => {
         const customers = { ...s.customers };
-        delete customers[name];
+        for (const [key, c] of Object.entries(customers)) {
+          if (c.defaultArea === area) {
+            customers[key] = { ...c, defaultArea: "", loadingNumber: 0 };
+          }
+        }
+        const plans: typeof s.plans = {};
+        for (const [date, p] of Object.entries(s.plans)) {
+          plans[date] = {
+            ...p,
+            areas: (p.areas ?? []).filter((a) => a !== area),
+            truckDay: (p.truckDay ?? []).map((td) => ({
+              ...td,
+              areas: (td.areas ?? []).filter((a) => a !== area),
+            })),
+          };
+        }
+        return {
+          areaHistory: s.areaHistory.filter((a) => a !== area),
+          customers,
+          plans,
+        };
+      });
+      log("area.delete", `Removed area ${area} from catalog`);
+    },
+
+    deleteCustomer: (key) => {
+      mutate((s) => {
+        const id = findCustomerKey(s.customers, key) ?? key;
+        if (!s.customers[id]) return {};
+        const customers = { ...s.customers };
+        delete customers[id];
         return { customers };
       });
-      log("customers.delete", `Deleted customer ${name}`);
+      log("customers.delete", `Deleted customer ${key}`);
     },
 
     addInvoices: (list) => {
@@ -441,13 +528,15 @@ export const useStore = create<State>((set, get) => {
       const now = new Date().toISOString();
       for (const inv of plan.invoices) {
         if (!inv.customer) continue;
-        if (customers[inv.customer]) {
+        const key = findCustomerKey(customers, inv.customer);
+        if (key) {
           known++;
-          if (!customers[inv.customer].defaultArea && inv.area) {
-            customers = assignCustomerArea(customers, inv.customer, inv.area);
+          if (!customers[key].defaultArea && inv.area) {
+            customers = assignCustomerArea(customers, key, inv.area);
           }
         } else if (inv.area) {
           customers[inv.customer] = {
+            code: "",
             name: inv.customer,
             defaultArea: "",
             loadingNumber: 0,

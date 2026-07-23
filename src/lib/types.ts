@@ -6,6 +6,8 @@ export type Truck = {
 };
 
 export type CustomerMemory = {
+  /** Unique customer / account code from ERP or master list */
+  code: string;
   name: string;
   defaultArea: string;
   /** 0 = unset; otherwise 1..n within defaultArea */
@@ -67,6 +69,7 @@ export function normalizeTruckDay(raw: {
 
 export function normalizeCustomer(raw: Partial<CustomerMemory> & { name: string }): CustomerMemory {
   return {
+    code: typeof raw.code === "string" ? raw.code.trim() : "",
     name: raw.name,
     defaultArea: raw.defaultArea ?? "",
     loadingNumber: typeof raw.loadingNumber === "number" ? raw.loadingNumber : 0,
