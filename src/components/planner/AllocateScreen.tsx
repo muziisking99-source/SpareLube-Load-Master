@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
 import { truckWeight } from "@/lib/allocation";
+import { townsForTruckDay, tripById } from "@/lib/trips";
 import type { Invoice, Truck } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +23,7 @@ import { FormField } from "./ui/FormField";
 export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const plan = useStore((s) => s.plans[s.currentDate])!;
   const trucks = useStore((s) => s.trucks);
+  const trips = useStore((s) => s.trips);
   const runAllocation = useStore((s) => s.runAllocation);
   const moveInvoice = useStore((s) => s.moveInvoice);
   const bulkMove = useStore((s) => s.bulkMove);
@@ -36,7 +38,15 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   } | null>(null);
 
   const activeTrucks = trucks.filter((t) => t.active);
-  const dayAreas = new Map(plan.truckDay.map((td) => [td.truckId, td.areas ?? []]));
+  const dayTowns = new Map(
+    plan.truckDay.map((td) => [td.truckId, townsForTruckDay(td, trips)]),
+  );
+  const dayTripName = new Map(
+    plan.truckDay.map((td) => {
+      const trip = tripById(trips, td.tripId);
+      return [td.truckId, trip?.name ?? null] as const;
+    }),
+  );
   const inv = plan.invoices;
   const allocated = inv.filter((i) => i.truckId);
   const unallocated = inv.filter((i) => !i.truckId);
@@ -116,13 +126,13 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
       </div>
 
       <div>
-        <ScreenHeader title="Area Summary" className="mb-3" />
+        <ScreenHeader title="Town Summary" className="mb-3" />
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {[...byArea.entries()].map(([area, list], idx) => {
             const c = areaColor(area);
             const wt = list.reduce((s, i) => s + i.weight, 0);
             const trucksHere = activeTrucks.filter((t) =>
-              (dayAreas.get(t.id) ?? []).includes(area),
+              (dayTowns.get(t.id) ?? []).includes(area),
             );
             return (
               <div
@@ -150,7 +160,8 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
           <TruckCard
             key={t.id}
             truck={t}
-            areas={dayAreas.get(t.id) ?? []}
+            tripName={dayTripName.get(t.id)}
+            towns={dayTowns.get(t.id) ?? []}
             invoices={inv.filter((i) => i.truckId === t.id)}
             mode={mode}
             selected={selected}
@@ -189,7 +200,8 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
         <MoveDialog
           plan={plan}
           trucks={activeTrucks}
-          dayAreas={dayAreas}
+          dayTowns={dayTowns}
+          dayTripName={dayTripName}
           bulk={moveTarget.bulk}
           selectedIds={selected}
           invoice={moveTarget.inv ?? undefined}
@@ -211,7 +223,8 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
 
 function TruckCard({
   truck,
-  areas,
+  tripName,
+  towns,
   invoices,
   mode,
   selected,
@@ -222,7 +235,8 @@ function TruckCard({
   onClearSelected,
 }: {
   truck: Truck;
-  areas: string[];
+  tripName: string | null | undefined;
+  towns: string[];
   invoices: Invoice[];
   mode: "allocate" | "adjust";
   selected: string[];
@@ -291,11 +305,14 @@ function TruckCard({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="font-semibold tracking-tight">{truck.name}</div>
+          {tripName && (
+            <div className="text-xs text-muted-foreground">{tripName}</div>
+          )}
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            {areas.length === 0 ? (
-              <span className="chip">no area</span>
+            {towns.length === 0 ? (
+              <span className="chip">no towns</span>
             ) : (
-              areas.map((area) => {
+              towns.map((area) => {
                 const c = areaColor(area);
                 const n = countByArea.get(area) ?? 0;
                 return (
@@ -484,7 +501,8 @@ function InvoiceChip({
 function MoveDialog({
   plan,
   trucks,
-  dayAreas,
+  dayTowns,
+  dayTripName,
   bulk,
   invoice,
   selectedIds,
@@ -493,7 +511,8 @@ function MoveDialog({
 }: {
   plan: import("@/lib/types").Plan;
   trucks: Truck[];
-  dayAreas: Map<string, string[]>;
+  dayTowns: Map<string, string[]>;
+  dayTripName: Map<string, string | null>;
   bulk?: boolean;
   invoice?: Invoice;
   selectedIds: string[];
@@ -510,7 +529,7 @@ function MoveDialog({
       ? [invoice]
       : [];
   const movingWeight = movingInvoices.reduce((s, i) => s + i.weight, 0);
-  const movingAreas = [...new Set(movingInvoices.map((i) => i.area).filter(Boolean))];
+  const movingTowns = [...new Set(movingInvoices.map((i) => i.area).filter(Boolean))];
 
   const reasonFinal = reason === "Other" ? reasonText : reason;
 
@@ -524,10 +543,10 @@ function MoveDialog({
         </DialogHeader>
         <p className="text-xs text-muted-foreground">
           Moving <span className="metric-mono">{movingWeight.toFixed(0)} kg</span>
-          {movingAreas.length > 0 && (
+          {movingTowns.length > 0 && (
             <>
               {" "}
-              · areas: <span className="text-foreground">{movingAreas.join(", ")}</span>
+              · towns: <span className="text-foreground">{movingTowns.join(", ")}</span>
             </>
           )}
         </p>
@@ -537,10 +556,11 @@ function MoveDialog({
             const remaining = t.maxWeight - currentWeight;
             const fits = remaining >= movingWeight;
             const pct = ((currentWeight + movingWeight) / t.maxWeight) * 100;
-            const truckAreas = dayAreas.get(t.id) ?? [];
-            const crossArea =
-              movingAreas.length > 0 &&
-              movingAreas.some((a) => !truckAreas.includes(a));
+            const truckTowns = dayTowns.get(t.id) ?? [];
+            const tripLabel = dayTripName.get(t.id);
+            const crossTown =
+              movingTowns.length > 0 &&
+              movingTowns.some((a) => !truckTowns.includes(a));
             return (
               <button
                 key={t.id}
@@ -553,7 +573,10 @@ function MoveDialog({
               >
                 <div className="flex justify-between text-sm">
                   <span>
-                    <b>{t.name}</b> · {truckAreas.join(", ") || "—"}
+                    <b>{t.name}</b>
+                    {tripLabel ? ` · ${tripLabel}` : ""}
+                    {" · "}
+                    {truckTowns.join(", ") || "—"}
                   </span>
                   <span className="metric-mono">
                     {currentWeight.toFixed(0)} / {t.maxWeight} kg
@@ -567,9 +590,9 @@ function MoveDialog({
                 {fits && (
                   <div className="text-xs text-muted-foreground">After move: {pct.toFixed(0)}%</div>
                 )}
-                {crossArea && (
+                {crossTown && (
                   <div className="mt-1 text-xs text-warn">
-                    Invoice area is not on this truck&apos;s route
+                    Invoice town is not on this truck&apos;s trip
                   </div>
                 )}
               </button>

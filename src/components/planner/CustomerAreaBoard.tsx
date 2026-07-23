@@ -81,7 +81,7 @@ export function CustomerAreaBoard({
                     }}
                     className="h-8 rounded-lg border border-input bg-panel-2 px-2 text-xs text-foreground"
                   >
-                    <option value="">Assign area…</option>
+                    <option value="">Assign town…</option>
                     {areaOptions.map((a) => (
                       <option key={a} value={a}>
                         {a}
@@ -114,7 +114,7 @@ export function CustomerAreaBoard({
             onToggle={() => toggle(area)}
           >
             {list.length === 0 ? (
-              <p className="px-3 py-4 text-sm text-muted-foreground">No customers in this area.</p>
+              <p className="px-3 py-4 text-sm text-muted-foreground">No customers in this town.</p>
             ) : (
               <ul className="divide-y divide-border">
                 {list.map((c) => {

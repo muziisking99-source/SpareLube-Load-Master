@@ -3,6 +3,7 @@ import { ArrowRight, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
+import { townsForTruckDay } from "@/lib/trips";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -32,11 +33,12 @@ import { FormField } from "./ui/FormField";
 export function SetupScreen() {
   const plan = useStore((s) => s.plans[s.currentDate]);
   const trucks = useStore((s) => s.trucks);
+  const trips = useStore((s) => s.trips);
   const areaHistory = useStore((s) => s.areaHistory);
   const setDate = useStore((s) => s.setDate);
   const addArea = useStore((s) => s.addArea);
   const removeArea = useStore((s) => s.removeArea);
-  const setTruckDayAreas = useStore((s) => s.setTruckDayAreas);
+  const setTruckDayTrip = useStore((s) => s.setTruckDayTrip);
   const updateTruck = useStore((s) => s.updateTruck);
   const addTruck = useStore((s) => s.addTruck);
   const deleteTruck = useStore((s) => s.deleteTruck);
@@ -49,12 +51,17 @@ export function SetupScreen() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const areas = plan?.areas ?? [];
-  const truckDayMap = new Map(
-    (plan?.truckDay ?? []).map((td) => [td.truckId, td.areas ?? []] as const),
-  );
+  const truckDayById = new Map((plan?.truckDay ?? []).map((td) => [td.truckId, td]));
   const activeTrucks = trucks.filter((t) => t.active);
-  const missingArea = activeTrucks.filter((t) => (truckDayMap.get(t.id) ?? []).length === 0);
-  const canContinue = activeTrucks.length > 0 && missingArea.length === 0;
+  const missingTrip = activeTrucks.filter((t) => {
+    const td = truckDayById.get(t.id);
+    return townsForTruckDay(td, trips).length === 0;
+  });
+  const legacyOnly = activeTrucks.filter((t) => {
+    const td = truckDayById.get(t.id);
+    return td && !td.tripId && (td.areas?.length ?? 0) > 0;
+  });
+  const canContinue = activeTrucks.length > 0 && missingTrip.length === 0;
   const suggestions = areaHistory.filter((a) => !areas.includes(a));
 
   return (
@@ -62,8 +69,8 @@ export function SetupScreen() {
       <div className="space-y-6">
         <section className="panel p-5">
           <ScreenHeader
-            title="Today's Delivery Areas"
-            description="Define the delivery zones active for this plan date."
+            title="Today's Delivery Towns"
+            description="Towns available for invoice assignment on this plan date."
             action={
               <FormField label="Plan date" className="gap-1">
                 <Input
@@ -80,8 +87,8 @@ export function SetupScreen() {
           {areas.length === 0 ? (
             <div className="mb-3">
               <EmptyState
-                title="No areas yet"
-                description="Add delivery areas below or pick from previously used zones."
+                title="No towns yet"
+                description="Add delivery towns below or pick from previously used towns."
               />
             </div>
           ) : (
@@ -128,12 +135,12 @@ export function SetupScreen() {
             <Input
               value={newArea}
               onChange={(e) => setNewArea(e.target.value)}
-              placeholder="Add area (e.g. Alberton)"
+              placeholder="Add town (e.g. Brits)"
               className="flex-1"
             />
             <Button type="submit">
               <Plus className="size-4" />
-              Add Area
+              Add Town
             </Button>
           </form>
 
@@ -154,7 +161,7 @@ export function SetupScreen() {
         <section className="panel p-5">
           <ScreenHeader
             title="Trucks"
-            description="Assign each active truck to a delivery area for today."
+            description="Assign each active truck to a named trip for today."
             action={
               <Button
                 type="button"
@@ -212,7 +219,7 @@ export function SetupScreen() {
                   <TableHead className="w-16">Active</TableHead>
                   <TableHead>Truck</TableHead>
                   <TableHead className="w-28">Max kg</TableHead>
-                  <TableHead className="min-w-[220px]">Today's Areas</TableHead>
+                  <TableHead className="min-w-[240px]">Today&apos;s Trip</TableHead>
                   <TableHead className="w-32">Status</TableHead>
                   <TableHead className="w-12" />
                 </TableRow>
@@ -226,8 +233,10 @@ export function SetupScreen() {
                   </TableRow>
                 )}
                 {trucks.map((t, idx) => {
-                  const dayAreas = truckDayMap.get(t.id) ?? [];
+                  const td = truckDayById.get(t.id);
+                  const dayTowns = townsForTruckDay(td, trips);
                   const inactive = !t.active;
+                  const isLegacy = !td?.tripId && (td?.areas?.length ?? 0) > 0;
                   return (
                     <TableRow
                       key={t.id}
@@ -258,45 +267,62 @@ export function SetupScreen() {
                         />
                       </TableCell>
                       <TableCell>
-                        {areas.length === 0 ? (
-                          <span className="text-xs text-muted-foreground">Add areas first</span>
+                        {trips.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">
+                            Create trips in Admin first
+                          </span>
                         ) : (
-                          <div className="flex flex-wrap gap-2 py-1">
-                            {areas.map((a) => {
-                              const checked = dayAreas.includes(a);
-                              return (
-                                <label
-                                  key={a}
-                                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs ${
-                                    checked
-                                      ? "border-primary/50 bg-primary/10 text-primary"
-                                      : "border-border text-muted-foreground"
-                                  } ${inactive ? "pointer-events-none opacity-40" : "cursor-pointer"}`}
-                                >
-                                  <Checkbox
-                                    disabled={inactive}
-                                    checked={checked}
-                                    onCheckedChange={(v) => {
-                                      const next = v
-                                        ? [...dayAreas, a]
-                                        : dayAreas.filter((x) => x !== a);
-                                      setTruckDayAreas(t.id, next);
-                                    }}
-                                  />
-                                  {a}
-                                </label>
-                              );
-                            })}
+                          <div className="space-y-1.5 py-1">
+                            <select
+                              disabled={inactive}
+                              className="h-8 w-full max-w-xs rounded-md border border-input bg-background px-2 text-sm"
+                              value={td?.tripId ?? ""}
+                              onChange={(e) =>
+                                setTruckDayTrip(t.id, e.target.value || null)
+                              }
+                            >
+                              <option value="">Unassigned</option>
+                              {trips.map((tr) => (
+                                <option key={tr.id} value={tr.id}>
+                                  {tr.name}
+                                </option>
+                              ))}
+                            </select>
+                            {dayTowns.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {dayTowns.map((town) => {
+                                  const c = areaColor(town);
+                                  return (
+                                    <span
+                                      key={town}
+                                      className="chip text-[10px]"
+                                      style={{
+                                        borderColor: c.border,
+                                        color: c.text,
+                                        background: c.bg,
+                                      }}
+                                    >
+                                      {town}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            {isLegacy && (
+                              <p className="text-[11px] text-warn">
+                                Legacy towns — pick a named trip when ready
+                              </p>
+                            )}
                           </div>
                         )}
                       </TableCell>
                       <TableCell>
                         {inactive ? (
                           <Badge variant="outline">Off Duty</Badge>
-                        ) : dayAreas.length > 0 ? (
+                        ) : dayTowns.length > 0 ? (
                           <Badge variant="good">Ready</Badge>
                         ) : (
-                          <Badge variant="warn">Needs area</Badge>
+                          <Badge variant="warn">Needs trip</Badge>
                         )}
                       </TableCell>
                       <TableCell className="text-right">
@@ -324,26 +350,40 @@ export function SetupScreen() {
         <h3 className="font-semibold tracking-tight">Ready to continue?</h3>
         <ul className="mb-4 mt-3 space-y-2 text-sm">
           <li className="flex justify-between">
-            <span className="text-muted-foreground">Areas defined</span>
+            <span className="text-muted-foreground">Towns defined</span>
             <span className="metric-mono font-medium">{areas.length}</span>
+          </li>
+          <li className="flex justify-between">
+            <span className="text-muted-foreground">Trips available</span>
+            <span className="metric-mono font-medium">{trips.length}</span>
           </li>
           <li className="flex justify-between">
             <span className="text-muted-foreground">Active trucks</span>
             <span className="metric-mono font-medium">{activeTrucks.length}</span>
           </li>
           <li className="flex justify-between">
-            <span className="text-muted-foreground">Missing area</span>
-            <span className={`metric-mono font-medium ${missingArea.length ? "text-warn" : ""}`}>
-              {missingArea.length}
+            <span className="text-muted-foreground">Missing trip</span>
+            <span className={`metric-mono font-medium ${missingTrip.length ? "text-warn" : ""}`}>
+              {missingTrip.length}
             </span>
           </li>
         </ul>
         {activeTrucks.length === 0 && (
           <p className="mb-3 text-sm text-crit">At least one truck must be active.</p>
         )}
-        {missingArea.length > 0 && (
+        {trips.length === 0 && (
           <p className="mb-3 text-sm text-warn">
-            Assign an area to every active truck before continuing.
+            Create named trips in Admin → Trips before assigning trucks.
+          </p>
+        )}
+        {missingTrip.length > 0 && (
+          <p className="mb-3 text-sm text-warn">
+            Assign a trip to every active truck before continuing.
+          </p>
+        )}
+        {legacyOnly.length > 0 && missingTrip.length === 0 && (
+          <p className="mb-3 text-sm text-muted-foreground">
+            {legacyOnly.length} truck(s) still use legacy towns — assign a named trip when convenient.
           </p>
         )}
         <Button disabled={!canContinue} className="w-full" size="lg" onClick={() => setStep("import")}>

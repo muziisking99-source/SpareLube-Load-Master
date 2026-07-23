@@ -103,7 +103,7 @@ export function Assistant() {
             tone="warn"
           />
           <Row
-            label="Missing areas"
+            label="Missing towns"
             value={plan.invoices.filter((i) => !i.area).length}
             tone="warn"
           />
@@ -134,11 +134,11 @@ export function Assistant() {
             <Row label="Lightest" value={`${lightest.t.name} (${lightest.w.toFixed(0)}kg)`} />
           )}
           {areaSorted[0] && (
-            <Row label="Top area" value={`${areaSorted[0][0]} (${areaSorted[0][1].toFixed(0)}kg)`} />
+            <Row label="Top town" value={`${areaSorted[0][0]} (${areaSorted[0][1].toFixed(0)}kg)`} />
           )}
           {areaSorted.length > 1 && (
             <Row
-              label="Low area"
+              label="Low town"
               value={`${areaSorted[areaSorted.length - 1][0]} (${areaSorted[areaSorted.length - 1][1].toFixed(0)}kg)`}
             />
           )}

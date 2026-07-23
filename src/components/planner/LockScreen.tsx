@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Lock, TriangleAlert, Unlock } from "lucide-react
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
+import { townsForTruckDay, tripById } from "@/lib/trips";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +38,7 @@ import { FormField } from "./ui/FormField";
 export function LockScreen() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
   const trucks = useStore((s) => s.trucks);
+  const trips = useStore((s) => s.trips);
   const lockPlan = useStore((s) => s.lockPlan);
   const unlockPlan = useStore((s) => s.unlockPlan);
   const setStep = useStore((s) => s.setStep);
@@ -48,7 +50,15 @@ export function LockScreen() {
   const [pinError, setPinError] = useState("");
 
   const active = trucks.filter((t) => t.active);
-  const dayAreas = new Map(plan.truckDay.map((td) => [td.truckId, td.areas ?? []]));
+  const dayTowns = new Map(
+    plan.truckDay.map((td) => [td.truckId, townsForTruckDay(td, trips)]),
+  );
+  const dayTripName = new Map(
+    plan.truckDay.map((td) => {
+      const trip = tripById(trips, td.tripId);
+      return [td.truckId, trip?.name ?? null] as const;
+    }),
+  );
   const allocated = plan.invoices.filter((i) => i.truckId);
   const unallocated = plan.invoices.filter((i) => !i.truckId);
   const totalWeight = plan.invoices.reduce((s, i) => s + i.weight, 0);
@@ -102,7 +112,7 @@ export function LockScreen() {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Truck</TableHead>
-                <TableHead>Area</TableHead>
+                <TableHead>Trip</TableHead>
                 <TableHead>Invoices</TableHead>
                 <TableHead>Weight</TableHead>
                 <TableHead>Capacity</TableHead>
@@ -118,7 +128,8 @@ export function LockScreen() {
                 const pct = (wt / t.maxWeight) * 100;
                 const status =
                   pct >= 95 ? "text-crit" : pct >= 80 ? "text-warn" : "text-good";
-                const areas = dayAreas.get(t.id) ?? [];
+                const areas = dayTowns.get(t.id) ?? [];
+                const tripName = dayTripName.get(t.id);
                 return (
                   <TableRow
                     key={t.id}
@@ -127,23 +138,28 @@ export function LockScreen() {
                   >
                     <TableCell className="font-medium">{t.name}</TableCell>
                     <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {areas.length === 0 ? (
-                          <span className="text-muted-foreground">—</span>
-                        ) : (
-                          areas.map((area) => {
-                            const c = areaColor(area);
-                            return (
-                              <span
-                                key={area}
-                                className="chip"
-                                style={{ borderColor: c.border, color: c.text, background: c.bg }}
-                              >
-                                {area}
-                              </span>
-                            );
-                          })
+                      <div className="space-y-1">
+                        {tripName && (
+                          <div className="text-sm font-medium">{tripName}</div>
                         )}
+                        <div className="flex flex-wrap gap-1">
+                          {areas.length === 0 ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : (
+                            areas.map((area) => {
+                              const c = areaColor(area);
+                              return (
+                                <span
+                                  key={area}
+                                  className="chip"
+                                  style={{ borderColor: c.border, color: c.text, background: c.bg }}
+                                >
+                                  {area}
+                                </span>
+                              );
+                            })
+                          )}
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell className="metric-mono">

@@ -1,6 +1,7 @@
-import type { AuditEntry, CustomerMemory, Plan, Truck, TruckDay } from "./types";
+import type { AuditEntry, CustomerMemory, Plan, Trip, Truck, TruckDay } from "./types";
 import { normalizeCustomer, normalizeInvoice, normalizeTruckDay } from "./types";
 import { customerKey } from "./customers";
+import { normalizeTrip } from "./trips";
 import { getSupabase, isCloudConfigured } from "./supabase";
 import { loadKey, saveKey } from "./db";
 
@@ -8,6 +9,7 @@ const MIGRATED_KEY = "lp:cloudMigrated";
 
 export type CloudSnapshot = {
   trucks: Truck[];
+  trips: Trip[];
   customers: Record<string, CustomerMemory>;
   areaHistory: string[];
   plans: Record<string, Plan>;
@@ -21,6 +23,7 @@ export type CloudStatus = "offline" | "local" | "cloud" | "error";
 function emptySnapshot(currentDate: string): CloudSnapshot {
   return {
     trucks: [],
+    trips: [],
     customers: {},
     areaHistory: [],
     plans: {},
@@ -66,9 +69,10 @@ function normalizeCustomers(
 
 /** Load snapshot from IndexedDB cache. */
 export async function loadLocalSnapshot(): Promise<CloudSnapshot> {
-  const [trucks, customersRaw, areaHistory, plansRaw, audit, currentDate, adminPin] =
+  const [trucks, tripsRaw, customersRaw, areaHistory, plansRaw, audit, currentDate, adminPin] =
     await Promise.all([
       loadKey<Truck[]>("lp:trucks", []),
+      loadKey<Trip[]>("lp:trips", []),
       loadKey<Record<string, CustomerMemory>>("lp:customers", {}),
       loadKey<string[]>("lp:areaHistory", []),
       loadKey<Record<string, Plan>>("lp:plans", {}),
@@ -78,6 +82,7 @@ export async function loadLocalSnapshot(): Promise<CloudSnapshot> {
     ]);
   return {
     trucks,
+    trips: (tripsRaw ?? []).map((t) => normalizeTrip(t)),
     customers: normalizeCustomers(customersRaw),
     areaHistory,
     plans: normalizePlans(plansRaw),
@@ -91,6 +96,7 @@ export async function loadLocalSnapshot(): Promise<CloudSnapshot> {
 export async function saveLocalSnapshot(s: CloudSnapshot): Promise<void> {
   await Promise.all([
     saveKey("lp:trucks", s.trucks),
+    saveKey("lp:trips", s.trips),
     saveKey("lp:customers", s.customers),
     saveKey("lp:areaHistory", s.areaHistory),
     saveKey("lp:plans", s.plans),
@@ -103,6 +109,7 @@ export async function saveLocalSnapshot(s: CloudSnapshot): Promise<void> {
 function snapshotHasData(s: CloudSnapshot): boolean {
   return (
     s.trucks.length > 0 ||
+    s.trips.length > 0 ||
     Object.keys(s.customers).length > 0 ||
     s.areaHistory.length > 0 ||
     Object.keys(s.plans).length > 0
@@ -118,10 +125,11 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
   const sb = getSupabase();
   if (!sb) return null;
 
-  const [areasRes, trucksRes, customersRes, plansRes, auditRes, settingsRes] =
+  const [areasRes, trucksRes, tripsRes, customersRes, plansRes, auditRes, settingsRes] =
     await Promise.all([
       sb.from("areas").select("name"),
       sb.from("trucks").select("id,name,max_weight,active"),
+      sb.from("trips").select("id,name,towns"),
       sb
         .from("customers")
         .select("id,code,name,default_area,loading_number,first_seen"),
@@ -136,9 +144,16 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
       sb.from("app_settings").select("active_date,admin_pin").eq("id", 1).maybeSingle(),
     ]);
 
+  // Trips table may not exist yet before migration 002 — treat as empty
+  const tripsError =
+    tripsRes.error && !/does not exist|schema cache/i.test(tripsRes.error.message)
+      ? tripsRes.error
+      : null;
+
   const firstError =
     areasRes.error ||
     trucksRes.error ||
+    tripsError ||
     customersRes.error ||
     plansRes.error ||
     auditRes.error ||
@@ -179,6 +194,14 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
     active: !!t.active,
   }));
 
+  const trips: Trip[] = (tripsRes.data ?? []).map((t) =>
+    normalizeTrip({
+      id: t.id,
+      name: t.name,
+      towns: Array.isArray(t.towns) ? (t.towns as string[]) : [],
+    }),
+  );
+
   const audit: AuditEntry[] = (auditRes.data ?? []).map((a) => ({
     id: a.id,
     ts: a.ts,
@@ -189,6 +212,7 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
 
   return {
     trucks,
+    trips,
     customers,
     areaHistory: (areasRes.data ?? []).map((a) => a.name).sort((a, b) => a.localeCompare(b)),
     plans,
@@ -245,6 +269,34 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
       { onConflict: "id" },
     );
     if (error) throw error;
+  }
+
+  // Trips: replace set (skip if table missing)
+  const { data: existingTrips, error: tripsReadErr } = await sb.from("trips").select("id");
+  if (tripsReadErr && !/does not exist|schema cache/i.test(tripsReadErr.message)) {
+    throw tripsReadErr;
+  }
+  if (!tripsReadErr) {
+    const wantTripIds = new Set(s.trips.map((t) => t.id));
+    const tripsToDelete = (existingTrips ?? [])
+      .map((t) => t.id)
+      .filter((id) => !wantTripIds.has(id));
+    if (tripsToDelete.length) {
+      const { error } = await sb.from("trips").delete().in("id", tripsToDelete);
+      if (error) throw error;
+    }
+    if (s.trips.length) {
+      const { error } = await sb.from("trips").upsert(
+        s.trips.map((t) => ({
+          id: t.id,
+          name: t.name,
+          towns: t.towns,
+          updated_at: now,
+        })),
+        { onConflict: "id" },
+      );
+      if (error) throw error;
+    }
   }
 
   // Customers: replace set

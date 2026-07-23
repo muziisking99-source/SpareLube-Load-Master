@@ -4,6 +4,7 @@ import type {
   CustomerMemory,
   Invoice,
   Plan,
+  Trip,
   Truck,
   TruckDay,
 } from "./types";
@@ -14,6 +15,7 @@ import {
   setCustomerLoadingNumber as applyLoadingNumber,
 } from "./loadingOrder";
 import { customerKey, findCustomerKey } from "./customers";
+import { normalizeTrip } from "./trips";
 import {
   hydrateWarehouse,
   persistWarehouse,
@@ -48,6 +50,7 @@ type State = {
   hydrated: boolean;
   cloudStatus: CloudStatus;
   trucks: Truck[];
+  trips: Trip[];
   customers: Record<string, CustomerMemory>;
   areaHistory: string[];
   plans: Record<string, Plan>;
@@ -64,7 +67,12 @@ type State = {
   updateTruck: (id: string, patch: Partial<Truck>) => void;
   deleteTruck: (id: string) => void;
 
-  // areas
+  // trips
+  addTrip: (name: string, towns?: string[]) => string;
+  updateTrip: (id: string, patch: Partial<Pick<Trip, "name" | "towns">>) => void;
+  deleteTrip: (id: string) => void;
+
+  // areas / towns catalog
   addArea: (name: string) => void;
   removeArea: (name: string) => void;
   ensureArea: (name: string) => void;
@@ -76,8 +84,9 @@ type State = {
   // plan
   setStep: (step: Plan["step"]) => void;
   setDate: (date: string) => void;
+  setTruckDayTrip: (truckId: string, tripId: string | null) => void;
   setTruckDayAreas: (truckId: string, areas: string[]) => void;
-  /** @deprecated use setTruckDayAreas — kept as convenience for single area */
+  /** @deprecated use setTruckDayTrip */
   setTruckDayArea: (truckId: string, area: string) => void;
   ensureTruckDay: () => void;
   dismissResume: () => void;
@@ -132,6 +141,7 @@ function scheduleSave(state: State) {
   saveTimer = setTimeout(() => {
     void persistWarehouse({
       trucks: state.trucks,
+      trips: state.trips,
       customers: state.customers,
       areaHistory: state.areaHistory,
       plans: state.plans,
@@ -178,6 +188,7 @@ export const useStore = create<State>((set, get) => {
     hydrated: false,
     cloudStatus: "local",
     trucks: [],
+    trips: [],
     customers: {},
     areaHistory: [],
     plans: {},
@@ -192,6 +203,7 @@ export const useStore = create<State>((set, get) => {
         const { snapshot, status } = await hydrateWarehouse();
         const {
           trucks,
+          trips,
           customers,
           areaHistory,
           plans,
@@ -206,6 +218,7 @@ export const useStore = create<State>((set, get) => {
           hydrated: true,
           cloudStatus: status,
           trucks,
+          trips: (trips ?? []).map((t) => normalizeTrip(t)),
           customers,
           areaHistory,
           plans,
@@ -237,6 +250,46 @@ export const useStore = create<State>((set, get) => {
       log("truck.delete", `Deleted truck ${id}`);
     },
 
+    addTrip: (nameRaw, towns = []) => {
+      const id = uid();
+      const trip = normalizeTrip({ id, name: nameRaw, towns });
+      mutate((s) => ({ trips: [...s.trips, trip] }));
+      log("trip.add", `Added trip ${trip.name}`);
+      return id;
+    },
+    updateTrip: (id, patch) => {
+      mutate((s) => ({
+        trips: s.trips.map((t) =>
+          t.id === id
+            ? normalizeTrip({
+                ...t,
+                name: patch.name ?? t.name,
+                towns: patch.towns ?? t.towns,
+              })
+            : t,
+        ),
+      }));
+    },
+    deleteTrip: (id) => {
+      mutate((s) => {
+        const plans = { ...s.plans };
+        for (const date of Object.keys(plans)) {
+          const p = plans[date];
+          plans[date] = {
+            ...p,
+            truckDay: p.truckDay.map((td) =>
+              td.tripId === id ? { ...td, tripId: null } : td,
+            ),
+          };
+        }
+        return {
+          trips: s.trips.filter((t) => t.id !== id),
+          plans,
+        };
+      });
+      log("trip.delete", `Deleted trip ${id}`);
+    },
+
     addArea: (nameRaw) => {
       const name = nameRaw.trim();
       if (!name) return;
@@ -261,6 +314,12 @@ export const useStore = create<State>((set, get) => {
           areas: (td.areas ?? []).filter((a) => a !== name),
         })),
       }));
+      mutate((s) => ({
+        trips: s.trips.map((t) => ({
+          ...t,
+          towns: t.towns.filter((town) => town !== name),
+        })),
+      }));
     },
 
     setStep: (step) => patchPlan((p) => ({ ...p, step })),
@@ -272,13 +331,31 @@ export const useStore = create<State>((set, get) => {
           showResume: !!existing && !existing.locked && existing.invoices.length > 0,
         };
       }),
+    setTruckDayTrip: (truckId, tripId) => {
+      patchPlan((p) => {
+        const exists = p.truckDay.find((t) => t.truckId === truckId);
+        const next: TruckDay = {
+          truckId,
+          tripId,
+          areas: exists?.areas,
+        };
+        const truckDay = exists
+          ? p.truckDay.map((t) => (t.truckId === truckId ? next : t))
+          : [...p.truckDay, next];
+        return { ...p, truckDay };
+      });
+    },
     setTruckDayAreas: (truckId, areas) => {
       const clean = [...new Set(areas.filter(Boolean))];
       patchPlan((p) => {
         const exists = p.truckDay.find((t) => t.truckId === truckId);
         const truckDay = exists
-          ? p.truckDay.map((t) => (t.truckId === truckId ? { ...t, areas: clean } : t))
-          : [...p.truckDay, { truckId, areas: clean }];
+          ? p.truckDay.map((t) =>
+              t.truckId === truckId
+                ? { ...t, tripId: t.tripId ?? null, areas: clean }
+                : t,
+            )
+          : [...p.truckDay, { truckId, tripId: null, areas: clean }];
         return { ...p, truckDay };
       });
     },
@@ -291,7 +368,7 @@ export const useStore = create<State>((set, get) => {
         const known = new Set(p.truckDay.map((t) => t.truckId));
         const additions: TruckDay[] = [];
         for (const t of s.trucks) {
-          if (!known.has(t.id)) additions.push({ truckId: t.id, areas: [] });
+          if (!known.has(t.id)) additions.push({ truckId: t.id, tripId: null, areas: [] });
         }
         if (!additions.length) return p;
         return { ...p, truckDay: [...p.truckDay, ...additions] };
@@ -443,6 +520,10 @@ export const useStore = create<State>((set, get) => {
           areaHistory: s.areaHistory.filter((a) => a !== area),
           customers,
           plans,
+          trips: s.trips.map((t) => ({
+            ...t,
+            towns: t.towns.filter((town) => town !== area),
+          })),
         };
       });
       log("area.delete", `Removed area ${area} from catalog`);
@@ -534,7 +615,7 @@ export const useStore = create<State>((set, get) => {
 
     runAllocation: () => {
       const s = get();
-      patchPlan((p) => allocate(p, s.trucks, s.customers));
+      patchPlan((p) => allocate(p, s.trucks, s.customers, s.trips));
       log("allocate.run", "Ran auto allocation");
     },
     moveInvoice: (invId, truckId, reason) => {
@@ -675,6 +756,7 @@ export const useStore = create<State>((set, get) => {
       return JSON.stringify(
         {
           trucks: s.trucks,
+          trips: s.trips,
           customers: s.customers,
           areaHistory: s.areaHistory,
           plans: s.plans,

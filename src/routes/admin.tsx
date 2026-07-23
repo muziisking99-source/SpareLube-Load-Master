@@ -25,6 +25,7 @@ import { FormField } from "@/components/planner/ui/FormField";
 import { EmptyState } from "@/components/planner/ui/EmptyState";
 import { CustomerAreaBoard } from "@/components/planner/CustomerAreaBoard";
 import { LoadingNumbersBoard } from "@/components/planner/LoadingNumbersBoard";
+import { TripsAdminPanel } from "@/components/planner/TripsAdminPanel";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { customersInArea } from "@/lib/loadingOrder";
 
@@ -187,13 +188,13 @@ function AdminConsole({
       return {
         title: "No customers yet",
         description:
-          "Import Excel with Customer Code and Customer Name columns, then assign areas. Set load numbers on the Load # tab.",
+          "Import Excel with Customer Code and Customer Name columns, then assign towns. Set load numbers on the Load # tab.",
       };
     }
     if (areaFilter === "unassigned" && unassigned.length === 0) {
       return {
         title: "No unassigned customers",
-        description: "Every customer has an area. Switch to All or pick an area.",
+        description: "Every customer has a town. Switch to All or pick a town.",
       };
     }
     if (areaFilter !== "all" && areaFilter !== "unassigned") {
@@ -201,14 +202,14 @@ function AdminConsole({
       if (list.length === 0) {
         return {
           title: `No customers in ${areaFilter}`,
-          description: "Assign customers to this area from Unassigned, or import more names.",
+          description: "Assign customers to this town from Unassigned, or import more names.",
         };
       }
     }
     if (areaOptions.length === 0 && Object.keys(customers).length > 0) {
       return {
-        title: "Add areas first",
-        description: "Create areas in the Areas tab, then come back to assign customers.",
+        title: "Add towns first",
+        description: "Create towns in the Towns tab, then come back to assign customers.",
       };
     }
     return null;
@@ -294,7 +295,8 @@ function AdminConsole({
         <Tabs defaultValue="customers" className="w-full">
           <TabsList className="mb-4 h-auto w-full flex-wrap justify-start gap-1 bg-secondary p-1">
             <TabsTrigger value="customers">Customers</TabsTrigger>
-            <TabsTrigger value="areas">Areas</TabsTrigger>
+            <TabsTrigger value="areas">Towns</TabsTrigger>
+            <TabsTrigger value="trips">Trips</TabsTrigger>
             <TabsTrigger value="loading">Load #</TabsTrigger>
             <TabsTrigger value="trucks">Trucks</TabsTrigger>
             <TabsTrigger value="audit">Audit</TabsTrigger>
@@ -309,7 +311,7 @@ function AdminConsole({
                   <div>
                     <h3 className="font-semibold tracking-tight">Customers</h3>
                     <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
-                      Import Customer Code + Customer Name from Excel, then assign each to an area.
+                      Import Customer Code + Customer Name from Excel, then assign each to a town.
                       Set load numbers on the Load # tab.
                     </p>
                   </div>
@@ -354,7 +356,7 @@ function AdminConsole({
 
                 {areaOptions.length === 0 && (
                   <p className="mb-3 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
-                    No areas yet — add them in the Areas tab before assigning customers.
+                    No towns yet — add them in the Towns tab before assigning customers.
                   </p>
                 )}
 
@@ -413,10 +415,10 @@ function AdminConsole({
             <div className="panel p-4">
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-semibold tracking-tight">Areas</h3>
+                  <h3 className="font-semibold tracking-tight">Towns</h3>
                   <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
-                    Add areas one by one or import an Excel sheet with an Area column (or a single
-                    column of names). Assign customers on the Customers tab.
+                    Add towns one by one or import an Excel sheet with a Town / Area column (or a
+                    single column of names). Build trips from these towns, then assign customers.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -435,7 +437,7 @@ function AdminConsole({
                     size="sm"
                     onClick={() => {
                       downloadAreaTemplate();
-                      toast.success("Area template downloaded");
+                      toast.success("Town template downloaded");
                     }}
                   >
                     <Download className="size-4" />
@@ -454,7 +456,7 @@ function AdminConsole({
                     )}
                     Import Excel
                   </Button>
-                  <Badge variant="outline">{areaOptions.length} areas</Badge>
+                  <Badge variant="outline">{areaOptions.length} towns</Badge>
                 </div>
               </div>
 
@@ -465,36 +467,36 @@ function AdminConsole({
                   const name = newArea.trim();
                   if (!name) return;
                   if (areaOptions.some((a) => a.toLowerCase() === name.toLowerCase())) {
-                    toast.error("That area already exists");
+                    toast.error("That town already exists");
                     return;
                   }
                   ensureArea(name);
                   setNewArea("");
-                  toast.success(`Area "${name}" added`);
+                  toast.success(`Town "${name}" added`);
                 }}
               >
                 <Input
                   value={newArea}
                   onChange={(e) => setNewArea(e.target.value)}
-                  placeholder="New area name (e.g. Brits)"
+                  placeholder="New town name (e.g. Brits)"
                   className="max-w-xs"
                 />
                 <Button type="submit" variant="secondary" size="sm">
-                  Add area
+                  Add town
                 </Button>
               </form>
 
               {areaOptions.length === 0 ? (
                 <EmptyState
-                  title="No areas yet"
-                  description="Import an Excel sheet or add areas used on truck routes, then assign customers to them."
+                  title="No towns yet"
+                  description="Import an Excel sheet or add towns used on trips, then assign customers to them."
                 />
               ) : (
                 <div className="overflow-auto rounded-xl border border-border">
                   <Table>
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
-                        <TableHead>Area</TableHead>
+                        <TableHead>Town</TableHead>
                         <TableHead className="w-32">Customers</TableHead>
                         <TableHead className="w-28" />
                       </TableRow>
@@ -515,7 +517,7 @@ function AdminConsole({
                                   const msg =
                                     count > 0
                                       ? `Delete "${area}"? ${count} customer(s) will be unassigned.`
-                                      : `Delete area "${area}"?`;
+                                      : `Delete town "${area}"?`;
                                   if (!confirm(msg)) return;
                                   deleteAreaCatalog(area);
                                   if (areaFilter === area) setAreaFilter("all");
@@ -535,13 +537,17 @@ function AdminConsole({
             </div>
           </TabsContent>
 
+          <TabsContent value="trips">
+            <TripsAdminPanel townOptions={areaOptions} />
+          </TabsContent>
+
           <TabsContent value="loading">
             <div className="panel p-4">
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h3 className="font-semibold tracking-tight">Load numbers</h3>
                   <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
-                    Enter each customer&apos;s load # for their area. Truck sheets print invoices
+                    Enter each customer&apos;s load # for their town. Truck sheets print invoices
                     from lowest number to highest.
                   </p>
                 </div>
@@ -552,13 +558,13 @@ function AdminConsole({
 
               {areaOptions.length === 0 ? (
                 <EmptyState
-                  title="No areas yet"
-                  description="Add areas and assign customers first, then set load numbers here."
+                  title="No towns yet"
+                  description="Add towns and assign customers first, then set load numbers here."
                 />
               ) : Object.values(customers).every((c) => !c.defaultArea) ? (
                 <EmptyState
                   title="No customers assigned"
-                  description="Assign customers to areas on the Customers tab, then return here to set load numbers."
+                  description="Assign customers to towns on the Customers tab, then return here to set load numbers."
                 />
               ) : (
                 <>
@@ -568,7 +574,7 @@ function AdminConsole({
                       variant={areaFilter === "all" || areaFilter === "unassigned" ? "default" : "outline"}
                       onClick={() => setAreaFilter("all")}
                     >
-                      All areas
+                      All towns
                     </Button>
                     {areaOptions
                       .filter((a) => (customersByArea[a]?.length ?? 0) > 0)

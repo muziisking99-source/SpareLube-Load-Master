@@ -51,7 +51,7 @@ export function TopBar({
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search doc, customer, or area…"
+            placeholder="Search doc, customer, or town…"
             className="h-8"
           />
           {searchResults && searchResults.length > 0 && (

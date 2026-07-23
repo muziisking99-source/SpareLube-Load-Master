@@ -1,5 +1,6 @@
-import type { CustomerMemory, Invoice, Plan, Truck } from "./types";
+import type { CustomerMemory, Invoice, Plan, Trip, Truck } from "./types";
 import { loadingNumberFor } from "./loadingOrder";
+import { townsForTruckDay } from "./trips";
 
 export function truckWeight(inv: Invoice[], truckId: string, round?: number) {
   return inv
@@ -53,9 +54,12 @@ export function allocate(
   plan: Plan,
   trucks: Truck[],
   customers: Record<string, CustomerMemory> = {},
+  trips: Trip[] = [],
 ): Plan {
   const activeTrucks = trucks.filter((t) => t.active);
-  const dayAreas = new Map(plan.truckDay.map((t) => [t.truckId, t.areas ?? []]));
+  const dayTowns = new Map(
+    plan.truckDay.map((td) => [td.truckId, townsForTruckDay(td, trips)]),
+  );
   const invoices = plan.invoices.map((i) => ({
     ...i,
     truckId: null as string | null,
@@ -78,8 +82,8 @@ export function allocate(
   for (const [area, list] of byArea) {
     for (const inv of list) {
       const candidates = activeTrucks.filter((t) => {
-        const areas = dayAreas.get(t.id) ?? [];
-        if (!areas.includes(area)) return false;
+        const towns = dayTowns.get(t.id) ?? [];
+        if (!towns.includes(area)) return false;
         const w = weights.get(t.id) ?? 0;
         return w + inv.weight <= t.maxWeight;
       });

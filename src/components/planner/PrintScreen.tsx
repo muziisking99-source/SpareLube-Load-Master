@@ -2,18 +2,28 @@ import { useState } from "react";
 import { ArrowLeft, Printer } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { compareByLoadingNumber, loadingNumberFor } from "@/lib/loadingOrder";
+import { townsForTruckDay, tripById } from "@/lib/trips";
 import { Button } from "@/components/ui/button";
 import { ScreenHeader } from "./ui/ScreenHeader";
 
 export function PrintScreen() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
   const trucks = useStore((s) => s.trucks);
+  const trips = useStore((s) => s.trips);
   const setStep = useStore((s) => s.setStep);
   const [view, setView] = useState<"truck" | "master" | null>(null);
 
   const active = trucks.filter((t) => t.active);
   const customers = useStore((s) => s.customers);
-  const dayAreas = new Map(plan.truckDay.map((td) => [td.truckId, td.areas ?? []]));
+  const dayTowns = new Map(
+    plan.truckDay.map((td) => [td.truckId, townsForTruckDay(td, trips)]),
+  );
+  const dayTripName = new Map(
+    plan.truckDay.map((td) => {
+      const trip = tripById(trips, td.tripId);
+      return [td.truckId, trip?.name ?? null] as const;
+    }),
+  );
 
   function print(v: "truck" | "master") {
     setView(v);
@@ -104,7 +114,10 @@ export function PrintScreen() {
                     Round: <b>{round}</b>
                   </div>
                   <div>
-                    Areas: <b>{(dayAreas.get(t.id) ?? []).join(", ") || "—"}</b>
+                    Trip: <b>{dayTripName.get(t.id) || "—"}</b>
+                  </div>
+                  <div>
+                    Towns: <b>{(dayTowns.get(t.id) ?? []).join(", ") || "—"}</b>
                   </div>
                   <div>Driver: ______________</div>
                 </div>

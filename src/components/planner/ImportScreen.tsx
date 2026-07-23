@@ -279,7 +279,7 @@ export function ImportScreen() {
         <section className="panel p-5">
           <ScreenHeader
             title="Review — Enter Weights"
-            description="Tab or Enter to move between weight fields. All weights and areas must be complete."
+            description="Tab or Enter to move between weight fields. All weights and towns must be complete."
             className="mb-4"
           />
           <div className="max-h-[520px] overflow-auto rounded-xl border border-border">
@@ -342,7 +342,7 @@ export function ImportScreen() {
             </div>
             <div className={`flex items-center gap-2 ${missingAreas ? "text-warn" : "text-muted-foreground"}`}>
               <TriangleAlert className="size-3.5" />
-              Missing areas: {missingAreas}
+              Missing towns: {missingAreas}
             </div>
           </div>
           <Progress value={progressPct} className="mt-3" />
@@ -463,7 +463,7 @@ function AdhocRow({
             badArea ? "border-warn" : "border-input"
           }`}
         >
-          <option value="">Select area</option>
+          <option value="">Select town</option>
           {areas.map((a) => {
             const c = areaColor(a);
             return (
@@ -574,7 +574,7 @@ function InvoiceRow({
             badArea ? "border-warn" : "border-input"
           }`}
         >
-          <option value="">Select area</option>
+          <option value="">Select town</option>
           {areas.map((a) => {
             const c = areaColor(a);
             return (

@@ -36,7 +36,7 @@ export function LoadingNumbersBoard({
   if (areas.length === 0) {
     return (
       <p className="px-1 py-4 text-sm text-muted-foreground">
-        No areas with customers yet. Assign customers to areas first.
+        No towns with customers yet. Assign customers to towns first.
       </p>
     );
   }
@@ -70,7 +70,7 @@ export function LoadingNumbersBoard({
             <div className={cn(!isOpen && "hidden")}>
               {list.length === 0 ? (
                 <p className="px-3 py-4 text-sm text-muted-foreground">
-                  No customers in this area.
+                  No customers in this town.
                 </p>
               ) : (
                 <ul className="divide-y divide-border">

@@ -29,15 +29,28 @@ export type Invoice = {
   round: number;
 };
 
+export type Trip = {
+  id: string;
+  name: string;
+  /** Ordered town names from the area/town catalog */
+  towns: string[];
+};
+
 export type TruckDay = {
   truckId: string;
-  areas: string[];
+  /** Assigned named trip for the day */
+  tripId: string | null;
+  /**
+   * Legacy multi-select towns. Used only when tripId is null.
+   * @deprecated prefer tripId
+   */
+  areas?: string[];
 };
 
 export type Plan = {
   date: string; // YYYY-MM-DD (tomorrow by default)
   areas: string[];
-  truckDay: TruckDay[]; // per truck today's areas
+  truckDay: TruckDay[]; // per truck today's trip
   invoices: Invoice[];
   locked: boolean;
   createdAt: string;
@@ -54,17 +67,21 @@ export type AuditEntry = {
   payload?: unknown;
 };
 
-/** Normalize legacy TruckDay.area → areas[] */
+/** Normalize TruckDay — supports legacy area / areas and optional tripId */
 export function normalizeTruckDay(raw: {
   truckId: string;
+  tripId?: string | null;
   areas?: string[];
   area?: string;
 }): TruckDay {
+  const tripId = raw.tripId ?? null;
+  let areas: string[] = [];
   if (Array.isArray(raw.areas)) {
-    return { truckId: raw.truckId, areas: raw.areas.filter(Boolean) };
+    areas = raw.areas.filter(Boolean);
+  } else if (typeof raw.area === "string" && raw.area) {
+    areas = [raw.area];
   }
-  const legacy = typeof raw.area === "string" ? raw.area : "";
-  return { truckId: raw.truckId, areas: legacy ? [legacy] : [] };
+  return { truckId: raw.truckId, tripId, areas };
 }
 
 export function normalizeCustomer(raw: Partial<CustomerMemory> & { name: string }): CustomerMemory {
