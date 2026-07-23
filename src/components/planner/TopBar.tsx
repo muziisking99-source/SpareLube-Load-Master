@@ -1,10 +1,25 @@
 import { Link } from "@tanstack/react-router";
-import { Settings } from "lucide-react";
+import { Cloud, CloudOff, Settings, WifiOff } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { useStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { Invoice } from "@/lib/types";
+import type { CloudStatus } from "@/lib/cloudSync";
+
+function cloudLabel(status: CloudStatus): { text: string; icon: typeof Cloud; className: string } {
+  switch (status) {
+    case "cloud":
+      return { text: "Cloud", icon: Cloud, className: "text-good" };
+    case "offline":
+      return { text: "Offline", icon: WifiOff, className: "text-warn" };
+    case "error":
+      return { text: "Cloud error", icon: CloudOff, className: "text-crit" };
+    default:
+      return { text: "Local", icon: CloudOff, className: "text-muted-foreground" };
+  }
+}
 
 export function TopBar({
   q,
@@ -15,6 +30,10 @@ export function TopBar({
   setQ: (v: string) => void;
   searchResults: Invoice[] | null;
 }) {
+  const cloudStatus = useStore((s) => s.cloudStatus);
+  const hint = cloudLabel(cloudStatus);
+  const Icon = hint.icon;
+
   return (
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md no-print">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-4 px-4">
@@ -59,6 +78,19 @@ export function TopBar({
           )}
         </div>
 
+        <span
+          className={cn(
+            "hidden sm:inline-flex items-center gap-1.5 text-xs font-medium shrink-0",
+            hint.className,
+          )}
+          title={
+            statusTitle(cloudStatus)
+          }
+        >
+          <Icon className="size-3.5" />
+          {hint.text}
+        </span>
+
         <ThemeToggle />
         <Link
           to="/admin"
@@ -73,4 +105,17 @@ export function TopBar({
       </div>
     </header>
   );
+}
+
+function statusTitle(status: CloudStatus): string {
+  switch (status) {
+    case "cloud":
+      return "Synced with Lovable Cloud";
+    case "offline":
+      return "Offline — saving on this device until you reconnect";
+    case "error":
+      return "Cloud sync failed — using local cache. Check VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY";
+    default:
+      return "Cloud not configured — data stays on this device. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY";
+  }
 }

@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { loadKey, saveKey } from "./db";
 import type {
   AuditEntry,
   CustomerMemory,
@@ -8,7 +7,6 @@ import type {
   Truck,
   TruckDay,
 } from "./types";
-import { normalizeCustomer, normalizeInvoice, normalizeTruckDay } from "./types";
 import { allocate, overflowInvoiceIds } from "./allocation";
 import {
   assignCustomerArea,
@@ -16,16 +14,11 @@ import {
   setCustomerLoadingNumber as applyLoadingNumber,
 } from "./loadingOrder";
 import { customerKey, findCustomerKey } from "./customers";
-
-const K = {
-  trucks: "lp:trucks",
-  customers: "lp:customers",
-  areaHistory: "lp:areaHistory",
-  plans: "lp:plans",
-  audit: "lp:audit",
-  currentDate: "lp:currentDate",
-  adminPin: "lp:adminPin",
-};
+import {
+  hydrateWarehouse,
+  persistWarehouse,
+  type CloudStatus,
+} from "./cloudSync";
 
 function tomorrowISO(): string {
   const d = new Date();
@@ -53,6 +46,7 @@ type UndoAction = { label: string; undo: () => void };
 
 type State = {
   hydrated: boolean;
+  cloudStatus: CloudStatus;
   trucks: Truck[];
   customers: Record<string, CustomerMemory>;
   areaHistory: string[];
@@ -136,13 +130,17 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleSave(state: State) {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    saveKey(K.trucks, state.trucks);
-    saveKey(K.customers, state.customers);
-    saveKey(K.areaHistory, state.areaHistory);
-    saveKey(K.plans, state.plans);
-    saveKey(K.audit, state.audit);
-    saveKey(K.currentDate, state.currentDate);
-    saveKey(K.adminPin, state.adminPin);
+    void persistWarehouse({
+      trucks: state.trucks,
+      customers: state.customers,
+      areaHistory: state.areaHistory,
+      plans: state.plans,
+      audit: state.audit,
+      currentDate: state.currentDate,
+      adminPin: state.adminPin,
+    }).then((status) => {
+      useStore.setState({ cloudStatus: status });
+    });
   }, 120);
 }
 
@@ -178,6 +176,7 @@ export const useStore = create<State>((set, get) => {
 
   return {
     hydrated: false,
+    cloudStatus: "local",
     trucks: [],
     customers: {},
     areaHistory: [],
@@ -190,40 +189,22 @@ export const useStore = create<State>((set, get) => {
 
     hydrate: async () => {
       try {
-        const [trucks, customersRaw, areaHistory, plansRaw, audit, currentDate, adminPin] =
-          await Promise.all([
-            loadKey<Truck[]>(K.trucks, []),
-            loadKey<Record<string, CustomerMemory>>(K.customers, {}),
-            loadKey<string[]>(K.areaHistory, []),
-            loadKey<Record<string, Plan>>(K.plans, {}),
-            loadKey<AuditEntry[]>(K.audit, []),
-            loadKey<string>(K.currentDate, tomorrowISO()),
-            loadKey<string>(K.adminPin, ""),
-          ]);
-
-        const customers: Record<string, CustomerMemory> = {};
-        for (const [k, v] of Object.entries(customersRaw ?? {})) {
-          const c = normalizeCustomer({ ...v, name: v?.name ?? k, code: v?.code ?? "" });
-          customers[customerKey(c) || k] = c;
-        }
-
-        const plans: Record<string, Plan> = {};
-        for (const [date, p] of Object.entries(plansRaw ?? {})) {
-          plans[date] = {
-            ...p,
-            truckDay: (p.truckDay ?? []).map((td) =>
-              normalizeTruckDay(td as TruckDay & { area?: string }),
-            ),
-            invoices: (p.invoices ?? []).map((i) =>
-              normalizeInvoice(i as Parameters<typeof normalizeInvoice>[0]),
-            ),
-          };
-        }
+        const { snapshot, status } = await hydrateWarehouse();
+        const {
+          trucks,
+          customers,
+          areaHistory,
+          plans,
+          audit,
+          currentDate,
+          adminPin,
+        } = snapshot;
 
         const existing = plans[currentDate];
         const showResume = !!existing && !existing.locked && existing.invoices.length > 0;
         set({
           hydrated: true,
+          cloudStatus: status,
           trucks,
           customers,
           areaHistory,
@@ -234,7 +215,7 @@ export const useStore = create<State>((set, get) => {
           showResume,
         });
       } catch {
-        set({ hydrated: true });
+        set({ hydrated: true, cloudStatus: "error" });
       }
     },
 

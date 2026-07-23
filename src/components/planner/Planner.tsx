@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { stepList, useStore } from "@/lib/store";
+import { isCloudConfigured } from "@/lib/supabase";
 import { SetupScreen } from "./SetupScreen";
 import { ImportScreen } from "./ImportScreen";
 import { AllocateScreen } from "./AllocateScreen";
@@ -15,6 +17,7 @@ import { ResumeModal } from "./ResumeModal";
 export function Planner() {
   const hydrated = useStore((s) => s.hydrated);
   const hydrate = useStore((s) => s.hydrate);
+  const cloudStatus = useStore((s) => s.cloudStatus);
   const currentDate = useStore((s) => s.currentDate);
   const plan = useStore((s) => s.plans[currentDate]);
   const setStep = useStore((s) => s.setStep);
@@ -26,7 +29,33 @@ export function Planner() {
   const [q, setQ] = useState("");
 
   useEffect(() => {
-    hydrate();
+    void hydrate();
+  }, [hydrate]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    if (cloudStatus === "error") {
+      toast.error("Cloud sync unavailable — using data on this device");
+    } else if (cloudStatus === "cloud" && isCloudConfigured()) {
+      // silent success
+    } else if (cloudStatus === "local" && !isCloudConfigured()) {
+      // no env — silent; TopBar shows Local
+    }
+  }, [hydrated, cloudStatus]);
+
+  useEffect(() => {
+    const onOnline = () => {
+      void hydrate();
+    };
+    const onOffline = () => {
+      useStore.setState({ cloudStatus: "offline" });
+    };
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
   }, [hydrate]);
 
   useEffect(() => {
