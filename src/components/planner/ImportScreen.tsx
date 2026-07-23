@@ -15,7 +15,6 @@ import { parseExcelFile } from "@/lib/parse";
 import { downloadInvoiceTemplate } from "@/lib/excelTemplates";
 import { customerKey, findCustomer } from "@/lib/customers";
 import { loadingNumberFor } from "@/lib/loadingOrder";
-import { areaColor } from "@/lib/colors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +30,7 @@ import {
 import { ScreenHeader } from "./ui/ScreenHeader";
 import { EmptyState } from "./ui/EmptyState";
 import { StatTile } from "./ui/StatTile";
+import { TownCombobox } from "./TownCombobox";
 import type { Invoice } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -456,23 +456,16 @@ function AdhocRow({
         />
       </td>
       <td className="px-3 py-2 align-middle">
-        <select
+        <TownCombobox
           value={inv.area}
-          onChange={(e) => onChange({ area: e.target.value })}
-          className={`h-9 w-full min-w-[9rem] rounded-lg border bg-panel-2 px-2 text-sm text-foreground ${
-            badArea ? "border-warn" : "border-input"
-          }`}
-        >
-          <option value="">Select town</option>
-          {areas.map((a) => {
-            const c = areaColor(a);
-            return (
-              <option key={a} value={a} style={{ color: c.text }}>
-                {a}
-              </option>
-            );
-          })}
-        </select>
+          options={areas}
+          allowEmpty
+          emptyOptionLabel="Clear town"
+          placeholder="Select town…"
+          searchPlaceholder="Search towns…"
+          onChange={(town) => onChange({ area: town })}
+          buttonClassName={`h-9 w-full min-w-[9rem] ${badArea ? "border-warn" : ""}`}
+        />
       </td>
       <td className="px-3 py-2 align-middle">
         <span className="metric-mono text-muted-foreground">
@@ -567,23 +560,16 @@ function InvoiceRow({
         />
       </TableCell>
       <TableCell>
-        <select
+        <TownCombobox
           value={inv.area}
-          onChange={(e) => onChange({ area: e.target.value })}
-          className={`h-9 w-full rounded-lg border bg-panel-2 px-2 text-sm text-foreground ${
-            badArea ? "border-warn" : "border-input"
-          }`}
-        >
-          <option value="">Select town</option>
-          {areas.map((a) => {
-            const c = areaColor(a);
-            return (
-              <option key={a} value={a} style={{ color: c.text }}>
-                {a}
-              </option>
-            );
-          })}
-        </select>
+          options={areas}
+          allowEmpty
+          emptyOptionLabel="Clear town"
+          placeholder="Select town…"
+          searchPlaceholder="Search towns…"
+          onChange={(town) => onChange({ area: town })}
+          buttonClassName={`h-9 w-full min-w-[9rem] ${badArea ? "border-warn" : ""}`}
+        />
       </TableCell>
       <TableCell>
         {known ? <Badge variant="good">Known</Badge> : <Badge variant="warn">New</Badge>}

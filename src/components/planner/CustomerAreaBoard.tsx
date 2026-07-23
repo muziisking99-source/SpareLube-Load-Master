@@ -7,6 +7,7 @@ import { customerKey } from "@/lib/customers";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { TownCombobox } from "@/components/planner/TownCombobox";
 
 function CustomerLabel({ c }: { c: CustomerMemory }) {
   return (
@@ -77,20 +78,16 @@ export function CustomerAreaBoard({
               return (
                 <li key={key} className="flex flex-wrap items-center gap-2 px-3 py-2">
                   <CustomerLabel c={c} />
-                  <select
+                  <TownCombobox
                     value=""
-                    onChange={(e) => {
-                      if (e.target.value) onSetArea(key, e.target.value);
+                    options={areaOptions}
+                    placeholder="Assign town…"
+                    searchPlaceholder="Search towns…"
+                    onChange={(town) => {
+                      if (town) onSetArea(key, town);
                     }}
-                    className="h-8 rounded-lg border border-input bg-panel-2 px-2 text-xs text-foreground"
-                  >
-                    <option value="">Assign town…</option>
-                    {areaOptions.map((a) => (
-                      <option key={a} value={a}>
-                        {a}
-                      </option>
-                    ))}
-                  </select>
+                    buttonClassName="h-8 max-w-[11rem] border-input bg-panel-2 px-2 text-xs"
+                  />
                   <Button
                     variant="ghost"
                     size="icon"
@@ -126,18 +123,15 @@ export function CustomerAreaBoard({
                   return (
                     <li key={key} className="flex items-center gap-2 bg-panel px-3 py-2">
                       <CustomerLabel c={c} />
-                      <select
+                      <TownCombobox
                         value={area}
-                        onChange={(e) => onSetArea(key, e.target.value)}
-                        className="h-8 max-w-[9rem] rounded-lg border border-input bg-panel-2 px-2 text-xs text-foreground"
-                      >
-                        <option value="">Unassign</option>
-                        {areaOptions.map((a) => (
-                          <option key={a} value={a}>
-                            {a}
-                          </option>
-                        ))}
-                      </select>
+                        options={areaOptions}
+                        allowEmpty
+                        emptyOptionLabel="Unassign"
+                        searchPlaceholder="Search towns…"
+                        onChange={(town) => onSetArea(key, town)}
+                        buttonClassName="h-8 max-w-[11rem] border-input bg-panel-2 px-2 text-xs"
+                      />
                       <Button
                         variant="ghost"
                         size="icon"

@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/planner/ui/EmptyState";
 import { FormField } from "@/components/planner/ui/FormField";
 import { AdminSearchInput, matchesQuery } from "@/components/planner/AdminSearchInput";
+import { TownCombobox } from "@/components/planner/TownCombobox";
 
 export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
   const trips = useStore((s) => s.trips);
@@ -360,20 +361,17 @@ function TownPicker({
         </ul>
       )}
       {available.length > 0 ? (
-        <select
-          className="h-9 w-full max-w-sm rounded-md border border-input bg-background px-3 text-sm"
+        <TownCombobox
           value=""
-          onChange={(e) => {
-            if (e.target.value) onAdd(e.target.value);
+          options={available}
+          placeholder="Add town…"
+          searchPlaceholder="Search towns…"
+          emptyLabel="No matching town."
+          onChange={(town) => {
+            if (town) onAdd(town);
           }}
-        >
-          <option value="">Add town…</option>
-          {available.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
+          buttonClassName="h-9 w-full max-w-sm"
+        />
       ) : (
         <p className="text-xs text-muted-foreground">
           {options.length === 0
