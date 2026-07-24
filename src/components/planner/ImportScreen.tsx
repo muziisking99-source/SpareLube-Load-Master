@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { parseExcelFile } from "@/lib/parse";
 import { downloadInvoiceTemplate } from "@/lib/excelTemplates";
-import { customerKey, findCustomer } from "@/lib/customers";
+import { findCustomer } from "@/lib/customers";
 import { loadingNumberFor } from "@/lib/loadingOrder";
 import { townsForPlan } from "@/lib/trips";
 import { Button } from "@/components/ui/button";
@@ -54,7 +54,6 @@ export function ImportScreen() {
   const pickHeld = useStore((s) => s.pickHeld);
   const updateHeld = useStore((s) => s.updateHeld);
   const removeHeld = useStore((s) => s.removeHeld);
-  const setCustomerLoadingNumber = useStore((s) => s.setCustomerLoadingNumber);
   const setStep = useStore((s) => s.setStep);
 
   const fileRef = useRef<HTMLInputElement>(null);
@@ -62,7 +61,6 @@ export function ImportScreen() {
   const [message, setMessage] = useState("");
   const [parsing, setParsing] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [pendingLoads, setPendingLoads] = useState<Record<string, number>>({});
 
   const areas = townsForPlan(plan, trips);
   const heldTownOptions = useMemo(() => {
@@ -113,7 +111,7 @@ export function ImportScreen() {
     try {
       const rows = await parseExcelFile(file);
       if (rows.length === 0) {
-        setMessage("No valid rows found. Sheet needs Doc and Customer columns.");
+        setMessage("No valid rows found. Sheet needs Customer Code, Customer Name, and Doc Number columns.");
         toast.error("No valid rows found");
         return;
       }
@@ -139,11 +137,14 @@ export function ImportScreen() {
       }[] = [];
 
       for (const r of fresh) {
-        const known = findCustomer(customers, r.customer);
+        const known =
+          (r.customerCode ? findCustomer(customers, r.customerCode) : undefined) ??
+          findCustomer(customers, r.customer);
         const area = known?.defaultArea ?? "";
+        const customerName = known?.name || r.customer;
         const row = {
           doc: r.doc,
-          customer: r.customer,
+          customer: customerName,
           weight: 0,
           area,
           source: "SYSTEM" as const,
@@ -160,25 +161,11 @@ export function ImportScreen() {
         ? holdInvoices(toHold, "town_not_on_trips")
         : 0;
 
-      const loads: Record<string, number> = { ...pendingLoads };
-      for (const r of fresh) {
-        if (r.loadingNumber) loads[r.customer] = r.loadingNumber;
-      }
-      setPendingLoads(loads);
-      for (const r of fresh) {
-        if (!r.loadingNumber) continue;
-        const known = findCustomer(customers, r.customer);
-        if (known?.defaultArea) {
-          setCustomerLoadingNumber(customerKey(known), known.defaultArea, r.loadingNumber);
-        }
-      }
-      const withLoad = fresh.filter((r) => r.loadingNumber).length;
       const parts = [
         `Parsed ${rows.length} row${rows.length === 1 ? "" : "s"} from ${file.name}`,
         `Added ${toPlan.length}`,
       ];
       if (heldCount) parts.push(`Held ${heldCount} (town not on today’s trips)`);
-      if (withLoad) parts.push(`${withLoad} with load #`);
       const msg = parts.join(". ") + ".";
       setMessage(msg);
       toast.success(msg);
@@ -194,15 +181,6 @@ export function ImportScreen() {
   function handleConfirm() {
     if (!canConfirm) return;
     const { known, learned } = confirmImport();
-    const s = useStore.getState();
-    for (const inv of s.plans[s.currentDate]?.invoices ?? []) {
-      const n = pendingLoads[inv.customer];
-      if (n && inv.area) {
-        const knownCust = findCustomer(s.customers, inv.customer);
-        setCustomerLoadingNumber(knownCust ? customerKey(knownCust) : inv.customer, inv.area, n);
-      }
-    }
-    setPendingLoads({});
     toast.success(`Saved. ${known} known customers, ${learned} newly learned.`);
     setStep("allocate");
   }
@@ -225,7 +203,7 @@ export function ImportScreen() {
       <section className="panel p-4 sm:p-5">
         <ScreenHeader
           title="Excel Import"
-          description="Upload an .xlsx or .xls sheet with Doc and Customer columns. Optional Load # is stored as you enter it; truck sheets print lowest → highest."
+          description="Upload an .xlsx or .xls sheet with Customer Code, Customer Name, and Doc Number. Load # comes from Admin."
           action={
             <Button
               type="button"
@@ -290,7 +268,7 @@ export function ImportScreen() {
               {parsing ? "Reading workbook…" : "Tap to choose Excel file"}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              .xlsx / .xls — Doc, Customer, optional Load #
+              .xlsx / .xls — Customer Code, Customer Name, Doc Number
             </p>
           </div>
           {fileName && !parsing && (
@@ -394,9 +372,7 @@ export function ImportScreen() {
                   inv={i}
                   areas={areas}
                   loadNumber={
-                    (i.area && loadingNumberFor(customers, i.customer, i.area)) ||
-                    pendingLoads[i.customer] ||
-                    0
+                    (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
                   }
                   onChange={(patch) => updateInvoice(i.id, patch)}
                   onRemove={() => removeInvoice(i.id)}
@@ -422,9 +398,7 @@ export function ImportScreen() {
                       inv={i}
                       areas={areas}
                       loadNumber={
-                        (i.area && loadingNumberFor(customers, i.customer, i.area)) ||
-                        pendingLoads[i.customer] ||
-                        0
+                        (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
                       }
                       onChange={(patch) => updateInvoice(i.id, patch)}
                       onRemove={() => removeInvoice(i.id)}
@@ -458,9 +432,7 @@ export function ImportScreen() {
                   duplicate={dup}
                   index={idx}
                   loadNumber={
-                    (i.area && loadingNumberFor(customers, i.customer, i.area)) ||
-                    pendingLoads[i.customer] ||
-                    0
+                    (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
                   }
                   onChange={(patch) => updateInvoice(i.id, patch)}
                   onRemove={() => removeInvoice(i.id)}
@@ -496,9 +468,7 @@ export function ImportScreen() {
                       duplicate={dup}
                       index={idx}
                       loadNumber={
-                        (i.area && loadingNumberFor(customers, i.customer, i.area)) ||
-                        pendingLoads[i.customer] ||
-                        0
+                        (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
                       }
                       onChange={(patch) => updateInvoice(i.id, patch)}
                       onRemove={() => removeInvoice(i.id)}

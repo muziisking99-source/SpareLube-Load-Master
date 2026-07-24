@@ -13,13 +13,13 @@ function downloadWorkbook(filename: string, sheetName: string, rows: (string | n
   XLSX.writeFile(wb, filename);
 }
 
-/** Invoice import: Doc + Customer + optional Load # */
+/** Invoice import: Customer Code + Customer Name + Doc Number */
 export function downloadInvoiceTemplate() {
   downloadWorkbook("invoice-import-template.xlsx", "Invoices", [
-    ["Doc", "Customer", "Load #"],
-    ["INV-1001", "Acme Motors", 1],
-    ["INV-1002", "Fast Lube", 2],
-    ["INV-1003", "Charis Spares", 3],
+    ["Customer Code", "Customer Name", "Doc Number"],
+    ["C001", "Acme Motors", "INV-1001"],
+    ["C002", "Fast Lube", "INV-1002"],
+    ["C003", "Charis Spares", "INV-1003"],
   ]);
 }
 

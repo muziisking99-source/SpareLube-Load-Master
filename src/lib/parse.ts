@@ -3,8 +3,8 @@ import * as XLSX from "xlsx";
 export type ParsedRow = {
   doc: string;
   customer: string;
-  /** Optional load # from Excel (applied after area is known) */
-  loadingNumber?: number;
+  /** Customer / account code from Excel when present */
+  customerCode?: string;
 };
 
 export function parseImport(text: string): ParsedRow[] {
@@ -32,12 +32,20 @@ export function parseImport(text: string): ParsedRow[] {
 
 const DOC_HEADERS = [
   "doc",
-  "document",
+  "doc number",
   "doc no",
+  "doc #",
   "docno",
+  "document",
+  "document number",
+  "document no",
   "invoice",
+  "invoice number",
   "invoice no",
+  "invoice #",
   "invoiceno",
+  "inv no",
+  "inv #",
   "number",
   "no",
 ];
@@ -54,19 +62,6 @@ const CUSTOMER_CODE_HEADERS = [
   "customer no",
   "customer id",
   "id",
-];
-const LOAD_HEADERS = [
-  "load",
-  "load #",
-  "load no",
-  "loadno",
-  "loading",
-  "loading #",
-  "loading number",
-  "loadingnumber",
-  "seq",
-  "sequence",
-  "order",
 ];
 
 function normalizeHeader(h: unknown): string {
@@ -93,14 +88,12 @@ function cellToString(v: unknown): string {
   return String(v).trim();
 }
 
-function cellToLoadNumber(v: unknown): number | undefined {
-  if (v == null || v === "") return undefined;
-  const n = typeof v === "number" ? v : Number(String(v).trim());
-  if (!Number.isFinite(n) || n < 1) return undefined;
-  return Math.floor(n);
-}
-
-/** Parse an Excel workbook (.xlsx / .xls) into Doc + Customer (+ optional Load #) rows. */
+/**
+ * Parse an Excel workbook (.xlsx / .xls) into invoice rows.
+ * Expected columns: Customer Code, Customer Name, Doc Number.
+ * Load # comes from Admin customer settings, not the invoice sheet.
+ * Legacy Doc + Customer sheets still work.
+ */
 export function parseExcel(buffer: ArrayBuffer): ParsedRow[] {
   const workbook = XLSX.read(buffer, { type: "array" });
   const sheetName = workbook.SheetNames[0];
@@ -117,15 +110,50 @@ export function parseExcel(buffer: ArrayBuffer): ParsedRow[] {
 
   const first = (matrix[0] ?? []).map(normalizeHeader);
   let docIdx = findColumnIndex(first, DOC_HEADERS);
+  let codeIdx = findColumnIndex(first, CUSTOMER_CODE_HEADERS);
   let custIdx = findColumnIndex(first, CUSTOMER_HEADERS);
-  const loadIdx = findColumnIndex(first, LOAD_HEADERS);
-  let startRow = 0;
 
-  if (docIdx >= 0 && custIdx >= 0) {
+  // Prefer Customer Name over Customer Code when fuzzy match collides
+  if (codeIdx >= 0 && custIdx === codeIdx) {
+    custIdx = -1;
+    for (let i = 0; i < first.length; i++) {
+      if (i === codeIdx || i === docIdx) continue;
+      if (CUSTOMER_HEADERS.includes(first[i]) || CUSTOMER_HEADERS.some((c) => first[i].includes(c))) {
+        custIdx = i;
+        break;
+      }
+    }
+  }
+  // "number" alone must not steal Doc Number when a clearer doc header exists elsewhere
+  if (docIdx >= 0 && (docIdx === codeIdx || docIdx === custIdx)) {
+    const clearer = findColumnIndex(first, [
+      "doc number",
+      "doc no",
+      "doc #",
+      "doc",
+      "document number",
+      "invoice number",
+      "invoice no",
+      "invoice",
+    ]);
+    if (clearer >= 0 && clearer !== codeIdx && clearer !== custIdx) docIdx = clearer;
+  }
+
+  let startRow = 0;
+  const hasHeader = docIdx >= 0 && (custIdx >= 0 || codeIdx >= 0);
+  if (hasHeader) {
     startRow = 1;
   } else {
-    docIdx = 0;
-    custIdx = 1;
+    // Legacy positional: Doc | Customer, or Customer Code | Customer Name | Doc
+    if (first.length >= 3 && !DOC_HEADERS.includes(first[0])) {
+      codeIdx = 0;
+      custIdx = 1;
+      docIdx = 2;
+    } else {
+      docIdx = 0;
+      custIdx = 1;
+      codeIdx = -1;
+    }
     startRow = 0;
   }
 
@@ -133,11 +161,19 @@ export function parseExcel(buffer: ArrayBuffer): ParsedRow[] {
   for (let r = startRow; r < matrix.length; r++) {
     const line = matrix[r] ?? [];
     const doc = cellToString(line[docIdx]);
-    const customer = cellToString(line[custIdx]);
+    const customerCode = codeIdx >= 0 ? cellToString(line[codeIdx]) : "";
+    let customer = custIdx >= 0 ? cellToString(line[custIdx]) : "";
+    if (!customer && customerCode) customer = customerCode;
     if (!doc || !customer) continue;
-    if (normalizeHeader(doc) === "doc" || DOC_HEADERS.includes(normalizeHeader(doc))) continue;
-    const loadingNumber = loadIdx >= 0 ? cellToLoadNumber(line[loadIdx]) : undefined;
-    rows.push({ doc, customer, ...(loadingNumber ? { loadingNumber } : {}) });
+    const docNorm = normalizeHeader(doc);
+    if (docNorm === "doc" || DOC_HEADERS.includes(docNorm)) continue;
+    if (customerCode && CUSTOMER_CODE_HEADERS.includes(normalizeHeader(customerCode))) continue;
+    if (CUSTOMER_HEADERS.includes(normalizeHeader(customer))) continue;
+    rows.push({
+      doc,
+      customer,
+      ...(customerCode ? { customerCode } : {}),
+    });
   }
   return rows;
 }
