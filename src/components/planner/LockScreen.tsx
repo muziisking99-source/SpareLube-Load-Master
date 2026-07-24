@@ -84,9 +84,22 @@ export function LockScreen() {
     }
   }
 
+  const truckRows = active.map((t, idx) => {
+    const list = plan.invoices.filter((i) => i.truckId === t.id);
+    const r1 = list.filter((i) => (i.round ?? 1) === 1);
+    const r2 = list.filter((i) => (i.round ?? 1) === 2);
+    const wt = r1.reduce((s, i) => s + i.weight, 0);
+    const pct = (wt / t.maxWeight) * 100;
+    const status = pct >= 95 ? "text-crit" : pct >= 80 ? "text-warn" : "text-good";
+    const statusLabel = pct >= 95 ? "Overfilling" : pct >= 80 ? "Near max" : "OK";
+    const areas = dayTowns.get(t.id) ?? [];
+    const tripName = dayTripName.get(t.id);
+    return { t, list, r2, wt, pct, status, statusLabel, areas, tripName, idx };
+  });
+
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <StatTile label="Total Invoices" value={plan.invoices.length} />
         <StatTile label="Allocated" value={allocated.length} tone="good" />
         <StatTile
@@ -95,7 +108,11 @@ export function LockScreen() {
           tone={unallocated.length ? "crit" : "muted"}
         />
         <StatTile label="Total Weight" value={`${totalWeight.toFixed(0)} kg`} />
-        <StatTile label="Fleet Utilisation" value={`${util.toFixed(0)}%`} />
+        <StatTile
+          label="Fleet Utilisation"
+          value={`${util.toFixed(0)}%`}
+          className="col-span-2 md:col-span-1"
+        />
       </div>
 
       {unallocated.length > 0 && (
@@ -107,7 +124,69 @@ export function LockScreen() {
 
       <section className="panel p-4">
         <h3 className="mb-3 font-semibold tracking-tight">Truck Summary</h3>
-        <div className="overflow-auto rounded-xl border border-border">
+
+        {/* Mobile cards */}
+        <div className="space-y-3 md:hidden">
+          {truckRows.map(
+            ({ t, list, r2, wt, pct, status, statusLabel, areas, tripName, idx }) => (
+              <div
+                key={t.id}
+                style={{ "--index": idx } as React.CSSProperties}
+                className="stagger-item space-y-2 rounded-xl border border-border bg-panel-2/40 p-4"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium">{t.name}</div>
+                    {tripName && (
+                      <div className="mt-0.5 text-sm text-muted-foreground">{tripName}</div>
+                    )}
+                  </div>
+                  <span className={`shrink-0 text-sm font-medium ${status}`}>{statusLabel}</span>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {areas.length === 0 ? (
+                    <span className="text-sm text-muted-foreground">—</span>
+                  ) : (
+                    areas.map((area) => {
+                      const c = areaColor(area);
+                      return (
+                        <span
+                          key={area}
+                          className="chip"
+                          style={{ borderColor: c.border, color: c.text, background: c.bg }}
+                        >
+                          {area}
+                        </span>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-sm">
+                  <div>
+                    <div className="text-xs text-muted-foreground">Invoices</div>
+                    <div className="metric-mono">
+                      {list.length}
+                      {r2.length > 0 ? ` (R2: ${r2.length})` : ""}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Weight</div>
+                    <div className="metric-mono">
+                      {wt.toFixed(0)} / {t.maxWeight}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Capacity</div>
+                    <div className="metric-mono">{pct.toFixed(0)}%</div>
+                  </div>
+                </div>
+              </div>
+            ),
+          )}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
@@ -120,17 +199,8 @@ export function LockScreen() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {active.map((t, idx) => {
-                const list = plan.invoices.filter((i) => i.truckId === t.id);
-                const r1 = list.filter((i) => (i.round ?? 1) === 1);
-                const r2 = list.filter((i) => (i.round ?? 1) === 2);
-                const wt = r1.reduce((s, i) => s + i.weight, 0);
-                const pct = (wt / t.maxWeight) * 100;
-                const status =
-                  pct >= 95 ? "text-crit" : pct >= 80 ? "text-warn" : "text-good";
-                const areas = dayTowns.get(t.id) ?? [];
-                const tripName = dayTripName.get(t.id);
-                return (
+              {truckRows.map(
+                ({ t, list, r2, wt, pct, status, statusLabel, areas, tripName, idx }) => (
                   <TableRow
                     key={t.id}
                     style={{ "--index": idx } as React.CSSProperties}
@@ -139,9 +209,7 @@ export function LockScreen() {
                     <TableCell className="font-medium">{t.name}</TableCell>
                     <TableCell>
                       <div className="space-y-1">
-                        {tripName && (
-                          <div className="text-sm font-medium">{tripName}</div>
-                        )}
+                        {tripName && <div className="text-sm font-medium">{tripName}</div>}
                         <div className="flex flex-wrap gap-1">
                           {areas.length === 0 ? (
                             <span className="text-muted-foreground">—</span>
@@ -152,7 +220,11 @@ export function LockScreen() {
                                 <span
                                   key={area}
                                   className="chip"
-                                  style={{ borderColor: c.border, color: c.text, background: c.bg }}
+                                  style={{
+                                    borderColor: c.border,
+                                    color: c.text,
+                                    background: c.bg,
+                                  }}
                                 >
                                   {area}
                                 </span>
@@ -170,38 +242,40 @@ export function LockScreen() {
                       {wt.toFixed(0)} / {t.maxWeight}
                     </TableCell>
                     <TableCell className="metric-mono">{pct.toFixed(0)}%</TableCell>
-                    <TableCell className={`font-medium ${status}`}>
-                      {pct >= 95 ? "Overfilling" : pct >= 80 ? "Near max" : "OK"}
-                    </TableCell>
+                    <TableCell className={`font-medium ${status}`}>{statusLabel}</TableCell>
                   </TableRow>
-                );
-              })}
+                ),
+              )}
             </TableBody>
           </Table>
         </div>
       </section>
 
-      <div className="panel flex flex-wrap items-center gap-3 p-4">
-        <Button variant="outline" onClick={() => setStep("adjust")}>
+      <div className="panel flex flex-col gap-3 p-4 sm:flex-row sm:flex-wrap sm:items-center">
+        <Button variant="outline" className="w-full sm:w-auto" onClick={() => setStep("adjust")}>
           <ArrowLeft className="size-4" />
           Back to Adjust
         </Button>
         {!plan.locked ? (
-          <Button className="ml-auto" onClick={() => setShowLockConfirm(true)}>
+          <Button className="w-full sm:ml-auto sm:w-auto" onClick={() => setShowLockConfirm(true)}>
             <Lock className="size-4" />
             Lock Manifests
           </Button>
         ) : (
           <>
-            <Badge variant="good" className="ml-auto gap-1">
+            <Badge variant="good" className="w-fit gap-1 sm:ml-auto">
               <Lock className="size-3" />
               Locked
             </Badge>
-            <Button variant="outline" onClick={() => setShowUnlock(true)}>
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={() => setShowUnlock(true)}
+            >
               <Unlock className="size-4" />
               Admin Unlock
             </Button>
-            <Button onClick={() => setStep("print")}>
+            <Button className="w-full sm:w-auto" onClick={() => setStep("print")}>
               Print / Export
               <ArrowRight className="size-4" />
             </Button>
@@ -226,7 +300,16 @@ export function LockScreen() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={showUnlock} onOpenChange={(o) => { setShowUnlock(o); if (!o) { setPin(""); setPinError(""); } }}>
+      <Dialog
+        open={showUnlock}
+        onOpenChange={(o) => {
+          setShowUnlock(o);
+          if (!o) {
+            setPin("");
+            setPinError("");
+          }
+        }}
+      >
         <DialogContent className="panel max-w-sm border-border">
           <DialogHeader>
             <DialogTitle>Admin unlock</DialogTitle>
@@ -235,13 +318,21 @@ export function LockScreen() {
             <Input
               type="password"
               value={pin}
-              onChange={(e) => { setPin(e.target.value); setPinError(""); }}
+              onChange={(e) => {
+                setPin(e.target.value);
+                setPinError("");
+              }}
               autoFocus
+              className="h-11"
             />
           </FormField>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowUnlock(false)}>Cancel</Button>
-            <Button onClick={doUnlock}>Unlock</Button>
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button variant="outline" className="w-full sm:w-auto" onClick={() => setShowUnlock(false)}>
+              Cancel
+            </Button>
+            <Button className="w-full sm:w-auto" onClick={doUnlock}>
+              Unlock
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

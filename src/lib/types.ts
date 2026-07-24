@@ -29,6 +29,18 @@ export type Invoice = {
   round: number;
 };
 
+/** Warehouse-scoped invoice waiting for a day when its town is on a trip */
+export type HeldInvoice = {
+  id: string;
+  doc: string;
+  customer: string;
+  weight: number;
+  area: string;
+  source: InvoiceSource;
+  heldAt: string;
+  reason: "town_not_on_trips" | "manual";
+};
+
 export type Trip = {
   id: string;
   name: string;
@@ -104,5 +116,20 @@ export function normalizeInvoice(raw: Partial<Invoice> & Pick<Invoice, "id" | "d
     source: raw.source ?? "SYSTEM",
     truckId: raw.truckId ?? null,
     round: raw.round === 2 ? 2 : 1,
+  };
+}
+
+export function normalizeHeldInvoice(
+  raw: Partial<HeldInvoice> & Pick<HeldInvoice, "id" | "doc" | "customer">,
+): HeldInvoice {
+  return {
+    id: raw.id,
+    doc: raw.doc,
+    customer: raw.customer,
+    weight: raw.weight ?? 0,
+    area: raw.area ?? "",
+    source: raw.source ?? "SYSTEM",
+    heldAt: raw.heldAt ?? new Date().toISOString(),
+    reason: raw.reason === "manual" ? "manual" : "town_not_on_trips",
   };
 }

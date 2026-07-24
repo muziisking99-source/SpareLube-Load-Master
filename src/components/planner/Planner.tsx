@@ -104,8 +104,8 @@ export function Planner() {
       <TopBar q={q} setQ={setQ} searchResults={searchResults} />
       <Stepper current={step} onGo={setStep} locked={plan.locked} />
 
-      <main className="mx-auto grid max-w-7xl gap-4 px-4 py-4 lg:grid-cols-[1fr_320px]">
-        <div>
+      <main className="mx-auto grid max-w-7xl gap-4 px-3 py-4 pb-24 sm:px-4 lg:grid-cols-[1fr_320px] lg:pb-4">
+        <div className="min-w-0">
           <StepTransition stepKey={step}>
             {step === "setup" && <SetupScreen />}
             {step === "import" && <ImportScreen />}

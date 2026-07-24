@@ -1,5 +1,13 @@
-import type { AuditEntry, CustomerMemory, Plan, Trip, Truck, TruckDay } from "./types";
-import { normalizeCustomer, normalizeInvoice, normalizeTruckDay } from "./types";
+import type {
+  AuditEntry,
+  CustomerMemory,
+  HeldInvoice,
+  Plan,
+  Trip,
+  Truck,
+  TruckDay,
+} from "./types";
+import { normalizeCustomer, normalizeHeldInvoice, normalizeInvoice, normalizeTruckDay } from "./types";
 import { customerKey } from "./customers";
 import { normalizeTrip } from "./trips";
 import { getSupabase, isCloudConfigured } from "./supabase";
@@ -12,6 +20,7 @@ export type CloudSnapshot = {
   trips: Trip[];
   customers: Record<string, CustomerMemory>;
   areaHistory: string[];
+  heldInvoices: HeldInvoice[];
   plans: Record<string, Plan>;
   audit: AuditEntry[];
   currentDate: string;
@@ -26,6 +35,7 @@ function emptySnapshot(currentDate: string): CloudSnapshot {
     trips: [],
     customers: {},
     areaHistory: [],
+    heldInvoices: [],
     plans: {},
     audit: [],
     currentDate,
@@ -67,24 +77,53 @@ function normalizeCustomers(
   return customers;
 }
 
+function normalizeHeldInvoices(raw: HeldInvoice[] | null | undefined): HeldInvoice[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((h) => h && typeof h.doc === "string" && typeof h.customer === "string")
+    .map((h) =>
+      normalizeHeldInvoice({
+        id: h.id || Math.random().toString(36).slice(2),
+        doc: h.doc,
+        customer: h.customer,
+        weight: h.weight,
+        area: h.area,
+        source: h.source,
+        heldAt: h.heldAt,
+        reason: h.reason,
+      }),
+    );
+}
+
 /** Load snapshot from IndexedDB cache. */
 export async function loadLocalSnapshot(): Promise<CloudSnapshot> {
-  const [trucks, tripsRaw, customersRaw, areaHistory, plansRaw, audit, currentDate, adminPin] =
-    await Promise.all([
-      loadKey<Truck[]>("lp:trucks", []),
-      loadKey<Trip[]>("lp:trips", []),
-      loadKey<Record<string, CustomerMemory>>("lp:customers", {}),
-      loadKey<string[]>("lp:areaHistory", []),
-      loadKey<Record<string, Plan>>("lp:plans", {}),
-      loadKey<AuditEntry[]>("lp:audit", []),
-      loadKey<string>("lp:currentDate", tomorrowISO()),
-      loadKey<string>("lp:adminPin", ""),
-    ]);
+  const [
+    trucks,
+    tripsRaw,
+    customersRaw,
+    areaHistory,
+    heldRaw,
+    plansRaw,
+    audit,
+    currentDate,
+    adminPin,
+  ] = await Promise.all([
+    loadKey<Truck[]>("lp:trucks", []),
+    loadKey<Trip[]>("lp:trips", []),
+    loadKey<Record<string, CustomerMemory>>("lp:customers", {}),
+    loadKey<string[]>("lp:areaHistory", []),
+    loadKey<HeldInvoice[]>("lp:heldInvoices", []),
+    loadKey<Record<string, Plan>>("lp:plans", {}),
+    loadKey<AuditEntry[]>("lp:audit", []),
+    loadKey<string>("lp:currentDate", tomorrowISO()),
+    loadKey<string>("lp:adminPin", ""),
+  ]);
   return {
     trucks,
     trips: (tripsRaw ?? []).map((t) => normalizeTrip(t)),
     customers: normalizeCustomers(customersRaw),
     areaHistory,
+    heldInvoices: normalizeHeldInvoices(heldRaw),
     plans: normalizePlans(plansRaw),
     audit,
     currentDate,
@@ -99,6 +138,7 @@ export async function saveLocalSnapshot(s: CloudSnapshot): Promise<void> {
     saveKey("lp:trips", s.trips),
     saveKey("lp:customers", s.customers),
     saveKey("lp:areaHistory", s.areaHistory),
+    saveKey("lp:heldInvoices", s.heldInvoices ?? []),
     saveKey("lp:plans", s.plans),
     saveKey("lp:audit", s.audit),
     saveKey("lp:currentDate", s.currentDate),
@@ -112,6 +152,7 @@ function snapshotHasData(s: CloudSnapshot): boolean {
     s.trips.length > 0 ||
     Object.keys(s.customers).length > 0 ||
     s.areaHistory.length > 0 ||
+    (s.heldInvoices?.length ?? 0) > 0 ||
     Object.keys(s.plans).length > 0
   );
 }
@@ -141,7 +182,7 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
         .select("id,ts,type,message,payload")
         .order("ts", { ascending: false })
         .limit(5000),
-      sb.from("app_settings").select("active_date,admin_pin").eq("id", 1).maybeSingle(),
+      sb.from("app_settings").select("active_date,admin_pin,held_invoices").eq("id", 1).maybeSingle(),
     ]);
 
   // Trips table may not exist yet before migration 002 — treat as empty
@@ -150,14 +191,33 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
       ? tripsRes.error
       : null;
 
+  // held_invoices column may not exist yet before migration 003
+  const settingsMissingHeldCol =
+    !!settingsRes.error && /held_invoices|schema cache|does not exist/i.test(settingsRes.error.message);
+
+  let settingsData = settingsRes.data as
+    | { active_date?: string; admin_pin?: string; held_invoices?: HeldInvoice[] | null }
+    | null;
+
+  if (settingsMissingHeldCol) {
+    const fallback = await sb
+      .from("app_settings")
+      .select("active_date,admin_pin")
+      .eq("id", 1)
+      .maybeSingle();
+    if (fallback.error) throw fallback.error;
+    settingsData = fallback.data;
+  } else if (settingsRes.error) {
+    throw settingsRes.error;
+  }
+
   const firstError =
     areasRes.error ||
     trucksRes.error ||
     tripsError ||
     customersRes.error ||
     plansRes.error ||
-    auditRes.error ||
-    settingsRes.error;
+    auditRes.error;
   if (firstError) throw firstError;
 
   const customers: Record<string, CustomerMemory> = {};
@@ -215,10 +275,11 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
     trips,
     customers,
     areaHistory: (areasRes.data ?? []).map((a) => a.name).sort((a, b) => a.localeCompare(b)),
+    heldInvoices: normalizeHeldInvoices(settingsData?.held_invoices),
     plans,
     audit,
-    currentDate: settingsRes.data?.active_date || tomorrowISO(),
-    adminPin: settingsRes.data?.admin_pin ?? "",
+    currentDate: settingsData?.active_date || tomorrowISO(),
+    adminPin: settingsData?.admin_pin ?? "",
   };
 }
 
@@ -388,11 +449,28 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
       id: 1,
       active_date: s.currentDate,
       admin_pin: s.adminPin ?? "",
+      held_invoices: s.heldInvoices ?? [],
       updated_at: now,
     },
     { onConflict: "id" },
   );
-  if (settingsErr) throw settingsErr;
+  if (settingsErr) {
+    // Column may not exist yet — persist without held_invoices (local still has it)
+    if (/held_invoices|schema cache|does not exist/i.test(settingsErr.message)) {
+      const { error: fallbackErr } = await sb.from("app_settings").upsert(
+        {
+          id: 1,
+          active_date: s.currentDate,
+          admin_pin: s.adminPin ?? "",
+          updated_at: now,
+        },
+        { onConflict: "id" },
+      );
+      if (fallbackErr) throw fallbackErr;
+    } else {
+      throw settingsErr;
+    }
+  }
 }
 
 /**

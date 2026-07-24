@@ -2,12 +2,14 @@ import { create } from "zustand";
 import type {
   AuditEntry,
   CustomerMemory,
+  HeldInvoice,
   Invoice,
   Plan,
   Trip,
   Truck,
   TruckDay,
 } from "./types";
+import { normalizeHeldInvoice } from "./types";
 import { allocate, overflowInvoiceIds } from "./allocation";
 import {
   assignCustomerArea,
@@ -15,7 +17,7 @@ import {
   setCustomerLoadingNumber as applyLoadingNumber,
 } from "./loadingOrder";
 import { customerKey, findCustomerKey } from "./customers";
-import { normalizeTrip } from "./trips";
+import { normalizeTrip, townsForTruckDay } from "./trips";
 import {
   hydrateWarehouse,
   persistWarehouse,
@@ -53,6 +55,7 @@ type State = {
   trips: Trip[];
   customers: Record<string, CustomerMemory>;
   areaHistory: string[];
+  heldInvoices: HeldInvoice[];
   plans: Record<string, Plan>;
   audit: AuditEntry[];
   currentDate: string;
@@ -112,6 +115,16 @@ type State = {
   removeInvoice: (id: string) => void;
   confirmImport: () => { known: number; learned: number };
 
+  // held invoices (warehouse pool across days)
+  holdInvoices: (
+    items: Omit<HeldInvoice, "id" | "heldAt" | "reason">[],
+    reason: HeldInvoice["reason"],
+  ) => number;
+  holdFromPlan: (invoiceId: string) => boolean;
+  pickHeld: (id: string) => "ok" | "duplicate" | "missing";
+  updateHeld: (id: string, patch: Partial<Pick<HeldInvoice, "doc" | "customer" | "weight" | "area">>) => void;
+  removeHeld: (id: string) => void;
+
   // allocation
   runAllocation: () => void;
   moveInvoice: (invId: string, truckId: string | null, reason?: string) => void;
@@ -148,6 +161,7 @@ function scheduleSave(state: State) {
       trips: state.trips,
       customers: state.customers,
       areaHistory: state.areaHistory,
+      heldInvoices: state.heldInvoices,
       plans: state.plans,
       audit: state.audit,
       currentDate: state.currentDate,
@@ -195,6 +209,7 @@ export const useStore = create<State>((set, get) => {
     trips: [],
     customers: {},
     areaHistory: [],
+    heldInvoices: [],
     plans: {},
     audit: [],
     currentDate: tomorrowISO(),
@@ -210,6 +225,7 @@ export const useStore = create<State>((set, get) => {
           trips,
           customers,
           areaHistory,
+          heldInvoices,
           plans,
           audit,
           currentDate,
@@ -225,6 +241,9 @@ export const useStore = create<State>((set, get) => {
           trips: (trips ?? []).map((t) => normalizeTrip(t)),
           customers,
           areaHistory,
+          heldInvoices: (heldInvoices ?? []).map((h) =>
+            normalizeHeldInvoice(h as Parameters<typeof normalizeHeldInvoice>[0]),
+          ),
           plans,
           audit,
           currentDate,
@@ -395,6 +414,7 @@ export const useStore = create<State>((set, get) => {
         };
       }),
     setTruckDayTrip: (truckId, tripId) => {
+      const s = get();
       patchPlan((p) => {
         const exists = p.truckDay.find((t) => t.truckId === truckId);
         const next: TruckDay = {
@@ -405,7 +425,12 @@ export const useStore = create<State>((set, get) => {
         const truckDay = exists
           ? p.truckDay.map((t) => (t.truckId === truckId ? next : t))
           : [...p.truckDay, next];
-        return { ...p, truckDay };
+        const areas = [
+          ...new Set(
+            truckDay.flatMap((td) => townsForTruckDay(td, s.trips)),
+          ),
+        ].sort((a, b) => a.localeCompare(b));
+        return { ...p, truckDay, areas };
       });
     },
     setTruckDayAreas: (truckId, areas) => {
@@ -676,6 +701,119 @@ export const useStore = create<State>((set, get) => {
       return { known, learned };
     },
 
+    holdInvoices: (items, reason) => {
+      const now = new Date().toISOString();
+      let added = 0;
+      mutate((s) => {
+        const existingDocs = new Set(s.heldInvoices.map((h) => h.doc));
+        const fresh = items.filter((item) => item.doc && !existingDocs.has(item.doc));
+        added = fresh.length;
+        if (!fresh.length) return {};
+        return {
+          heldInvoices: [
+            ...s.heldInvoices,
+            ...fresh.map((item) =>
+              normalizeHeldInvoice({
+                id: uid(),
+                doc: item.doc,
+                customer: item.customer,
+                weight: item.weight,
+                area: item.area,
+                source: item.source,
+                heldAt: now,
+                reason,
+              }),
+            ),
+          ],
+        };
+      });
+      if (added) log("held.add", `Held ${added} invoice(s) (${reason})`);
+      return added;
+    },
+
+    holdFromPlan: (invoiceId) => {
+      const s = get();
+      const plan = s.plans[s.currentDate];
+      const inv = plan?.invoices.find((i) => i.id === invoiceId);
+      if (!inv || !inv.doc) return false;
+      if (s.heldInvoices.some((h) => h.doc === inv.doc)) {
+        // Already held — just remove from plan
+        patchPlan((p) => ({ ...p, invoices: p.invoices.filter((i) => i.id !== invoiceId) }));
+        return true;
+      }
+      const now = new Date().toISOString();
+      mutate((st) => ({
+        heldInvoices: [
+          ...st.heldInvoices,
+          normalizeHeldInvoice({
+            id: uid(),
+            doc: inv.doc,
+            customer: inv.customer,
+            weight: inv.weight,
+            area: inv.area,
+            source: inv.source,
+            heldAt: now,
+            reason: "manual",
+          }),
+        ],
+        plans: {
+          ...st.plans,
+          [st.currentDate]: {
+            ...(st.plans[st.currentDate] ?? emptyPlan(st.currentDate)),
+            invoices: (st.plans[st.currentDate]?.invoices ?? []).filter((i) => i.id !== invoiceId),
+          },
+        },
+      }));
+      log("held.from_plan", `Held ${inv.doc} from plan`);
+      return true;
+    },
+
+    pickHeld: (id) => {
+      const s = get();
+      const held = s.heldInvoices.find((h) => h.id === id);
+      if (!held) return "missing";
+      const plan = s.plans[s.currentDate] ?? emptyPlan(s.currentDate);
+      if (held.doc && plan.invoices.some((i) => i.doc === held.doc)) return "duplicate";
+      mutate((st) => ({
+        heldInvoices: st.heldInvoices.filter((h) => h.id !== id),
+        plans: {
+          ...st.plans,
+          [st.currentDate]: {
+            ...(st.plans[st.currentDate] ?? emptyPlan(st.currentDate)),
+            invoices: [
+              ...(st.plans[st.currentDate]?.invoices ?? []),
+              {
+                id: uid(),
+                doc: held.doc,
+                customer: held.customer,
+                weight: held.weight,
+                area: held.area,
+                source: held.source,
+                truckId: null,
+                round: 1,
+              },
+            ],
+          },
+        },
+      }));
+      log("held.pick", `Picked ${held.doc} into plan`);
+      return "ok";
+    },
+
+    updateHeld: (id, patch) => {
+      mutate((s) => ({
+        heldInvoices: s.heldInvoices.map((h) => (h.id === id ? { ...h, ...patch } : h)),
+      }));
+    },
+
+    removeHeld: (id) => {
+      const held = get().heldInvoices.find((h) => h.id === id);
+      mutate((s) => ({
+        heldInvoices: s.heldInvoices.filter((h) => h.id !== id),
+      }));
+      if (held) log("held.remove", `Removed held ${held.doc}`);
+    },
+
     runAllocation: () => {
       const s = get();
       patchPlan((p) => allocate(p, s.trucks, s.customers, s.trips));
@@ -822,6 +960,7 @@ export const useStore = create<State>((set, get) => {
           trips: s.trips,
           customers: s.customers,
           areaHistory: s.areaHistory,
+          heldInvoices: s.heldInvoices,
           plans: s.plans,
           audit: s.audit,
         },

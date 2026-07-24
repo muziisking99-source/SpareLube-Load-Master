@@ -7,6 +7,15 @@ import { stepLabels, stepList } from "@/lib/store";
 import type { PlanStep } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+const shortLabels: Record<PlanStep, string> = {
+  setup: "Setup",
+  import: "Import",
+  allocate: "Allocate",
+  adjust: "Adjust",
+  lock: "Lock",
+  print: "Print",
+};
+
 export function Stepper({
   current,
   onGo,
@@ -20,8 +29,8 @@ export function Stepper({
 
   return (
     <nav className="border-b border-border no-print">
-      <div className="mx-auto max-w-7xl px-4">
-        <div className="flex items-center gap-1 overflow-x-auto py-2">
+      <div className="mx-auto max-w-7xl px-3 sm:px-4">
+        <div className="flex items-center gap-0.5 overflow-x-auto py-2 sm:gap-1">
           {stepList.map((s, idx) => {
             const active = s === current;
             const done = idx < currentIdx;
@@ -34,7 +43,7 @@ export function Stepper({
                 onClick={() => onGo(s)}
                 style={{ "--index": idx } as React.CSSProperties}
                 className={cn(
-                  "stagger-item group relative flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors",
+                  "stagger-item group relative flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-2 text-left transition-colors sm:gap-2 sm:px-3",
                   active
                     ? "text-primary"
                     : done
@@ -44,7 +53,7 @@ export function Stepper({
               >
                 <span
                   className={cn(
-                    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold metric-mono transition-colors",
+                    "metric-mono flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors sm:h-6 sm:w-6",
                     active
                       ? "bg-primary text-primary-foreground"
                       : done
@@ -54,7 +63,12 @@ export function Stepper({
                 >
                   {stepNum}
                 </span>
-                <span className="whitespace-nowrap text-sm font-medium">{stepLabels[s]}</span>
+                <span className="whitespace-nowrap text-sm font-medium sm:hidden">
+                  {shortLabels[s]}
+                </span>
+                <span className="hidden whitespace-nowrap text-sm font-medium sm:inline">
+                  {stepLabels[s]}
+                </span>
                 {active && (
                   <motion.span
                     layoutId="step-indicator"

@@ -18,18 +18,21 @@ export type Database = {
         Row: {
           active_date: string
           admin_pin: string
+          held_invoices: Json
           id: number
           updated_at: string
         }
         Insert: {
           active_date: string
           admin_pin?: string
+          held_invoices?: Json
           id: number
           updated_at?: string
         }
         Update: {
           active_date?: string
           admin_pin?: string
+          held_invoices?: Json
           id?: number
           updated_at?: string
         }

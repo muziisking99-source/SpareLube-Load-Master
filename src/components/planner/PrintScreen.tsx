@@ -48,16 +48,16 @@ export function PrintScreen() {
 
   return (
     <div className="space-y-4">
-      <div className="panel flex flex-wrap gap-3 p-4 no-print">
-        <Button variant="outline" onClick={() => setStep("lock")}>
+      <div className="panel flex flex-col gap-3 p-4 no-print sm:flex-row sm:flex-wrap">
+        <Button variant="outline" className="w-full sm:w-auto" onClick={() => setStep("lock")}>
           <ArrowLeft className="size-4" />
           Back
         </Button>
-        <Button onClick={() => print("truck")}>
+        <Button className="w-full sm:w-auto" onClick={() => print("truck")}>
           <Printer className="size-4" />
           Truck Load Sheets
         </Button>
-        <Button onClick={() => print("master")}>
+        <Button className="w-full sm:w-auto" onClick={() => print("master")}>
           <Printer className="size-4" />
           Master Reconciliation
         </Button>

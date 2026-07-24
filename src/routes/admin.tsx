@@ -389,19 +389,20 @@ function AdminConsole({
   return (
     <div className="min-h-[100dvh]">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-3 sm:gap-4 sm:px-4">
           <Link
             to="/"
-            className="inline-flex h-8 items-center gap-2 rounded-lg px-3 text-sm font-medium text-foreground hover:bg-secondary/50"
+            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg px-2 text-sm font-medium text-foreground hover:bg-secondary/50 sm:h-8 sm:px-3"
           >
             <ArrowLeft className="size-4" />
-            Load Planner
+            <span className="hidden sm:inline">Load Planner</span>
+            <span className="sm:hidden">Back</span>
           </Link>
-          <span className="text-sm text-muted-foreground">Admin Console</span>
+          <span className="truncate text-sm text-muted-foreground">Admin</span>
           <ThemeToggle className="ml-auto" />
-          <Button variant="outline" size="sm" onClick={download}>
+          <Button variant="outline" size="sm" className="shrink-0 size-9 px-0 sm:size-auto sm:px-3" onClick={download} aria-label="Export JSON" title="Export JSON">
             <Download className="size-4" />
-            Export JSON
+            <span className="hidden sm:inline">Export JSON</span>
           </Button>
         </div>
       </header>

@@ -69,42 +69,57 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
 
   return (
     <div className="space-y-5">
-      <div className="panel sticky top-[7.5rem] z-20 flex flex-wrap items-center gap-3 p-4 no-print">
+      <div className="panel sticky top-14 z-20 flex flex-col gap-2 p-3 no-print sm:top-[7.5rem] sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:p-4">
         {mode === "allocate" ? (
           <>
             <Button
+              className="w-full sm:w-auto"
               onClick={() => {
                 runAllocation();
                 toast.success("Allocation complete");
               }}
             >
               <Play className="size-4" />
-              Run Allocation (Even Balance)
+              <span className="sm:hidden">Run Allocation</span>
+              <span className="hidden sm:inline">Run Allocation (Even Balance)</span>
             </Button>
             <Button
               variant="outline"
+              className="w-full sm:w-auto"
               onClick={() => setStep("adjust")}
               disabled={allocated.length === 0}
             >
-              Review and Adjust
+              <span className="sm:hidden">Review</span>
+              <span className="hidden sm:inline">Review and Adjust</span>
               <ArrowRight className="size-4" />
             </Button>
           </>
         ) : (
           <>
-            <Button variant="outline" onClick={undo} disabled={undoStack.length === 0}>
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={undo}
+              disabled={undoStack.length === 0}
+            >
               <Undo2 className="size-4" />
               Undo{undoStack[0] ? ` (${undoStack[0].label})` : ""}
             </Button>
             {selected.length > 0 && (
-              <div className="ml-auto flex flex-wrap items-center gap-2">
+              <div className="flex w-full flex-col gap-2 sm:ml-auto sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
                 <span className="text-sm text-muted-foreground">{selected.length} selected</span>
-                <Button size="sm" variant="secondary" onClick={() => setMoveTarget({ inv: null, bulk: true })}>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-10 w-full sm:h-8 sm:w-auto"
+                  onClick={() => setMoveTarget({ inv: null, bulk: true })}
+                >
                   Move Selected
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
+                  className="h-10 w-full sm:h-8 sm:w-auto"
                   onClick={() => {
                     bulkMove(selected, null);
                     clearSel();
@@ -112,12 +127,12 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                 >
                   Move to Unallocated
                 </Button>
-                <Button size="sm" variant="ghost" onClick={clearSel}>
+                <Button size="sm" variant="ghost" className="h-10 w-full sm:h-8 sm:w-auto" onClick={clearSel}>
                   Clear
                 </Button>
               </div>
             )}
-            <Button className="ml-auto" onClick={() => setStep("lock")}>
+            <Button className="w-full sm:ml-auto sm:w-auto" onClick={() => setStep("lock")}>
               Proceed to Lock
               <ArrowRight className="size-4" />
             </Button>
@@ -463,21 +478,31 @@ function InvoiceChip({
   const c = areaColor(inv.area || "—");
   return (
     <span
-      className="chip transition-colors"
+      className="chip min-h-11 items-center gap-1.5 py-2 transition-colors sm:min-h-0 sm:py-1"
       style={{
         borderColor: selected ? "var(--primary)" : c.border,
         background: selected ? "color-mix(in oklab, var(--primary) 15%, transparent)" : c.bg,
       }}
     >
       {mode === "adjust" && (
-        <Checkbox checked={selected} onCheckedChange={onToggleSelect} className="mr-1" />
+        <Checkbox
+          checked={selected}
+          onCheckedChange={onToggleSelect}
+          className="mr-0.5 size-5 sm:size-4"
+        />
       )}
-      <span className="metric-mono text-[11px]">{inv.doc}</span>
+      <span className="metric-mono text-xs sm:text-[11px]">{inv.doc}</span>
       <span className="max-w-[14ch] truncate opacity-80">{inv.customer}</span>
       <span className="metric-mono opacity-80">{inv.weight}kg</span>
       {mode === "adjust" && (
         <>
-          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={onMove}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-9 px-3 text-xs sm:h-6 sm:px-2 sm:text-[10px]"
+            onClick={onMove}
+          >
             Move
           </Button>
           {inv.truckId && onUnallocate && (
@@ -485,11 +510,11 @@ function InvoiceChip({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-6"
+              className="size-9 sm:size-6"
               onClick={onUnallocate}
               title="Move to unallocated"
             >
-              <Ban className="size-3" />
+              <Ban className="size-4 sm:size-3" />
             </Button>
           )}
         </>
@@ -535,7 +560,7 @@ function MoveDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="panel max-w-xl border-border">
+      <DialogContent className="panel max-h-[90dvh] max-w-xl overflow-y-auto border-border">
         <DialogHeader>
           <DialogTitle>
             {bulk ? `Move ${selectedIds.length} invoices` : `Move ${invoice?.doc}`}
@@ -550,7 +575,7 @@ function MoveDialog({
             </>
           )}
         </p>
-        <div className="max-h-72 space-y-1 overflow-auto">
+        <div className="max-h-[40dvh] space-y-1 overflow-auto sm:max-h-72">
           {trucks.map((t) => {
             const currentWeight = truckWeight(plan.invoices, t.id, 1);
             const remaining = t.maxWeight - currentWeight;
@@ -571,14 +596,14 @@ function MoveDialog({
                   target === t.id ? "border-primary bg-primary/5" : "border-border hover:bg-panel-2"
                 } ${!fits ? "opacity-40" : ""}`}
               >
-                <div className="flex justify-between text-sm">
+                <div className="flex flex-col gap-1 text-sm sm:flex-row sm:justify-between">
                   <span>
                     <b>{t.name}</b>
                     {tripLabel ? ` · ${tripLabel}` : ""}
                     {" · "}
                     {truckTowns.join(", ") || "—"}
                   </span>
-                  <span className="metric-mono">
+                  <span className="metric-mono shrink-0">
                     {currentWeight.toFixed(0)} / {t.maxWeight} kg
                   </span>
                 </div>
@@ -599,12 +624,12 @@ function MoveDialog({
             );
           })}
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid gap-3 sm:grid-cols-2">
           <FormField label="Reason">
             <select
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              className="h-9 w-full rounded-lg border border-input bg-panel-2 px-2 text-sm"
+              className="h-10 w-full rounded-lg border border-input bg-panel-2 px-2 text-sm sm:h-9"
             >
               <option>Customer Request</option>
               <option>Weight Balance</option>
@@ -614,19 +639,29 @@ function MoveDialog({
           </FormField>
           {reason === "Other" && (
             <FormField label="Detail">
-              <Input value={reasonText} onChange={(e) => setReasonText(e.target.value)} />
+              <Input value={reasonText} onChange={(e) => setReasonText(e.target.value)} className="h-10 sm:h-9" />
             </FormField>
           )}
         </div>
-        <DialogFooter className="flex-row justify-between sm:justify-between">
-          <Button type="button" variant="ghost" className="text-muted-foreground" onClick={() => onSubmit(null, reasonFinal)}>
+        <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full text-muted-foreground sm:w-auto"
+            onClick={() => onSubmit(null, reasonFinal)}
+          >
             Move to Unallocated
           </Button>
-          <div className="flex gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>
+          <div className="flex w-full gap-2 sm:w-auto">
+            <Button type="button" variant="outline" className="flex-1 sm:flex-none" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="button" disabled={!target} onClick={() => onSubmit(target, reasonFinal)}>
+            <Button
+              type="button"
+              className="flex-1 sm:flex-none"
+              disabled={!target}
+              onClick={() => onSubmit(target, reasonFinal)}
+            >
               Move
             </Button>
           </div>
