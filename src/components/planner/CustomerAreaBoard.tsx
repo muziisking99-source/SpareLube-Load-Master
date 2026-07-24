@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { TownCombobox } from "@/components/planner/TownCombobox";
+import { LoadingNumberInput } from "@/components/planner/LoadingNumbersBoard";
 
 function CustomerLabel({ c }: { c: CustomerMemory }) {
   return (
@@ -30,6 +31,7 @@ export function CustomerAreaBoard({
   areaOptions,
   hideEmptyUnassigned = false,
   onSetArea,
+  onSetLoadingNumber,
   onDelete,
 }: {
   areas: string[];
@@ -38,6 +40,7 @@ export function CustomerAreaBoard({
   areaOptions: string[];
   hideEmptyUnassigned?: boolean;
   onSetArea: (key: string, area: string) => void;
+  onSetLoadingNumber: (key: string, area: string, n: number) => void;
   onDelete: (key: string) => void;
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>(() => {
@@ -45,6 +48,8 @@ export function CustomerAreaBoard({
     for (const a of areas) init[a] = true;
     return init;
   });
+  /** Draft load # for unassigned customers, applied when a town is chosen */
+  const [pendingLoad, setPendingLoad] = useState<Record<string, number>>({});
 
   useEffect(() => {
     setOpen((prev) => {
@@ -60,48 +65,77 @@ export function CustomerAreaBoard({
     setOpen((o) => ({ ...o, [key]: !o[key] }));
   }
 
+  function assignTown(key: string, town: string) {
+    onSetArea(key, town);
+    if (town) {
+      const n = pendingLoad[key];
+      if (n && n > 0) {
+        onSetLoadingNumber(key, town, n);
+        setPendingLoad((p) => {
+          const { [key]: _, ...rest } = p;
+          return rest;
+        });
+      }
+    }
+  }
+
   return (
     <div className="space-y-3">
       {!(hideEmptyUnassigned && unassigned.length === 0) && (
-      <AreaSection
-        title="Unassigned"
-        count={unassigned.length}
-        open={open.unassigned !== false}
-        onToggle={() => toggle("unassigned")}
-      >
-        {unassigned.length === 0 ? (
-          <p className="px-3 py-4 text-sm text-muted-foreground">No unassigned customers.</p>
-        ) : (
-          <ul className="divide-y divide-border">
-            {unassigned.map((c) => {
-              const key = customerKey(c);
-              return (
-                <li key={key} className="flex flex-wrap items-center gap-2 px-3 py-2">
-                  <CustomerLabel c={c} />
-                  <TownCombobox
-                    value=""
-                    options={areaOptions}
-                    placeholder="Assign town…"
-                    searchPlaceholder="Search towns…"
-                    onChange={(town) => {
-                      if (town) onSetArea(key, town);
-                    }}
-                    buttonClassName="h-8 max-w-[11rem] border-input bg-panel-2 px-2 text-xs"
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-8 text-muted-foreground hover:text-destructive"
-                    onClick={() => onDelete(key)}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </AreaSection>
+        <AreaSection
+          title="Unassigned"
+          count={unassigned.length}
+          open={open.unassigned !== false}
+          onToggle={() => toggle("unassigned")}
+        >
+          {unassigned.length === 0 ? (
+            <p className="px-3 py-4 text-sm text-muted-foreground">No unassigned customers.</p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {unassigned.map((c) => {
+                const key = customerKey(c);
+                return (
+                  <li key={key} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                    <CustomerLabel c={c} />
+                    <TownCombobox
+                      value=""
+                      options={areaOptions}
+                      placeholder="Assign town…"
+                      searchPlaceholder="Search towns…"
+                      onChange={(town) => {
+                        if (town) assignTown(key, town);
+                      }}
+                      buttonClassName="h-8 max-w-[11rem] border-input bg-panel-2 px-2 text-xs"
+                    />
+                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      Load #
+                      <LoadingNumberInput
+                        value={pendingLoad[key] ?? 0}
+                        onCommit={(n) =>
+                          setPendingLoad((p) => {
+                            if (n <= 0) {
+                              const { [key]: _, ...rest } = p;
+                              return rest;
+                            }
+                            return { ...p, [key]: n };
+                          })
+                        }
+                      />
+                    </label>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:text-destructive"
+                      onClick={() => onDelete(key)}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </AreaSection>
       )}
 
       {areas.map((area) => {
@@ -121,8 +155,13 @@ export function CustomerAreaBoard({
                 {list.map((c) => {
                   const key = customerKey(c);
                   return (
-                    <li key={key} className="flex items-center gap-2 bg-panel px-3 py-2">
+                    <li key={key} className="flex flex-wrap items-center gap-2 bg-panel px-3 py-2">
                       <CustomerLabel c={c} />
+                      {c.loadingNumber > 0 && (
+                        <Badge variant="outline" className="metric-mono shrink-0 px-1.5">
+                          #{c.loadingNumber}
+                        </Badge>
+                      )}
                       <TownCombobox
                         value={area}
                         options={areaOptions}
@@ -132,6 +171,13 @@ export function CustomerAreaBoard({
                         onChange={(town) => onSetArea(key, town)}
                         buttonClassName="h-8 max-w-[11rem] border-input bg-panel-2 px-2 text-xs"
                       />
+                      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        Load #
+                        <LoadingNumberInput
+                          value={c.loadingNumber || 0}
+                          onCommit={(n) => onSetLoadingNumber(key, area, n)}
+                        />
+                      </label>
                       <Button
                         variant="ghost"
                         size="icon"

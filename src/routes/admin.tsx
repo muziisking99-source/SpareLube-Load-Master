@@ -427,8 +427,8 @@ function AdminConsole({
                   <div>
                     <h3 className="font-semibold tracking-tight">Customers</h3>
                     <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
-                      Import Customer Code + Customer Name from Excel, then assign each to a town.
-                      Set load numbers on the Load # tab.
+                      Import Customer Code + Customer Name from Excel, then assign each to a town
+                      and set their load # here. The Load # tab is still available for bulk numbering.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -502,6 +502,12 @@ function AdminConsole({
                     onSetArea={(name, area) => {
                       setCustomerArea(name, area);
                       toast.success(area ? `${name} → ${area}` : `${name} unassigned`);
+                    }}
+                    onSetLoadingNumber={(name, area, n) => {
+                      setCustomerLoadingNumber(name, area, n);
+                      toast.success(
+                        n > 0 ? `${name} load #${n} in ${area}` : `${name} load # cleared`,
+                      );
                     }}
                     onDelete={(name) => {
                       if (confirm(`Delete ${name}?`)) {
@@ -662,8 +668,8 @@ function AdminConsole({
                 <div>
                   <h3 className="font-semibold tracking-tight">Load numbers</h3>
                   <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
-                    Enter each customer&apos;s load # for their town. Truck sheets print invoices
-                    from lowest number to highest.
+                    Enter each customer&apos;s load # for their town (also available on the Customers
+                    tab). Truck sheets print invoices from lowest number to highest.
                   </p>
                 </div>
                 <Badge variant="outline">

@@ -113,12 +113,14 @@ export function LoadingNumbersBoard({
   );
 }
 
-function LoadingNumberInput({
+export function LoadingNumberInput({
   value,
   onCommit,
+  className,
 }: {
   value: number;
   onCommit: (n: number) => void;
+  className?: string;
 }) {
   const [draft, setDraft] = useState(value > 0 ? String(value) : "");
 
@@ -143,7 +145,7 @@ function LoadingNumberInput({
       min={1}
       value={draft}
       placeholder="#"
-      className="h-8 w-20 metric-mono text-foreground"
+      className={cn("h-8 w-20 metric-mono text-foreground", className)}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
