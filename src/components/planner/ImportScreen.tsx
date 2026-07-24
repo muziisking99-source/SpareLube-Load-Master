@@ -31,6 +31,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ScreenHeader } from "./ui/ScreenHeader";
+import { CollapsibleSection } from "./ui/CollapsibleSection";
 import { EmptyState } from "./ui/EmptyState";
 import { StatTile } from "./ui/StatTile";
 import { FormField } from "./ui/FormField";
@@ -281,18 +282,17 @@ export function ImportScreen() {
         {message && <p className="mt-3 text-sm text-muted-foreground">{message}</p>}
       </section>
 
-      <section className="panel p-4 sm:p-5">
-        <ScreenHeader
-          title="Held for later"
-          description="Invoices waiting for a day when their town is on a trip. Always visible across days."
-          action={
-            <Badge variant="outline" className="gap-1">
-              <Inbox className="size-3.5" />
-              {heldInvoices.length}
-            </Badge>
-          }
-          className="mb-4"
-        />
+      <CollapsibleSection
+        title="Held for later"
+        description="Invoices waiting for a day when their town is on a trip. Always visible across days."
+        defaultOpen={false}
+        action={
+          <Badge variant="outline" className="gap-1">
+            <Inbox className="size-3.5" />
+            {heldInvoices.length}
+          </Badge>
+        }
+      >
         {sortedHeld.length === 0 ? (
           <EmptyState
             title="No held invoices"
@@ -348,7 +348,7 @@ export function ImportScreen() {
             </div>
           </>
         )}
-      </section>
+      </CollapsibleSection>
 
       <section className="panel p-4 sm:p-5">
         <ScreenHeader

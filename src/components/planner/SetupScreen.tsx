@@ -28,6 +28,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ScreenHeader } from "./ui/ScreenHeader";
+import { CollapsibleSection } from "./ui/CollapsibleSection";
 import { EmptyState } from "./ui/EmptyState";
 import { FormField } from "./ui/FormField";
 import { AdminSearchInput, matchesQuery } from "./AdminSearchInput";
@@ -35,6 +36,8 @@ import { cn } from "@/lib/utils";
 
 export function SetupScreen() {
   const plan = useStore((s) => s.plans[s.currentDate]);
+  const plans = useStore((s) => s.plans);
+  const currentDate = useStore((s) => s.currentDate);
   const trucks = useStore((s) => s.trucks);
   const trips = useStore((s) => s.trips);
   const setDate = useStore((s) => s.setDate);
@@ -44,6 +47,7 @@ export function SetupScreen() {
   const deleteTruck = useStore((s) => s.deleteTruck);
   const setStep = useStore((s) => s.setStep);
   const ensureTruckDay = useStore((s) => s.ensureTruckDay);
+  const deleteDay = useStore((s) => s.deleteDay);
 
   const [showAddTruck, setShowAddTruck] = useState(false);
   const [truckForm, setTruckForm] = useState({ name: "", maxWeight: 3000 });
@@ -73,6 +77,23 @@ export function SetupScreen() {
         matchesQuery(t.name, q) || t.towns.some((town) => matchesQuery(town, q)),
     );
   }, [trips, tripSearch]);
+
+  const dailyPlans = useMemo(
+    () => Object.values(plans).sort((a, b) => b.date.localeCompare(a.date)),
+    [plans],
+  );
+
+  const todayAssignments = useMemo(() => {
+    return activeTrucks.map((t) => {
+      const td = truckDayById.get(t.id);
+      const trip = tripById(trips, td?.tripId);
+      return {
+        truckId: t.id,
+        truckName: t.name,
+        tripName: trip?.name ?? (td?.areas?.length ? td.areas.join(", ") : null),
+      };
+    });
+  }, [activeTrucks, plan?.truckDay, trips]);
 
   const continuePanel = (
     <>
@@ -121,23 +142,21 @@ export function SetupScreen() {
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
       <div className="space-y-6">
-        <section className="panel p-4 sm:p-5">
-          <ScreenHeader
-            title="Today's Trips"
-            description="Named runs available to assign to trucks. Manage trips in Admin."
-            action={
-              <FormField label="Plan date" className="gap-1">
-                <Input
-                  type="date"
-                  value={plan?.date ?? ""}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="h-9 w-full sm:h-8 sm:w-auto"
-                />
-              </FormField>
-            }
-            className="mb-4"
-          />
-
+        <CollapsibleSection
+          title="Today's Trips"
+          description="Named runs available to assign to trucks. Manage trips in Admin."
+          defaultOpen={false}
+          action={
+            <FormField label="Plan date" className="gap-1">
+              <Input
+                type="date"
+                value={plan?.date ?? ""}
+                onChange={(e) => setDate(e.target.value)}
+                className="h-9 w-full sm:h-8 sm:w-auto"
+              />
+            </FormField>
+          }
+        >
           {trips.length === 0 ? (
             <EmptyState
               title="No trips yet"
@@ -192,7 +211,103 @@ export function SetupScreen() {
               )}
             </>
           )}
-        </section>
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          title="Daily plans"
+          description="Saved plans by date. Open a day to continue or review that plan."
+          defaultOpen={dailyPlans.length > 0}
+          action={
+            <Badge variant="outline" className="metric-mono font-normal">
+              {dailyPlans.length}
+            </Badge>
+          }
+        >
+          {todayAssignments.length > 0 && (
+            <div className="mb-4 rounded-xl border border-border bg-panel-2/40 p-3">
+              <div className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Today’s assignments · {currentDate}
+              </div>
+              <ul className="space-y-1.5 text-sm">
+                {todayAssignments.map((a) => (
+                  <li key={a.truckId} className="flex justify-between gap-3">
+                    <span className="truncate font-medium">{a.truckName}</span>
+                    <span className="shrink-0 text-muted-foreground">{a.tripName ?? "No trip"}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {dailyPlans.length === 0 ? (
+            <EmptyState
+              title="No plans yet"
+              description="Plans are saved automatically as you work each day."
+            />
+          ) : (
+            <div className="overflow-auto rounded-xl border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-panel-2 hover:bg-panel-2">
+                    <TableHead>Date</TableHead>
+                    <TableHead>Invoices</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {dailyPlans.map((p) => {
+                    const isCurrent = p.date === currentDate;
+                    return (
+                      <TableRow key={p.date} className={cn(isCurrent && "bg-primary/5")}>
+                        <TableCell className="metric-mono">
+                          {p.date}
+                          {isCurrent && (
+                            <Badge variant="outline" className="ml-2 text-[10px]">
+                              Current
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>{p.invoices.length}</TableCell>
+                        <TableCell>
+                          {p.locked ? <Badge variant="good">Locked</Badge> : "—"}
+                        </TableCell>
+                        <TableCell className="space-x-2 text-right">
+                          {!isCurrent && (
+                            <Button
+                              variant="link"
+                              size="sm"
+                              className="h-auto p-0"
+                              onClick={() => {
+                                setDate(p.date);
+                                toast.success(`Opened plan ${p.date}`);
+                              }}
+                            >
+                              Open
+                            </Button>
+                          )}
+                          <Button
+                            variant="link"
+                            size="sm"
+                            className="h-auto p-0 text-destructive"
+                            onClick={() => {
+                              if (confirm(`Delete plan ${p.date}?`)) {
+                                deleteDay(p.date);
+                                toast.success("Plan deleted");
+                              }
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CollapsibleSection>
 
         <section className="panel p-4 sm:p-5">
           <ScreenHeader

@@ -225,11 +225,69 @@
   .print-root th,
   .print-root td {
     border: 1px solid #666;
-    padding: 6px 8px;
+    padding: 7px 10px;
     text-align: left;
     font-size: 12px;
+  }
+  .print-root thead th {
+    background: #f3f3f3 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .print-root tfoot td {
+    border-top: 2px solid #333 !important;
+    background: #fafafa !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .print-root .inv-count-chip {
+    background: #efefef !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
 .print-root {
   display: none;
+}
+.print-root .load-sheet {
+  padding: 28px 32px;
+}
+.print-root table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.print-root th,
+.print-root td {
+  border: 1px solid #666;
+  padding: 7px 10px;
+  text-align: left;
+  font-size: 12px;
+}
+.print-root thead th {
+  background: #f3f3f3;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.print-root tfoot td {
+  border-top: 2px solid #333;
+  background: #fafafa;
+}
+
+@media print {
+  .print-root .load-sheet {
+    break-after: page;
+    page-break-after: always;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .print-root .load-sheet:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
 }
