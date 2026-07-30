@@ -164,8 +164,16 @@ function AdminConsole({
   const [truckSearch, setTruckSearch] = useState("");
   const [auditSearch, setAuditSearch] = useState("");
   const [planSearch, setPlanSearch] = useState("");
+  const [adminTab, setAdminTab] = useState("customers");
+  const openAuditPanel = useStore((s) => s.openAuditPanel);
+  const refreshPlanIndex = useStore((s) => s.refreshPlanIndex);
   const fileRef = useRef<HTMLInputElement>(null);
   const areaFileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (adminTab === "audit") openAuditPanel();
+    if (adminTab === "plans") void refreshPlanIndex();
+  }, [adminTab, openAuditPanel, refreshPlanIndex]);
 
   const areaOptions = useMemo(() => {
     const set = new Set<string>(areaHistory);
@@ -414,7 +422,11 @@ function AdminConsole({
       </header>
 
       <main className="mx-auto max-w-6xl p-4">
-        <Tabs defaultValue="customers" className="w-full">
+        <Tabs
+          value={adminTab}
+          onValueChange={setAdminTab}
+          className="w-full"
+        >
           <TabsList className="mb-4 h-auto w-full flex-wrap justify-start gap-1 bg-secondary p-1">
             <TabsTrigger value="customers">Customers</TabsTrigger>
             <TabsTrigger value="areas">Towns</TabsTrigger>

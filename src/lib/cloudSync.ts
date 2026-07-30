@@ -14,6 +14,8 @@ import { getSupabase, isCloudConfigured } from "./supabase";
 import { loadKey, saveKey } from "./db";
 
 const MIGRATED_KEY = "lp:cloudMigrated";
+const PLAN_HYDRATE_DAYS = 60;
+const UPSERT_CHUNK = 250;
 
 export type CloudSnapshot = {
   trucks: Truck[];
@@ -28,6 +30,91 @@ export type CloudSnapshot = {
 };
 
 export type CloudStatus = "offline" | "local" | "cloud" | "error";
+
+export type DirtySlice =
+  | "trucks"
+  | "trips"
+  | "customers"
+  | "areas"
+  | "plans"
+  | "settings"
+  | "audit";
+
+type DirtyFlags = {
+  slices: Set<DirtySlice>;
+  planDates: Set<string>;
+  deletedPlanDates: Set<string>;
+  pendingAuditIds: Set<string>;
+  pruneAudit: boolean;
+};
+
+function emptyDirty(): DirtyFlags {
+  return {
+    slices: new Set(),
+    planDates: new Set(),
+    deletedPlanDates: new Set(),
+    pendingAuditIds: new Set(),
+    pruneAudit: false,
+  };
+}
+
+let dirty = emptyDirty();
+
+export function markDirty(
+  slices: DirtySlice[],
+  opts?: {
+    planDate?: string;
+    planDates?: string[];
+    deletedPlanDate?: string;
+    auditId?: string;
+    pruneAudit?: boolean;
+  },
+): void {
+  for (const s of slices) dirty.slices.add(s);
+  if (opts?.planDate) dirty.planDates.add(opts.planDate);
+  if (opts?.planDates) for (const d of opts.planDates) dirty.planDates.add(d);
+  if (opts?.deletedPlanDate) dirty.deletedPlanDates.add(opts.deletedPlanDate);
+  if (opts?.auditId) dirty.pendingAuditIds.add(opts.auditId);
+  if (opts?.pruneAudit) dirty.pruneAudit = true;
+}
+
+export function markAllDirty(snapshot?: CloudSnapshot): void {
+  for (const s of [
+    "trucks",
+    "trips",
+    "customers",
+    "areas",
+    "plans",
+    "settings",
+    "audit",
+  ] as DirtySlice[]) {
+    dirty.slices.add(s);
+  }
+  if (snapshot) {
+    for (const d of Object.keys(snapshot.plans)) dirty.planDates.add(d);
+    for (const a of snapshot.audit.slice(0, 5000)) dirty.pendingAuditIds.add(a.id);
+  }
+}
+
+function takeDirty(): DirtyFlags {
+  const taken = dirty;
+  dirty = emptyDirty();
+  return taken;
+}
+
+function mergeDirty(a: DirtyFlags, b: DirtyFlags): DirtyFlags {
+  const out = emptyDirty();
+  for (const s of a.slices) out.slices.add(s);
+  for (const s of b.slices) out.slices.add(s);
+  for (const d of a.planDates) out.planDates.add(d);
+  for (const d of b.planDates) out.planDates.add(d);
+  for (const d of a.deletedPlanDates) out.deletedPlanDates.add(d);
+  for (const d of b.deletedPlanDates) out.deletedPlanDates.add(d);
+  for (const id of a.pendingAuditIds) out.pendingAuditIds.add(id);
+  for (const id of b.pendingAuditIds) out.pendingAuditIds.add(id);
+  out.pruneAudit = a.pruneAudit || b.pruneAudit;
+  return out;
+}
 
 function emptySnapshot(currentDate: string): CloudSnapshot {
   return {
@@ -46,6 +133,12 @@ function emptySnapshot(currentDate: string): CloudSnapshot {
 function tomorrowISO(): string {
   const d = new Date();
   d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function daysAgoISO(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
   return d.toISOString().slice(0, 10);
 }
 
@@ -93,6 +186,20 @@ function normalizeHeldInvoices(raw: HeldInvoice[] | null | undefined): HeldInvoi
         reason: h.reason,
       }),
     );
+}
+
+async function upsertInChunks(
+  table: string,
+  rows: Record<string, unknown>[],
+  onConflict: string,
+): Promise<void> {
+  const sb = getSupabase();
+  if (!sb || rows.length === 0) return;
+  for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
+    const chunk = rows.slice(i, i + UPSERT_CHUNK);
+    const { error } = await sb.from(table).upsert(chunk as never, { onConflict });
+    if (error) throw error;
+  }
 }
 
 /** Load snapshot from IndexedDB cache. */
@@ -161,37 +268,80 @@ function cloudHasData(s: CloudSnapshot): boolean {
   return snapshotHasData(s);
 }
 
+/** Fetch a single plan day from cloud (older dates outside hydrate window). */
+export async function fetchPlanFromCloud(date: string): Promise<Plan | null> {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data, error } = await sb
+    .from("plans")
+    .select("date,areas,truck_day,invoices,locked,created_at,step")
+    .eq("date", date)
+    .maybeSingle();
+  if (error || !data) return null;
+  return normalizePlans({
+    [date]: {
+      date: data.date,
+      areas: (data.areas as string[]) ?? [],
+      truckDay: (data.truck_day as TruckDay[]) ?? [],
+      invoices: (data.invoices as Plan["invoices"]) ?? [],
+      locked: !!data.locked,
+      createdAt: data.created_at ?? new Date().toISOString(),
+      step: (data.step as Plan["step"]) ?? "setup",
+    },
+  })[date];
+}
+
+/** Lightweight plan index for Admin Plans (no invoices JSON). */
+export async function listPlanIndexFromCloud(): Promise<
+  { date: string; locked: boolean; createdAt: string; step: Plan["step"] }[]
+> {
+  const sb = getSupabase();
+  if (!sb) return [];
+  const { data, error } = await sb
+    .from("plans")
+    .select("date,locked,created_at,step")
+    .order("date", { ascending: false });
+  if (error || !data) return [];
+  return data.map((row) => ({
+    date: row.date,
+    locked: !!row.locked,
+    createdAt: row.created_at ?? new Date().toISOString(),
+    step: (row.step as Plan["step"]) ?? "setup",
+  }));
+}
+
 /** Fetch full warehouse state from Lovable Cloud. */
 export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
   const sb = getSupabase();
   if (!sb) return null;
 
-  // Select trips without stop_order first so a missing column cannot empty the list
-  const [areasRes, trucksRes, tripsRes, customersRes, plansRes, auditRes, settingsRes] =
-    await Promise.all([
-      sb.from("areas").select("name"),
-      sb.from("trucks").select("id,name,max_weight,active"),
-      sb.from("trips").select("id,name,towns"),
-      sb
-        .from("customers")
-        .select("id,code,name,default_area,loading_number,first_seen"),
-      sb
-        .from("plans")
-        .select("date,areas,truck_day,invoices,locked,created_at,step"),
-      sb
-        .from("audit_entries")
-        .select("id,ts,type,message,payload")
-        .order("ts", { ascending: false })
-        .limit(5000),
-      sb.from("app_settings").select("active_date,admin_pin,held_invoices").eq("id", 1).maybeSingle(),
-    ]);
+  const cutoff = daysAgoISO(PLAN_HYDRATE_DAYS);
 
-  // Trips table may not exist yet before migration 002 — treat as empty only if table missing
+  let tripsRes = await sb.from("trips").select("id,name,towns,stop_order");
+  if (tripsRes.error && /stop_order|schema cache|does not exist/i.test(tripsRes.error.message)) {
+    tripsRes = await sb.from("trips").select("id,name,towns");
+  }
+
+  const [areasRes, trucksRes, customersRes, plansRes, auditRes, settingsRes] = await Promise.all([
+    sb.from("areas").select("name"),
+    sb.from("trucks").select("id,name,max_weight,active"),
+    sb.from("customers").select("id,code,name,default_area,loading_number,first_seen"),
+    sb
+      .from("plans")
+      .select("date,areas,truck_day,invoices,locked,created_at,step")
+      .gte("date", cutoff),
+    sb
+      .from("audit_entries")
+      .select("id,ts,type,message")
+      .order("ts", { ascending: false })
+      .limit(5000),
+    sb.from("app_settings").select("active_date,admin_pin,held_invoices").eq("id", 1).maybeSingle(),
+  ]);
+
   const tripsTableMissing =
     !!tripsRes.error && /does not exist|schema cache/i.test(tripsRes.error.message);
   const tripsError = tripsRes.error && !tripsTableMissing ? tripsRes.error : null;
 
-  // held_invoices column may not exist yet before migration 003
   const settingsMissingHeldCol =
     !!settingsRes.error && /held_invoices|schema cache|does not exist/i.test(settingsRes.error.message);
 
@@ -219,6 +369,19 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
     plansRes.error ||
     auditRes.error;
   if (firstError) throw firstError;
+
+  const activeDate = settingsData?.active_date || tomorrowISO();
+  if (activeDate < cutoff) {
+    const extra = await sb
+      .from("plans")
+      .select("date,areas,truck_day,invoices,locked,created_at,step")
+      .eq("date", activeDate)
+      .maybeSingle();
+    if (!extra.error && extra.data) {
+      (plansRes.data as typeof extra.data[] | null) ??= [];
+      (plansRes.data as NonNullable<typeof plansRes.data>).push(extra.data);
+    }
+  }
 
   const customers: Record<string, CustomerMemory> = {};
   for (const row of customersRes.data ?? []) {
@@ -254,37 +417,26 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
     active: !!t.active,
   }));
 
-  // Optional stop_order enrichment (migration 004) — never fail hydrate if missing
-  const stopOrderById = new Map<string, Record<string, number>>();
-  if (!tripsTableMissing && (tripsRes.data?.length ?? 0) > 0) {
-    const stopRes = await sb.from("trips").select("id,stop_order");
-    if (!stopRes.error && stopRes.data) {
-      for (const row of stopRes.data) {
-        const raw = (row as { id: string; stop_order?: unknown }).stop_order;
-        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-          stopOrderById.set(row.id, raw as Record<string, number>);
-        }
-      }
-    }
-  }
-
   const trips: Trip[] = tripsTableMissing
     ? []
-    : (tripsRes.data ?? []).map((t) =>
-        normalizeTrip({
-          id: t.id,
-          name: t.name,
-          towns: Array.isArray(t.towns) ? (t.towns as string[]) : [],
-          stopOrder: stopOrderById.get(t.id) ?? {},
-        }),
-      );
+    : (tripsRes.data ?? []).map((t) => {
+        const row = t as { id: string; name: string; towns: unknown; stop_order?: unknown };
+        return normalizeTrip({
+          id: row.id,
+          name: row.name,
+          towns: Array.isArray(row.towns) ? (row.towns as string[]) : [],
+          stopOrder:
+            row.stop_order && typeof row.stop_order === "object" && !Array.isArray(row.stop_order)
+              ? (row.stop_order as Record<string, number>)
+              : {},
+        });
+      });
 
   const audit: AuditEntry[] = (auditRes.data ?? []).map((a) => ({
     id: a.id,
     ts: a.ts,
     type: a.type,
     message: a.message,
-    payload: a.payload ?? undefined,
   }));
 
   return {
@@ -295,22 +447,17 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
     heldInvoices: normalizeHeldInvoices(settingsData?.held_invoices),
     plans,
     audit,
-    currentDate: settingsData?.active_date || tomorrowISO(),
+    currentDate: activeDate,
     adminPin: settingsData?.admin_pin ?? "",
   };
 }
 
-/** Upsert full warehouse state to Lovable Cloud. */
-export async function persistToCloud(s: CloudSnapshot): Promise<void> {
-  const sb = getSupabase();
-  if (!sb) return;
-
-  const now = new Date().toISOString();
-
-  // Areas: replace set
+async function syncAreas(s: CloudSnapshot): Promise<void> {
+  const sb = getSupabase()!;
   const { data: existingAreas, error: areasReadErr } = await sb.from("areas").select("name");
   if (areasReadErr) throw areasReadErr;
   const wantAreas = new Set(s.areaHistory.filter(Boolean));
+  if (wantAreas.size === 0 && (existingAreas?.length ?? 0) > 0) return;
   const haveAreas = new Set((existingAreas ?? []).map((a) => a.name));
   const areasToDelete = [...haveAreas].filter((n) => !wantAreas.has(n));
   if (areasToDelete.length) {
@@ -323,49 +470,51 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
       .upsert([...wantAreas].map((name) => ({ name })), { onConflict: "name" });
     if (error) throw error;
   }
+}
 
-  // Trucks: replace set — never wipe all cloud trucks from an empty local snapshot
+async function syncTrucks(s: CloudSnapshot, now: string): Promise<void> {
+  const sb = getSupabase()!;
+  if (s.trucks.length === 0) return;
   const { data: existingTrucks, error: trucksReadErr } = await sb.from("trucks").select("id");
   if (trucksReadErr) throw trucksReadErr;
-  if (s.trucks.length > 0) {
-    const wantTruckIds = new Set(s.trucks.map((t) => t.id));
-    const trucksToDelete = (existingTrucks ?? [])
-      .map((t) => t.id)
-      .filter((id) => !wantTruckIds.has(id));
-    if (trucksToDelete.length) {
-      const { error } = await sb.from("trucks").delete().in("id", trucksToDelete);
-      if (error) throw error;
-    }
-    const { error } = await sb.from("trucks").upsert(
-      s.trucks.map((t) => ({
-        id: t.id,
-        name: t.name,
-        max_weight: t.maxWeight,
-        active: t.active,
-        updated_at: now,
-      })),
-      { onConflict: "id" },
-    );
+  const wantTruckIds = new Set(s.trucks.map((t) => t.id));
+  const trucksToDelete = (existingTrucks ?? [])
+    .map((t) => t.id)
+    .filter((id) => !wantTruckIds.has(id));
+  if (trucksToDelete.length) {
+    const { error } = await sb.from("trucks").delete().in("id", trucksToDelete);
     if (error) throw error;
   }
+  await upsertInChunks(
+    "trucks",
+    s.trucks.map((t) => ({
+      id: t.id,
+      name: t.name,
+      max_weight: t.maxWeight,
+      active: t.active,
+      updated_at: now,
+    })),
+    "id",
+  );
+}
 
-  // Trips: replace set (skip if table missing)
-  // CRITICAL: never delete cloud trips when local list is empty — that usually means
-  // a bad hydrate, not an intentional wipe of every trip.
+async function syncTrips(s: CloudSnapshot, now: string): Promise<void> {
+  const sb = getSupabase()!;
+  if (s.trips.length === 0) return;
   const { data: existingTrips, error: tripsReadErr } = await sb.from("trips").select("id");
-  if (tripsReadErr && !/does not exist|schema cache/i.test(tripsReadErr.message)) {
-    throw tripsReadErr;
+  if (tripsReadErr && /does not exist|schema cache/i.test(tripsReadErr.message)) return;
+  if (tripsReadErr) throw tripsReadErr;
+  const wantTripIds = new Set(s.trips.map((t) => t.id));
+  const tripsToDelete = (existingTrips ?? [])
+    .map((t) => t.id)
+    .filter((id) => !wantTripIds.has(id));
+  if (tripsToDelete.length) {
+    const { error } = await sb.from("trips").delete().in("id", tripsToDelete);
+    if (error) throw error;
   }
-  if (!tripsReadErr && s.trips.length > 0) {
-    const wantTripIds = new Set(s.trips.map((t) => t.id));
-    const tripsToDelete = (existingTrips ?? [])
-      .map((t) => t.id)
-      .filter((id) => !wantTripIds.has(id));
-    if (tripsToDelete.length) {
-      const { error } = await sb.from("trips").delete().in("id", tripsToDelete);
-      if (error) throw error;
-    }
-    const { error } = await sb.from("trips").upsert(
+  try {
+    await upsertInChunks(
+      "trips",
       s.trips.map((t) => ({
         id: t.id,
         name: t.name,
@@ -373,109 +522,117 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
         stop_order: t.stopOrder ?? {},
         updated_at: now,
       })),
-      { onConflict: "id" },
+      "id",
     );
-    // stop_order column may not exist yet before migration 004
-    if (error && /stop_order|schema cache|does not exist/i.test(error.message)) {
-      const { error: fallbackErr } = await sb.from("trips").upsert(
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/stop_order|schema cache|does not exist/i.test(msg)) {
+      await upsertInChunks(
+        "trips",
         s.trips.map((t) => ({
           id: t.id,
           name: t.name,
           towns: t.towns,
           updated_at: now,
         })),
-        { onConflict: "id" },
+        "id",
       );
-      if (fallbackErr) throw fallbackErr;
-    } else if (error) {
-      throw error;
+    } else {
+      throw err;
     }
   }
+}
 
-  // Customers: replace set
+async function syncCustomers(s: CloudSnapshot, now: string): Promise<void> {
+  const sb = getSupabase()!;
+  const ids = Object.keys(s.customers);
+  if (ids.length === 0) return;
   const { data: existingCustomers, error: custReadErr } = await sb.from("customers").select("id");
   if (custReadErr) throw custReadErr;
-  const wantCustIds = new Set(Object.keys(s.customers));
+  const wantCustIds = new Set(ids);
   const custToDelete = (existingCustomers ?? [])
     .map((c) => c.id)
     .filter((id) => !wantCustIds.has(id));
-  if (custToDelete.length) {
-    const { error } = await sb.from("customers").delete().in("id", custToDelete);
+  for (let i = 0; i < custToDelete.length; i += UPSERT_CHUNK) {
+    const chunk = custToDelete.slice(i, i + UPSERT_CHUNK);
+    const { error } = await sb.from("customers").delete().in("id", chunk);
     if (error) throw error;
   }
-  const customerRows = Object.entries(s.customers).map(([id, c]) => ({
-    id,
-    code: c.code ?? "",
-    name: c.name,
-    default_area: c.defaultArea ?? "",
-    loading_number: c.loadingNumber ?? 0,
-    first_seen: c.firstSeen || now,
-    updated_at: now,
-  }));
-  if (customerRows.length) {
-    const { error } = await sb.from("customers").upsert(customerRows, { onConflict: "id" });
+  await upsertInChunks(
+    "customers",
+    Object.entries(s.customers).map(([id, c]) => ({
+      id,
+      code: c.code ?? "",
+      name: c.name,
+      default_area: c.defaultArea ?? "",
+      loading_number: c.loadingNumber ?? 0,
+      first_seen: c.firstSeen || now,
+      updated_at: now,
+    })),
+    "id",
+  );
+}
+
+async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Promise<void> {
+  const sb = getSupabase()!;
+  const dates = flags.planDates.size > 0 ? [...flags.planDates] : Object.keys(s.plans);
+  if (dates.length === 0 && flags.deletedPlanDates.size === 0) return;
+
+  if (flags.deletedPlanDates.size > 0) {
+    const { error } = await sb.from("plans").delete().in("date", [...flags.deletedPlanDates]);
     if (error) throw error;
   }
 
-  // Plans: replace set
-  const { data: existingPlans, error: plansReadErr } = await sb.from("plans").select("date");
-  if (plansReadErr) throw plansReadErr;
-  const wantDates = new Set(Object.keys(s.plans));
-  const plansToDelete = (existingPlans ?? [])
-    .map((p) => p.date)
-    .filter((d) => !wantDates.has(d));
-  if (plansToDelete.length) {
-    const { error } = await sb.from("plans").delete().in("date", plansToDelete);
-    if (error) throw error;
-  }
-  const planRows = Object.values(s.plans).map((p) => ({
-    date: p.date,
-    areas: p.areas ?? [],
-    truck_day: p.truckDay ?? [],
-    invoices: p.invoices ?? [],
-    locked: !!p.locked,
-    created_at: p.createdAt || now,
-    step: p.step || "setup",
-    updated_at: now,
-  }));
-  if (planRows.length) {
-    const { error } = await sb.from("plans").upsert(planRows, { onConflict: "date" });
-    if (error) throw error;
-  }
+  const planRows = dates
+    .map((d) => s.plans[d])
+    .filter(Boolean)
+    .map((p) => ({
+      date: p.date,
+      areas: p.areas ?? [],
+      truck_day: p.truckDay ?? [],
+      invoices: p.invoices ?? [],
+      locked: !!p.locked,
+      created_at: p.createdAt || now,
+      step: p.step || "setup",
+      updated_at: now,
+    }));
+  if (planRows.length) await upsertInChunks("plans", planRows, "date");
+}
 
-  // Audit: upsert recent entries (cap 5000 locally); prune extras on cloud
-  const audit = s.audit.slice(0, 5000);
-  if (audit.length) {
-    const { error } = await sb.from("audit_entries").upsert(
-      audit.map((a) => ({
+async function syncAuditAppend(s: CloudSnapshot, flags: DirtyFlags): Promise<void> {
+  const sb = getSupabase()!;
+  const pending = s.audit.filter((a) => flags.pendingAuditIds.has(a.id));
+  if (pending.length) {
+    await upsertInChunks(
+      "audit_entries",
+      pending.map((a) => ({
         id: a.id,
         ts: a.ts,
         type: a.type,
         message: a.message,
         payload: a.payload ?? null,
       })),
-      { onConflict: "id" },
+      "id",
     );
-    if (error) throw error;
   }
-  const keepIds = audit.map((a) => a.id);
-  if (keepIds.length) {
-    // Delete audits not in keep set — use not.in when list is manageable
-    const { data: allAudit, error: auditListErr } = await sb.from("audit_entries").select("id");
-    if (auditListErr) throw auditListErr;
-    const keep = new Set(keepIds);
-    const drop = (allAudit ?? []).map((a) => a.id).filter((id) => !keep.has(id));
-    // Batch deletes
-    for (let i = 0; i < drop.length; i += 200) {
-      const chunk = drop.slice(i, i + 200);
-      const { error } = await sb.from("audit_entries").delete().in("id", chunk);
-      if (error) throw error;
-    }
-  } else {
-    const { error } = await sb.from("audit_entries").delete().neq("id", "");
-    if (error) throw error;
-  }
+  if (!flags.pruneAudit) return;
 
+  const { data: allAudit, error: listErr } = await sb
+    .from("audit_entries")
+    .select("id,ts")
+    .order("ts", { ascending: false });
+  if (listErr) throw listErr;
+  const keep = new Set((allAudit ?? []).slice(0, 5000).map((a) => a.id));
+  const drop = (allAudit ?? []).map((a) => a.id).filter((id) => !keep.has(id));
+  for (let i = 0; i < drop.length; i += UPSERT_CHUNK) {
+    const chunk = drop.slice(i, i + UPSERT_CHUNK);
+    const { error } = await sb.from("audit_entries").delete().in("id", chunk);
+    if (error) throw error;
+  }
+}
+
+async function syncSettings(s: CloudSnapshot, now: string): Promise<void> {
+  const sb = getSupabase()!;
   const { error: settingsErr } = await sb.from("app_settings").upsert(
     {
       id: 1,
@@ -487,7 +644,6 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
     { onConflict: "id" },
   );
   if (settingsErr) {
-    // Column may not exist yet — persist without held_invoices (local still has it)
     if (/held_invoices|schema cache|does not exist/i.test(settingsErr.message)) {
       const { error: fallbackErr } = await sb.from("app_settings").upsert(
         {
@@ -505,16 +661,33 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
   }
 }
 
-/**
- * Prefer cloud data, but never discard local trips/trucks that cloud is missing.
- * Protects against empty-cloud / failed-select hydrates wiping warehouse lists.
- */
+export async function persistToCloud(s: CloudSnapshot, flags?: DirtyFlags): Promise<void> {
+  if (!getSupabase()) return;
+
+  let f = flags;
+  if (!f || f.slices.size === 0) {
+    markAllDirty(s);
+    f = takeDirty();
+  }
+  if (f.slices.size === 0) return;
+
+  const now = new Date().toISOString();
+  const tasks: Promise<void>[] = [];
+  if (f.slices.has("areas")) tasks.push(syncAreas(s));
+  if (f.slices.has("trucks")) tasks.push(syncTrucks(s, now));
+  if (f.slices.has("trips")) tasks.push(syncTrips(s, now));
+  if (f.slices.has("customers")) tasks.push(syncCustomers(s, now));
+  if (f.slices.has("plans")) tasks.push(syncPlans(s, now, f));
+  if (f.slices.has("settings")) tasks.push(syncSettings(s, now));
+  await Promise.all(tasks);
+  if (f.slices.has("audit")) await syncAuditAppend(s, f);
+}
+
 function mergeCloudWithLocal(cloud: CloudSnapshot, local: CloudSnapshot): CloudSnapshot {
   const tripsById = new Map(cloud.trips.map((t) => [t.id, normalizeTrip(t)]));
   for (const t of local.trips) {
     if (!tripsById.has(t.id)) tripsById.set(t.id, normalizeTrip(t));
   }
-  // If cloud returned zero trips but local still has some, keep local entirely
   const trips =
     cloud.trips.length === 0 && local.trips.length > 0
       ? local.trips.map((t) => normalizeTrip(t))
@@ -525,19 +698,29 @@ function mergeCloudWithLocal(cloud: CloudSnapshot, local: CloudSnapshot): CloudS
     if (!trucksById.has(t.id)) trucksById.set(t.id, t);
   }
   const trucks =
-    cloud.trucks.length === 0 && local.trucks.length > 0
-      ? local.trucks
-      : [...trucksById.values()];
+    cloud.trucks.length === 0 && local.trucks.length > 0 ? local.trucks : [...trucksById.values()];
 
-  return { ...cloud, trips, trucks };
+  const plans = { ...cloud.plans };
+  for (const [d, p] of Object.entries(local.plans)) {
+    if (!plans[d]) plans[d] = p;
+  }
+
+  // Prefer cloud order; keep local payloads when hydrate omitted them.
+  const auditById = new Map(cloud.audit.map((a) => [a.id, a]));
+  for (const a of local.audit) {
+    const existing = auditById.get(a.id);
+    if (!existing) auditById.set(a.id, a);
+    else if (existing.payload === undefined && a.payload !== undefined) {
+      auditById.set(a.id, { ...existing, payload: a.payload });
+    }
+  }
+  const audit = [...auditById.values()]
+    .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0))
+    .slice(0, 5000);
+
+  return { ...cloud, trips, trucks, plans, audit };
 }
 
-/**
- * Hydrate preferring Cloud when configured & online.
- * Migrates IndexedDB → Cloud once if cloud is empty.
- * When preferLocal is true (unsynced local edits / persist in flight), return local
- * and do not overwrite IndexedDB with cloud.
- */
 export async function hydrateWarehouse(opts?: {
   preferLocal?: boolean;
 }): Promise<{
@@ -575,7 +758,8 @@ export async function hydrateWarehouse(opts?: {
     let migrated = false;
 
     if (!cloudHasData(cloud) && snapshotHasData(local) && !migratedFlag) {
-      await persistToCloud(local);
+      markAllDirty(local);
+      await persistToCloud(local, takeDirty());
       await saveKey(MIGRATED_KEY, true);
       cloud = local;
       migrated = true;
@@ -583,7 +767,6 @@ export async function hydrateWarehouse(opts?: {
       await saveKey(MIGRATED_KEY, true);
     }
 
-    // Restore any local trips/trucks missing from cloud (e.g. wiped by a bad empty persist)
     const needsRecovery =
       (cloud.trips.length === 0 && local.trips.length > 0) ||
       (cloud.trucks.length === 0 && local.trucks.length > 0) ||
@@ -594,7 +777,8 @@ export async function hydrateWarehouse(opts?: {
 
     if (needsRecovery) {
       try {
-        await persistToCloud(cloud);
+        markAllDirty(cloud);
+        await persistToCloud(cloud, takeDirty());
       } catch (err) {
         console.error("Failed to re-push recovered trips/trucks", err);
       }
@@ -608,11 +792,11 @@ export async function hydrateWarehouse(opts?: {
   }
 }
 
-/** True while a cloud upload is running or a newer snapshot is queued behind it. */
 let persistInFlight = false;
 let persistTail: Promise<CloudStatus> = Promise.resolve("local");
 let queuedSnapshot: CloudSnapshot | null = null;
 let queuedGeneration = 0;
+let queuedDirty: DirtyFlags = emptyDirty();
 let lastSyncedGeneration = 0;
 let latestGeneration = 0;
 
@@ -622,48 +806,66 @@ export function bumpSyncGeneration(): number {
 }
 
 export function isWarehouseDirty(): boolean {
-  return latestGeneration > lastSyncedGeneration || persistInFlight || queuedSnapshot !== null;
+  return (
+    latestGeneration > lastSyncedGeneration ||
+    persistInFlight ||
+    queuedSnapshot !== null ||
+    dirty.slices.size > 0
+  );
 }
 
-async function persistToCloudIfNeeded(s: CloudSnapshot): Promise<CloudStatus> {
+async function persistToCloudIfNeeded(
+  s: CloudSnapshot,
+  flags: DirtyFlags,
+): Promise<CloudStatus> {
   if (!isCloudConfigured()) return "local";
   if (typeof navigator !== "undefined" && !navigator.onLine) return "offline";
 
   try {
-    await persistToCloud(s);
+    await persistToCloud(s, flags);
     return "cloud";
   } catch (err) {
     console.error("Cloud persist failed", err);
+    dirty = mergeDirty(dirty, flags);
     return "error";
   }
 }
 
-/**
- * Persist to IDB always; also to Cloud when online & configured.
- * Single-flight: overlapping calls queue the latest snapshot.
- */
 export async function persistWarehouse(
   s: CloudSnapshot,
   generation?: number,
+  opts?: { skipLocal?: boolean; skipCloud?: boolean },
 ): Promise<CloudStatus> {
   const gen = generation ?? bumpSyncGeneration();
   latestGeneration = Math.max(latestGeneration, gen);
-  await saveLocalSnapshot(s);
 
+  if (!opts?.skipLocal) {
+    await saveLocalSnapshot(s);
+  }
+
+  // Local-only write: keep dirty flags for the cloud debounce.
+  if (opts?.skipCloud) {
+    if (!isCloudConfigured()) return "local";
+    if (typeof navigator !== "undefined" && !navigator.onLine) return "offline";
+    return latestGeneration > lastSyncedGeneration ? "local" : "cloud";
+  }
+
+  const flags = takeDirty();
   queuedSnapshot = s;
   queuedGeneration = gen;
+  queuedDirty = mergeDirty(queuedDirty, flags);
 
   const runQueue = async (): Promise<CloudStatus> => {
     let status: CloudStatus = "local";
     while (queuedSnapshot) {
       const snap = queuedSnapshot;
       const snapGen = queuedGeneration;
+      const snapDirty = queuedDirty;
       queuedSnapshot = null;
+      queuedDirty = emptyDirty();
       persistInFlight = true;
       try {
-        // IDB already written for latest; rewrite in case an older run raced
-        await saveLocalSnapshot(snap);
-        status = await persistToCloudIfNeeded(snap);
+        status = await persistToCloudIfNeeded(snap, snapDirty);
         if (status === "cloud" && snapGen >= lastSyncedGeneration) {
           lastSyncedGeneration = snapGen;
         }
@@ -676,6 +878,10 @@ export async function persistWarehouse(
 
   persistTail = persistTail.then(runQueue, runQueue);
   return persistTail;
+}
+
+export function requestAuditPrune(): void {
+  markDirty(["audit"], { pruneAudit: true });
 }
 
 export { emptySnapshot, isCloudConfigured };

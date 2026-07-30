@@ -23,6 +23,11 @@ import {
   persistWarehouse,
   bumpSyncGeneration,
   isWarehouseDirty,
+  markDirty,
+  fetchPlanFromCloud,
+  listPlanIndexFromCloud,
+  saveLocalSnapshot,
+  requestAuditPrune,
   type CloudStatus,
   type CloudSnapshot,
 } from "./cloudSync";
@@ -99,6 +104,10 @@ type State = {
   // plan
   setStep: (step: Plan["step"]) => void;
   setDate: (date: string) => void;
+  /** Merge older plan dates from cloud into local index (Admin Plans). */
+  refreshPlanIndex: () => Promise<void>;
+  /** Queue rare audit prune when Admin Audit is opened. */
+  openAuditPanel: () => void;
   setTruckDayTrip: (truckId: string, tripId: string | null) => void;
   setTruckDayAreas: (truckId: string, areas: string[]) => void;
   /** @deprecated use setTruckDayTrip */
@@ -174,25 +183,77 @@ function toSnapshot(state: State): CloudSnapshot {
   };
 }
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
+const LOCAL_DEBOUNCE_MS = 300;
+const CLOUD_DEBOUNCE_MS = 1500;
+
+let localSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let cloudSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingGeneration = 0;
+
+function markDirtyFromPatch(patch: Partial<State>, prev: State) {
+  if (patch.trucks !== undefined) markDirty(["trucks"]);
+  if (patch.trips !== undefined) markDirty(["trips"]);
+  if (patch.customers !== undefined) markDirty(["customers"]);
+  if (patch.areaHistory !== undefined) markDirty(["areas"]);
+  if (
+    patch.heldInvoices !== undefined ||
+    patch.adminPin !== undefined ||
+    patch.currentDate !== undefined
+  ) {
+    markDirty(["settings"]);
+  }
+  if (patch.plans !== undefined) {
+    const changed: string[] = [];
+    for (const d of Object.keys(patch.plans)) {
+      if (patch.plans[d] !== prev.plans[d]) changed.push(d);
+    }
+    for (const d of Object.keys(prev.plans)) {
+      if (!(d in patch.plans)) markDirty(["plans"], { deletedPlanDate: d });
+    }
+    if (changed.length) markDirty(["plans"], { planDates: changed });
+  }
+  if (patch.audit !== undefined) {
+    const prevIds = new Set(prev.audit.map((a) => a.id));
+    for (const a of patch.audit) {
+      if (!prevIds.has(a.id)) markDirty(["audit"], { auditId: a.id });
+    }
+    if (prev.audit.length >= 5000) markDirty(["audit"], { pruneAudit: true });
+  }
+}
 
 function scheduleSave() {
   const gen = bumpSyncGeneration();
   pendingGeneration = gen;
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    void persistWarehouse(toSnapshot(useStore.getState()), gen).then((status) => {
-      useStore.setState({ cloudStatus: status });
-    });
-  }, 120);
+
+  if (localSaveTimer) clearTimeout(localSaveTimer);
+  localSaveTimer = setTimeout(() => {
+    localSaveTimer = null;
+    void persistWarehouse(toSnapshot(useStore.getState()), gen, { skipCloud: true }).then(
+      (status) => {
+        useStore.setState({ cloudStatus: status });
+      },
+    );
+  }, LOCAL_DEBOUNCE_MS);
+
+  if (cloudSaveTimer) clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = setTimeout(() => {
+    cloudSaveTimer = null;
+    void persistWarehouse(toSnapshot(useStore.getState()), gen, { skipLocal: true }).then(
+      (status) => {
+        useStore.setState({ cloudStatus: status });
+      },
+    );
+  }, CLOUD_DEBOUNCE_MS);
 }
 
 async function flushSaveNow(): Promise<CloudStatus> {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
+  if (localSaveTimer) {
+    clearTimeout(localSaveTimer);
+    localSaveTimer = null;
+  }
+  if (cloudSaveTimer) {
+    clearTimeout(cloudSaveTimer);
+    cloudSaveTimer = null;
   }
   const state = useStore.getState();
   const gen = pendingGeneration || bumpSyncGeneration();
@@ -207,6 +268,7 @@ export const useStore = create<State>((set, get) => {
   const mutate = (fn: (s: State) => Partial<State> | void) => {
     set((s) => {
       const patch = fn(s);
+      if (patch) markDirtyFromPatch(patch, s);
       return patch ?? {};
     });
     persist();
@@ -479,15 +541,72 @@ export const useStore = create<State>((set, get) => {
       }));
     },
 
-    setStep: (step) => patchPlan((p) => ({ ...p, step })),
-    setDate: (date) =>
-      mutate((s) => {
-        const existing = s.plans[date];
+    setStep: (step) => {
+      void flushSaveNow();
+      patchPlan((p) => ({ ...p, step }));
+    },
+    setDate: (date) => {
+      mutate((st) => {
+        const existing = st.plans[date];
         return {
           currentDate: date,
           showResume: !!existing && !existing.locked && existing.invoices.length > 0,
         };
-      }),
+      });
+      void (async () => {
+        const existing = get().plans[date];
+        const looksLikeStub =
+          !!existing &&
+          existing.invoices.length === 0 &&
+          existing.areas.length === 0 &&
+          existing.truckDay.length === 0;
+        if (existing && !looksLikeStub) return;
+        try {
+          const remote = await fetchPlanFromCloud(date);
+          if (!remote) return;
+          set((st) => ({
+            plans: { ...st.plans, [date]: remote },
+            showResume:
+              st.currentDate === date
+                ? !remote.locked && remote.invoices.length > 0
+                : st.showResume,
+          }));
+          await saveLocalSnapshot(toSnapshot(get()));
+        } catch (err) {
+          console.error("Failed to fetch plan for date", date, err);
+        }
+      })();
+    },
+    refreshPlanIndex: async () => {
+      try {
+        const rows = await listPlanIndexFromCloud();
+        if (!rows.length) return;
+        set((s) => {
+          const plans = { ...s.plans };
+          for (const r of rows) {
+            if (!plans[r.date]) {
+              plans[r.date] = {
+                date: r.date,
+                areas: [],
+                truckDay: [],
+                invoices: [],
+                locked: r.locked,
+                createdAt: r.createdAt,
+                step: r.step,
+              };
+            }
+          }
+          return { plans };
+        });
+        await saveLocalSnapshot(toSnapshot(get()));
+      } catch (err) {
+        console.error("Failed to refresh plan index", err);
+      }
+    },
+    openAuditPanel: () => {
+      requestAuditPrune();
+      scheduleSave();
+    },
     setTruckDayTrip: (truckId, tripId) => {
       const s = get();
       patchPlan((p) => {

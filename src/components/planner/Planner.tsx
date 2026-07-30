@@ -58,11 +58,16 @@ export function Planner() {
     const onOffline = () => {
       useStore.setState({ cloudStatus: "offline" });
     };
+    const onBeforeUnload = () => {
+      void useStore.getState().flushSave();
+    };
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
+    window.addEventListener("beforeunload", onBeforeUnload);
     return () => {
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
+      window.removeEventListener("beforeunload", onBeforeUnload);
     };
   }, [hydrate]);
 
