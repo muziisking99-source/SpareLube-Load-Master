@@ -1,8 +1,15 @@
-import { useMemo, useState } from "react";
-import { ArrowDown, ArrowRight, ArrowUp, Ban, Play, RotateCcw, Undo2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  ArrowDown,
+  ArrowRight,
+  ArrowUp,
+  Ban,
+  Play,
+  RotateCcw,
+  Undo2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
-import { areaColor } from "@/lib/colors";
 import { truckWeight } from "@/lib/allocation";
 import { customerKey, findCustomerKey } from "@/lib/customers";
 import {
@@ -22,7 +29,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ScreenHeader } from "./ui/ScreenHeader";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { EmptyState } from "./ui/EmptyState";
 import { FormField } from "./ui/FormField";
 import { cn } from "@/lib/utils";
@@ -57,15 +71,6 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const inv = plan.invoices;
   const allocated = inv.filter((i) => i.truckId);
   const unallocated = inv.filter((i) => !i.truckId);
-  const byArea = useMemo(() => {
-    const m = new Map<string, Invoice[]>();
-    for (const i of inv) {
-      const key = i.area || "—";
-      if (!m.has(key)) m.set(key, []);
-      m.get(key)!.push(i);
-    }
-    return m;
-  }, [inv]);
 
   function toggleSelect(id: string) {
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -74,228 +79,151 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
     setSelected([]);
   }
 
+  const moveDialog = moveTarget ? (
+    <MoveDialog
+      plan={plan}
+      trucks={activeTrucks}
+      dayTowns={dayTowns}
+      dayTripName={dayTripName}
+      bulk={moveTarget.bulk}
+      selectedIds={selected}
+      invoice={moveTarget.inv ?? undefined}
+      onClose={() => setMoveTarget(null)}
+      onSubmit={(truckId, reason) => {
+        if (moveTarget.bulk) {
+          bulkMove(selected, truckId);
+          clearSel();
+        } else if (moveTarget.inv) {
+          moveInvoice(moveTarget.inv.id, truckId, reason);
+        }
+        setMoveTarget(null);
+      }}
+    />
+  ) : null;
+
   return (
-    <div className="space-y-5">
-      <div className="panel sticky top-14 z-20 flex flex-col gap-2 p-3 no-print sm:top-[7.5rem] sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:p-4">
-        {mode === "allocate" ? (
-          <>
-            <Button
-              className="w-full sm:w-auto"
-              onClick={() => {
-                runAllocation();
-                toast.success("Allocation complete");
-              }}
-            >
-              <Play className="size-4" />
-              <span className="sm:hidden">Run Allocation</span>
-              <span className="hidden sm:inline">Run Allocation (Even Balance)</span>
-            </Button>
-            <Button
-              variant="outline"
-              className="w-full sm:w-auto"
-              onClick={() => setStep("adjust")}
-              disabled={allocated.length === 0}
-            >
-              <span className="sm:hidden">Review</span>
-              <span className="hidden sm:inline">Review and Adjust</span>
-              <ArrowRight className="size-4" />
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button
-              variant="outline"
-              className="w-full sm:w-auto"
-              onClick={undo}
-              disabled={undoStack.length === 0}
-            >
-              <Undo2 className="size-4" />
-              Undo{undoStack[0] ? ` (${undoStack[0].label})` : ""}
-            </Button>
-            {selected.length > 0 && (
-              <div className="flex w-full flex-col gap-2 sm:ml-auto sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
-                <span className="text-sm text-muted-foreground">{selected.length} selected</span>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="h-10 w-full sm:h-8 sm:w-auto"
-                  onClick={() => setMoveTarget({ inv: null, bulk: true })}
-                >
-                  Move Selected
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-10 w-full sm:h-8 sm:w-auto"
-                  onClick={() => {
-                    bulkMove(selected, null);
-                    clearSel();
-                  }}
-                >
-                  Move to Unallocated
-                </Button>
-                <Button size="sm" variant="ghost" className="h-10 w-full sm:h-8 sm:w-auto" onClick={clearSel}>
-                  Clear
-                </Button>
-              </div>
-            )}
-            <Button className="w-full sm:ml-auto sm:w-auto" onClick={() => setStep("lock")}>
-              Proceed to Lock
-              <ArrowRight className="size-4" />
-            </Button>
-          </>
-        )}
-      </div>
-
-      <div>
-        <ScreenHeader title="Town Summary" className="mb-3" />
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {[...byArea.entries()].map(([area, list], idx) => {
-            const c = areaColor(area);
-            const wt = list.reduce((s, i) => s + i.weight, 0);
-            const trucksHere = activeTrucks.filter((t) =>
-              (dayTowns.get(t.id) ?? []).includes(area),
-            );
-            return (
-              <div
-                key={area}
-                style={{ "--index": idx } as React.CSSProperties}
-                className="panel-2 stagger-item p-4"
-              >
-                <div className="text-sm font-semibold" style={{ color: c.text }}>
-                  {area}
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {list.length} invoices · <span className="metric-mono">{wt.toFixed(0)} kg</span>
-                </div>
-                <div className="mt-2 text-xs text-muted-foreground">
-                  Trucks: {trucksHere.length ? trucksHere.map((t) => t.name).join(", ") : "—"}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        {activeTrucks.map((t, idx) => (
-          <TruckCard
-            key={t.id}
-            truck={t}
-            tripId={plan.truckDay.find((td) => td.truckId === t.id)?.tripId ?? null}
-            tripName={dayTripName.get(t.id)}
-            towns={dayTowns.get(t.id) ?? []}
-            invoices={inv.filter((i) => i.truckId === t.id)}
-            mode={mode}
-            selected={selected}
-            index={idx}
-            onToggleSelect={toggleSelect}
-            onMove={(i) => setMoveTarget({ inv: i })}
-            onUnallocate={(i) => moveInvoice(i.id, null)}
-            onClearSelected={clearSel}
-          />
-        ))}
-      </div>
-
-      {unallocated.length > 0 && (
-        <section className="panel border-crit/50 p-4">
-          <ScreenHeader
-            title={`Unallocated (${unallocated.length})`}
-            description={`${unallocated.reduce((s, i) => s + i.weight, 0).toFixed(0)} kg total`}
-            className="mb-3"
-          />
-          <div className="flex flex-wrap gap-2">
-            {unallocated.map((i) => (
-              <InvoiceChip
-                key={i.id}
-                inv={i}
-                mode={mode}
-                selected={selected.includes(i.id)}
-                tripId={null}
-                onToggleSelect={() => toggleSelect(i.id)}
-                onMove={() => setMoveTarget({ inv: i })}
-              />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {moveTarget && (
-        <MoveDialog
-          plan={plan}
-          trucks={activeTrucks}
-          dayTowns={dayTowns}
-          dayTripName={dayTripName}
-          bulk={moveTarget.bulk}
-          selectedIds={selected}
-          invoice={moveTarget.inv ?? undefined}
-          onClose={() => setMoveTarget(null)}
-          onSubmit={(truckId, reason) => {
-            if (moveTarget.bulk) {
-              bulkMove(selected, truckId);
-              clearSel();
-            } else if (moveTarget.inv) {
-              moveInvoice(moveTarget.inv.id, truckId, reason);
-            }
-            setMoveTarget(null);
-          }}
-        />
-      )}
-    </div>
+    <>
+      <TruckWorkbench
+        mode={mode}
+        planInvoices={inv}
+        activeTrucks={activeTrucks}
+        dayTowns={dayTowns}
+        dayTripName={dayTripName}
+        planTruckDay={plan.truckDay}
+        selected={selected}
+        undoStack={undoStack}
+        unallocated={unallocated}
+        allocatedCount={allocated.length}
+        onRunAllocation={() => {
+          runAllocation();
+          toast.success("Allocation complete");
+        }}
+        onReview={() => setStep("adjust")}
+        onUndo={undo}
+        onToggleSelect={toggleSelect}
+        onClearSel={clearSel}
+        onMoveSelected={() => setMoveTarget({ inv: null, bulk: true })}
+        onBulkUnallocate={() => {
+          bulkMove(selected, null);
+          clearSel();
+        }}
+        onMoveInvoice={(i) => setMoveTarget({ inv: i })}
+        onUnallocate={(i) => moveInvoice(i.id, null)}
+        onLock={() => setStep("lock")}
+      />
+      {moveDialog}
+    </>
   );
 }
 
-function TruckCard({
-  truck,
-  tripId,
-  tripName,
-  towns,
-  invoices,
+/* ─── Shared table-first workbench (Allocate + Adjust) ─────────────── */
+
+function TruckWorkbench({
   mode,
+  planInvoices,
+  activeTrucks,
+  dayTowns,
+  dayTripName,
+  planTruckDay,
   selected,
-  index,
+  undoStack,
+  unallocated,
+  allocatedCount,
+  onRunAllocation,
+  onReview,
+  onUndo,
   onToggleSelect,
-  onMove,
+  onClearSel,
+  onMoveSelected,
+  onBulkUnallocate,
+  onMoveInvoice,
   onUnallocate,
-  onClearSelected,
+  onLock,
 }: {
-  truck: Truck;
-  tripId: string | null;
-  tripName: string | null | undefined;
-  towns: string[];
-  invoices: Invoice[];
   mode: "allocate" | "adjust";
+  planInvoices: Invoice[];
+  activeTrucks: Truck[];
+  dayTowns: Map<string, string[]>;
+  dayTripName: Map<string, string | null>;
+  planTruckDay: { truckId: string; tripId: string | null }[];
   selected: string[];
-  index: number;
+  undoStack: { label: string }[];
+  unallocated: Invoice[];
+  allocatedCount: number;
+  onRunAllocation: () => void;
+  onReview: () => void;
+  onUndo: () => void;
   onToggleSelect: (id: string) => void;
-  onMove: (i: Invoice) => void;
+  onClearSel: () => void;
+  onMoveSelected: () => void;
+  onBulkUnallocate: () => void;
+  onMoveInvoice: (i: Invoice) => void;
   onUnallocate: (i: Invoice) => void;
-  onClearSelected: () => void;
+  onLock: () => void;
 }) {
-  const sendToSecondRound = useStore((s) => s.sendToSecondRound);
-  const setInvoiceRound = useStore((s) => s.setInvoiceRound);
+  const isAdjust = mode === "adjust";
   const customers = useStore((s) => s.customers);
   const trips = useStore((s) => s.trips);
+  const sendToSecondRound = useStore((s) => s.sendToSecondRound);
+  const setInvoiceRound = useStore((s) => s.setInvoiceRound);
+  const reorderTripStopsPartial = useStore((s) => s.reorderTripStopsPartial);
+  const setTripCustomerLoadNumber = useStore((s) => s.setTripCustomerLoadNumber);
 
-  const sortedInvoices = useMemo(() => {
-    return [...invoices].sort((a, b) =>
-      compareByLoadingNumber(customers, a, b, tripId, trips),
-    );
-  }, [invoices, customers, tripId, trips]);
+  const defaultFocus =
+    activeTrucks.find((t) => planInvoices.some((i) => i.truckId === t.id))?.id ??
+    activeTrucks[0]?.id ??
+    "";
 
-  const round1 = sortedInvoices.filter((i) => (i.round ?? 1) === 1);
-  const round2 = sortedInvoices.filter((i) => (i.round ?? 1) === 2);
+  const [focusId, setFocusId] = useState(defaultFocus);
+
+  useEffect(() => {
+    if (!focusId || !activeTrucks.some((t) => t.id === focusId)) {
+      setFocusId(defaultFocus);
+    }
+  }, [activeTrucks, defaultFocus, focusId]);
+
+  const focusTruck = activeTrucks.find((t) => t.id === focusId) ?? activeTrucks[0];
+  const tripId =
+    planTruckDay.find((td) => td.truckId === focusTruck?.id)?.tripId ?? null;
+  const tripName = focusTruck ? dayTripName.get(focusTruck.id) : null;
+  const towns = focusTruck ? dayTowns.get(focusTruck.id) ?? [] : [];
+
+  const truckInvoices = useMemo(() => {
+    if (!focusTruck) return [];
+    return planInvoices
+      .filter((i) => i.truckId === focusTruck.id)
+      .sort((a, b) => compareByLoadingNumber(customers, a, b, tripId, trips));
+  }, [planInvoices, focusTruck, customers, tripId, trips]);
+
+  const round1 = truckInvoices.filter((i) => (i.round ?? 1) === 1);
+  const round2 = truckInvoices.filter((i) => (i.round ?? 1) === 2);
   const weight = round1.reduce((s, i) => s + i.weight, 0);
-  const round2Weight = round2.reduce((s, i) => s + i.weight, 0);
-  const pct = truck.maxWeight ? (weight / truck.maxWeight) * 100 : 0;
+  const pct = focusTruck?.maxWeight ? (weight / focusTruck.maxWeight) * 100 : 0;
   const barTone = pct >= 95 ? "bg-crit" : pct >= 80 ? "bg-warn" : "bg-good";
-  const countByArea = new Map<string, number>();
-  for (const inv of invoices) {
-    const key = inv.area || "—";
-    countByArea.set(key, (countByArea.get(key) ?? 0) + 1);
-  }
 
-  const selectedOnTruck = selected.filter((id) => invoices.some((i) => i.id === id));
+  const selectedOnTruck = selected.filter((id) =>
+    truckInvoices.some((i) => i.id === id),
+  );
   const selectedRound1 = selectedOnTruck.filter((id) =>
     round1.some((i) => i.id === id),
   );
@@ -303,9 +231,46 @@ function TruckCard({
     round2.some((i) => i.id === id),
   );
 
+  /** Customer stop keys in display order (unique). */
+  const stopKeys = useMemo(() => {
+    const keys: string[] = [];
+    const seen = new Set<string>();
+    for (const inv of truckInvoices) {
+      const key =
+        findCustomerKey(customers, inv.customer) ||
+        customerKey({ code: "", name: inv.customer }) ||
+        inv.customer;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      keys.push(key);
+    }
+    return keys;
+  }, [truckInvoices, customers]);
+
+  function customerKeyFor(inv: Invoice) {
+    return (
+      findCustomerKey(customers, inv.customer) ||
+      customerKey({ code: "", name: inv.customer }) ||
+      inv.customer
+    );
+  }
+
+  function moveStop(inv: Invoice, dir: -1 | 1) {
+    if (!tripId) return;
+    const key = customerKeyFor(inv);
+    const index = stopKeys.indexOf(key);
+    if (index < 0) return;
+    const j = index + dir;
+    if (j < 0 || j >= stopKeys.length) return;
+    const next = [...stopKeys];
+    [next[index], next[j]] = [next[j], next[index]];
+    reorderTripStopsPartial(tripId, next);
+  }
+
   function handleSecondRound() {
+    if (!focusTruck) return;
     const n = sendToSecondRound(
-      truck.id,
+      focusTruck.id,
       selectedRound1.length > 0 ? selectedRound1 : undefined,
     );
     if (n === 0) {
@@ -321,360 +286,414 @@ function TruckCard({
         ? `Moved ${n} invoice${n === 1 ? "" : "s"} to Round 2`
         : `Sent ${n} overflow invoice${n === 1 ? "" : "s"} to Round 2`,
     );
-    onClearSelected();
+    onClearSel();
   }
 
   function handleBackToRound1() {
     if (selectedRound2.length === 0) return;
     setInvoiceRound(selectedRound2, 1);
     toast.success(`Restored ${selectedRound2.length} to Round 1`);
-    onClearSelected();
+    onClearSel();
   }
 
   return (
-    <div
-      style={{ "--index": index } as React.CSSProperties}
-      className="panel stagger-item p-4 transition-transform hover:-translate-y-0.5"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="font-semibold tracking-tight">{truck.name}</div>
-          {tripName && <div className="text-xs text-muted-foreground">{tripName}</div>}
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            {towns.length === 0 ? (
-              <span className="chip">no towns</span>
-            ) : (
-              towns.map((area) => {
-                const c = areaColor(area);
-                const n = countByArea.get(area) ?? 0;
-                return (
-                  <span
-                    key={area}
-                    className="chip"
-                    style={{ borderColor: c.border, color: c.text, background: c.bg }}
-                  >
-                    {area}
-                    <span className="metric-mono opacity-80">{n}</span>
-                  </span>
-                );
-              })
-            )}
-            <span>{invoices.length} invoices</span>
-            {round2.length > 0 && (
-              <span className="chip border-warn/40 text-warn">R2 · {round2.length}</span>
-            )}
-          </div>
-        </div>
-        <div className="text-right">
-          <div className="metric-mono text-sm font-medium">
-            {weight.toFixed(0)} / {truck.maxWeight} kg
-          </div>
-          <div className="text-xs text-muted-foreground metric-mono">{pct.toFixed(0)}%</div>
-          {round2.length > 0 && (
-            <div className="text-xs text-warn metric-mono">R2 {round2Weight.toFixed(0)} kg</div>
-          )}
-        </div>
-      </div>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-panel-2">
-        <div
-          className={`h-full transition-all duration-500 ${barTone}`}
-          style={{ width: `${Math.min(100, pct)}%` }}
-        />
-      </div>
-
-      {mode === "adjust" && invoices.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="secondary" onClick={handleSecondRound}>
-            <RotateCcw className="size-3.5" />
-            Second Round
-            {selectedRound1.length > 0 ? ` (${selectedRound1.length})` : ""}
-          </Button>
-          {selectedRound2.length > 0 && (
-            <Button type="button" size="sm" variant="outline" onClick={handleBackToRound1}>
-              Back to Round 1 ({selectedRound2.length})
+    <div className="space-y-4">
+      <div className="panel sticky top-14 z-20 flex flex-col gap-2 p-3 no-print sm:top-[7.5rem] sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:p-4">
+        {isAdjust ? (
+          <>
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={onUndo}
+              disabled={undoStack.length === 0}
+            >
+              <Undo2 className="size-4" />
+              Undo{undoStack[0] ? ` (${undoStack[0].label})` : ""}
             </Button>
-          )}
-        </div>
-      )}
-
-      {mode === "adjust" && tripId && invoices.length > 0 && (
-        <TruckStopOrderEditor tripId={tripId} invoices={sortedInvoices} />
-      )}
-
-      {invoices.length === 0 ? (
-        <div className="mt-3">
-          <EmptyState title="No invoices assigned" className="w-full py-4" />
-        </div>
-      ) : (
-        <div className="mt-3 space-y-3">
-          <RoundGroup
-            label="Round 1"
-            list={round1}
-            mode={mode}
-            selected={selected}
-            tripId={tripId}
-            onToggleSelect={onToggleSelect}
-            onMove={onMove}
-            onUnallocate={onUnallocate}
-          />
-          {round2.length > 0 && (
-            <RoundGroup
-              label="Round 2"
-              list={round2}
-              mode={mode}
-              selected={selected}
-              tripId={tripId}
-              onToggleSelect={onToggleSelect}
-              onMove={onMove}
-              onUnallocate={onUnallocate}
-              accent
-            />
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TruckStopOrderEditor({
-  tripId,
-  invoices,
-}: {
-  tripId: string;
-  invoices: Invoice[];
-}) {
-  const customers = useStore((s) => s.customers);
-  const trips = useStore((s) => s.trips);
-  const reorderTripStopsPartial = useStore((s) => s.reorderTripStopsPartial);
-  const setTripCustomerLoadNumber = useStore((s) => s.setTripCustomerLoadNumber);
-
-  const stops = useMemo(() => {
-    const byKey = new Map<string, { key: string; name: string; area: string }>();
-    for (const inv of invoices) {
-      const key =
-        findCustomerKey(customers, inv.customer) ||
-        customerKey({ code: "", name: inv.customer }) ||
-        inv.customer;
-      if (!key || byKey.has(key)) continue;
-      byKey.set(key, { key, name: inv.customer, area: inv.area });
-    }
-    return [...byKey.values()].sort((a, b) => {
-      const la = loadingNumberFor(customers, a.name, a.area, tripId, trips);
-      const lb = loadingNumberFor(customers, b.name, b.area, tripId, trips);
-      const aUnset = la <= 0 ? 1 : 0;
-      const bUnset = lb <= 0 ? 1 : 0;
-      if (aUnset !== bUnset) return aUnset - bUnset;
-      if (la !== lb) return la - lb;
-      return a.name.localeCompare(b.name);
-    });
-  }, [invoices, customers, tripId, trips]);
-
-  if (stops.length < 2) return null;
-
-  function move(index: number, dir: -1 | 1) {
-    const j = index + dir;
-    if (j < 0 || j >= stops.length) return;
-    const next = stops.map((s) => s.key);
-    [next[index], next[j]] = [next[j], next[index]];
-    reorderTripStopsPartial(tripId, next);
-    toast.success("Stop order saved to trip");
-  }
-
-  return (
-    <div className="mt-3 rounded-xl border border-border bg-panel-2/50 p-3">
-      <div className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Stop order (saves to Admin → Trips)
-      </div>
-      <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-panel">
-        {stops.map((stop, i) => {
-          const loadNo = loadingNumberFor(customers, stop.name, stop.area, tripId, trips);
-          return (
-            <li key={stop.key} className="flex items-center gap-2 px-2.5 py-2 text-sm">
-              <span className="w-5 metric-mono text-xs text-muted-foreground">{i + 1}</span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-medium">{stop.name}</div>
-                <div className="truncate text-[11px] text-muted-foreground">{stop.area || "—"}</div>
+            {selected.length > 0 && (
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
+                <span className="text-sm text-muted-foreground">{selected.length} selected</span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-10 w-full sm:h-8 sm:w-auto"
+                  onClick={onMoveSelected}
+                >
+                  Move Selected
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-10 w-full sm:h-8 sm:w-auto"
+                  onClick={onBulkUnallocate}
+                >
+                  Move to Unallocated
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-10 w-full sm:h-8 sm:w-auto"
+                  onClick={onClearSel}
+                >
+                  Clear
+                </Button>
               </div>
-              <Input
-                type="number"
-                min={0}
-                value={loadNo || ""}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  setTripCustomerLoadNumber(tripId, stop.key, Number.isFinite(n) ? n : 0);
-                }}
-                className="metric-mono h-8 w-14"
-                title="Load #"
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                disabled={i === 0}
-                onClick={() => move(i, -1)}
-                aria-label="Move up"
-              >
-                <ArrowUp className="size-3.5" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                disabled={i === stops.length - 1}
-                onClick={() => move(i, 1)}
-                aria-label="Move down"
-              >
-                <ArrowDown className="size-3.5" />
-              </Button>
-            </li>
+            )}
+            <Button className="w-full sm:ml-auto sm:w-auto" onClick={onLock}>
+              Proceed to Lock
+              <ArrowRight className="size-4" />
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button className="w-full sm:w-auto" onClick={onRunAllocation}>
+              <Play className="size-4" />
+              <span className="sm:hidden">Run Allocation</span>
+              <span className="hidden sm:inline">Run Allocation (Even Balance)</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto sm:ml-auto"
+              onClick={onReview}
+              disabled={allocatedCount === 0}
+            >
+              <span className="sm:hidden">Review</span>
+              <span className="hidden sm:inline">Review and Adjust</span>
+              <ArrowRight className="size-4" />
+            </Button>
+          </>
+        )}
+      </div>
+
+      {/* Truck focus strip */}
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {activeTrucks.map((t) => {
+          const tInv = planInvoices.filter((i) => i.truckId === t.id);
+          const r1 = tInv.filter((i) => (i.round ?? 1) === 1);
+          const w = r1.reduce((s, i) => s + i.weight, 0);
+          const p = t.maxWeight ? (w / t.maxWeight) * 100 : 0;
+          const tone = p >= 95 ? "bg-crit" : p >= 80 ? "bg-warn" : "bg-good";
+          const active = t.id === focusTruck?.id;
+          const tName = dayTripName.get(t.id);
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setFocusId(t.id)}
+              className={cn(
+                "min-w-[9.5rem] shrink-0 rounded-xl border px-3 py-2.5 text-left transition-colors",
+                active
+                  ? "border-primary bg-primary/5"
+                  : "border-border bg-panel hover:bg-panel-2",
+              )}
+            >
+              <div className="truncate text-sm font-semibold tracking-tight">{t.name}</div>
+              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                {tName ?? "No trip"} · {tInv.length} inv
+              </div>
+              <div className="mt-1.5 metric-mono text-[11px] text-muted-foreground">
+                {w.toFixed(0)}/{t.maxWeight} · {p.toFixed(0)}%
+              </div>
+              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-secondary">
+                <div className={cn("h-full", tone)} style={{ width: `${Math.min(100, p)}%` }} />
+              </div>
+            </button>
           );
         })}
-      </ul>
-    </div>
-  );
-}
-
-function RoundGroup({
-  label,
-  list,
-  mode,
-  selected,
-  tripId,
-  onToggleSelect,
-  onMove,
-  onUnallocate,
-  accent,
-}: {
-  label: string;
-  list: Invoice[];
-  mode: "allocate" | "adjust";
-  selected: string[];
-  tripId: string | null;
-  onToggleSelect: (id: string) => void;
-  onMove: (i: Invoice) => void;
-  onUnallocate: (i: Invoice) => void;
-  accent?: boolean;
-}) {
-  if (list.length === 0 && !accent) return null;
-  return (
-    <div>
-      <div
-        className={cn(
-          "mb-2 text-[11px] font-medium uppercase tracking-wider",
-          accent ? "text-warn" : "text-muted-foreground",
-        )}
-      >
-        {label}
       </div>
-      <div className="flex flex-wrap gap-2">
-        {list.map((i) => (
-          <InvoiceChip
-            key={i.id}
-            inv={i}
-            mode={mode}
-            selected={selected.includes(i.id)}
-            tripId={tripId}
-            onToggleSelect={() => onToggleSelect(i.id)}
-            onMove={() => onMove(i)}
-            onUnallocate={() => onUnallocate(i)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
 
-function InvoiceChip({
-  inv,
-  mode,
-  selected,
-  tripId,
-  onToggleSelect,
-  onMove,
-  onUnallocate,
-}: {
-  inv: Invoice;
-  mode: "allocate" | "adjust";
-  selected: boolean;
-  tripId?: string | null;
-  onToggleSelect: () => void;
-  onMove: () => void;
-  onUnallocate?: () => void;
-}) {
-  const customers = useStore((s) => s.customers);
-  const trips = useStore((s) => s.trips);
-  const c = areaColor(inv.area || "—");
-  const loadNo = loadingNumberFor(customers, inv.customer, inv.area, tripId, trips);
+      {!focusTruck ? (
+        <EmptyState title="No active trucks" description="Activate trucks on Setup first." />
+      ) : (
+        <section className="panel overflow-hidden">
+          <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <h3 className="font-semibold tracking-tight">{focusTruck.name}</h3>
+              <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                {tripName ?? "No trip assigned"}
+                {towns.length > 0 ? ` · ${towns.join(" · ")}` : ""}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="metric-mono text-sm">
+                {weight.toFixed(0)} / {focusTruck.maxWeight} kg
+                <span className="ml-2 text-muted-foreground">{pct.toFixed(0)}%</span>
+              </div>
+              {isAdjust && (
+                <>
+                  <Button type="button" size="sm" variant="secondary" onClick={handleSecondRound}>
+                    <RotateCcw className="size-3.5" />
+                    Second Round
+                    {selectedRound1.length > 0 ? ` (${selectedRound1.length})` : ""}
+                  </Button>
+                  {selectedRound2.length > 0 && (
+                    <Button type="button" size="sm" variant="outline" onClick={handleBackToRound1}>
+                      Back to Round 1 ({selectedRound2.length})
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
 
-  return (
-    <span
-      className={cn(
-        "inline-flex min-h-11 max-w-full flex-wrap items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm shadow-none transition-colors sm:min-h-0 sm:py-1",
-        selected && "ring-2 ring-primary/40",
-      )}
-      style={{
-        borderColor: selected ? "var(--primary)" : c.border,
-        background: selected
-          ? "color-mix(in oklab, var(--primary) 12%, var(--panel))"
-          : c.bg,
-        color: c.text,
-      }}
-    >
-      {mode === "adjust" && (
-        <Checkbox
-          checked={selected}
-          onCheckedChange={onToggleSelect}
-          className="mr-0.5 size-5 border-current sm:size-4"
-        />
-      )}
-      {loadNo > 0 && (
-        <span className="metric-mono rounded bg-background/70 px-1 text-[10px] font-semibold text-foreground">
-          #{loadNo}
-        </span>
-      )}
-      <span className="metric-mono text-xs font-semibold text-foreground sm:text-[11px]">
-        {inv.doc}
-      </span>
-      <span className="max-w-[14ch] truncate text-foreground/80">{inv.customer}</span>
-      <span className="metric-mono text-foreground/70">{inv.weight}kg</span>
-      {inv.exception && (
-        <Badge variant="warn" className="h-5 px-1.5 text-[10px]">
-          Exc
-        </Badge>
-      )}
-      {inv.collection && (
-        <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
-          Coll
-        </Badge>
-      )}
-      {mode === "adjust" && (
-        <>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-9 px-3 text-xs text-foreground sm:h-6 sm:px-2 sm:text-[10px]"
-            onClick={onMove}
-          >
-            Move
-          </Button>
-          {inv.truckId && onUnallocate && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-9 text-foreground/70 sm:size-6"
-              onClick={onUnallocate}
-              title="Move to unallocated"
-            >
-              <Ban className="size-4 sm:size-3" />
-            </Button>
+          <div className="h-1.5 bg-panel-2">
+            <div
+              className={cn("h-full transition-all duration-500", barTone)}
+              style={{ width: `${Math.min(100, pct)}%` }}
+            />
+          </div>
+
+          {truckInvoices.length === 0 ? (
+            <div className="p-6">
+              <EmptyState title="No invoices on this truck" className="w-full py-6" />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    {isAdjust && <TableHead className="w-10" />}
+                    <TableHead className="w-28">Load #</TableHead>
+                    <TableHead>Doc</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead>Town</TableHead>
+                    <TableHead className="w-24 text-right">Weight</TableHead>
+                    <TableHead className="w-16">Round</TableHead>
+                    {isAdjust && (
+                      <TableHead className="w-28 text-right">Actions</TableHead>
+                    )}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {truckInvoices.map((i) => {
+                    const key = customerKeyFor(i);
+                    const loadNo = loadingNumberFor(
+                      customers,
+                      i.customer,
+                      i.area,
+                      tripId,
+                      trips,
+                    );
+                    const stopIndex = stopKeys.indexOf(key);
+                    const checked = selected.includes(i.id);
+                    return (
+                      <TableRow
+                        key={i.id}
+                        className={cn(
+                          "hover:bg-panel-2/80",
+                          isAdjust && checked && "bg-primary/5",
+                        )}
+                      >
+                        {isAdjust && (
+                          <TableCell>
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={() => onToggleSelect(i.id)}
+                            />
+                          </TableCell>
+                        )}
+                        <TableCell>
+                          {isAdjust && tripId ? (
+                            <div className="flex items-center gap-0.5">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-7"
+                                disabled={stopIndex <= 0}
+                                onClick={() => moveStop(i, -1)}
+                                aria-label="Move stop up"
+                              >
+                                <ArrowUp className="size-3.5" />
+                              </Button>
+                              <Input
+                                type="number"
+                                min={0}
+                                value={loadNo || ""}
+                                onChange={(e) => {
+                                  const n = Number(e.target.value);
+                                  setTripCustomerLoadNumber(
+                                    tripId,
+                                    key,
+                                    Number.isFinite(n) ? n : 0,
+                                  );
+                                }}
+                                className="metric-mono h-8 w-14"
+                                title="Load # (saves to trip)"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-7"
+                                disabled={stopIndex < 0 || stopIndex >= stopKeys.length - 1}
+                                onClick={() => moveStop(i, 1)}
+                                aria-label="Move stop down"
+                              >
+                                <ArrowDown className="size-3.5" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <span className="metric-mono text-muted-foreground">
+                              {loadNo > 0 ? loadNo : "—"}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="metric-mono text-sm font-medium">
+                          {i.doc}
+                          <span className="ml-1.5 inline-flex gap-1">
+                            {i.exception && (
+                              <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">
+                                Exception
+                              </Badge>
+                            )}
+                            {i.collection && (
+                              <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal">
+                                Collection
+                              </Badge>
+                            )}
+                          </span>
+                        </TableCell>
+                        <TableCell className="max-w-[14rem] truncate">{i.customer}</TableCell>
+                        <TableCell className="text-muted-foreground">{i.area || "—"}</TableCell>
+                        <TableCell className="metric-mono text-right">
+                          {i.weight.toFixed(0)}
+                        </TableCell>
+                        <TableCell>
+                          <span
+                            className={cn(
+                              "metric-mono text-xs",
+                              (i.round ?? 1) === 2 ? "text-warn" : "text-muted-foreground",
+                            )}
+                          >
+                            R{i.round ?? 1}
+                          </span>
+                        </TableCell>
+                        {isAdjust && (
+                          <TableCell className="text-right">
+                            <div className="inline-flex items-center justify-end gap-0.5">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 px-2 text-xs"
+                                onClick={() => onMoveInvoice(i)}
+                              >
+                                Move
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-8 text-muted-foreground hover:text-destructive"
+                                onClick={() => onUnallocate(i)}
+                                title="Move to unallocated"
+                              >
+                                <Ban className="size-3.5" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           )}
-        </>
+          {isAdjust && tripId && truckInvoices.length > 0 && (
+            <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+              Load # and ↑↓ save to Admin → Trips stop order for this trip.
+            </p>
+          )}
+        </section>
       )}
-    </span>
+
+      {unallocated.length > 0 && (
+        <section className="panel overflow-hidden">
+          <div className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-3">
+            <h3 className="font-semibold tracking-tight text-crit">
+              Unallocated ({unallocated.length})
+            </h3>
+            <span className="metric-mono text-sm text-muted-foreground">
+              {unallocated.reduce((s, i) => s + i.weight, 0).toFixed(0)} kg
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  {isAdjust && <TableHead className="w-10" />}
+                  <TableHead>Doc</TableHead>
+                  <TableHead>Customer</TableHead>
+                  <TableHead>Town</TableHead>
+                  <TableHead className="w-24 text-right">Weight</TableHead>
+                  {isAdjust && (
+                    <TableHead className="w-24 text-right">Actions</TableHead>
+                  )}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {unallocated.map((i) => {
+                  const checked = selected.includes(i.id);
+                  return (
+                    <TableRow
+                      key={i.id}
+                      className={cn(
+                        "hover:bg-panel-2/80",
+                        isAdjust && checked && "bg-primary/5",
+                      )}
+                    >
+                      {isAdjust && (
+                        <TableCell>
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={() => onToggleSelect(i.id)}
+                          />
+                        </TableCell>
+                      )}
+                      <TableCell className="metric-mono text-sm font-medium">
+                        {i.doc}
+                        <span className="ml-1.5 inline-flex gap-1">
+                          {i.exception && (
+                            <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">
+                              Exception
+                            </Badge>
+                          )}
+                          {i.collection && (
+                            <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal">
+                              Collection
+                            </Badge>
+                          )}
+                        </span>
+                      </TableCell>
+                      <TableCell className="max-w-[14rem] truncate">{i.customer}</TableCell>
+                      <TableCell className="text-muted-foreground">{i.area || "—"}</TableCell>
+                      <TableCell className="metric-mono text-right">
+                        {i.weight.toFixed(0)}
+                      </TableCell>
+                      {isAdjust && (
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 px-2 text-xs"
+                            onClick={() => onMoveInvoice(i)}
+                          >
+                            Move
+                          </Button>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -794,7 +813,11 @@ function MoveDialog({
           </FormField>
           {reason === "Other" && (
             <FormField label="Detail">
-              <Input value={reasonText} onChange={(e) => setReasonText(e.target.value)} className="h-10 sm:h-9" />
+              <Input
+                value={reasonText}
+                onChange={(e) => setReasonText(e.target.value)}
+                className="h-10 sm:h-9"
+              />
             </FormField>
           )}
         </div>
