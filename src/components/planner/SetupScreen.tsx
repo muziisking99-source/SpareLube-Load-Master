@@ -140,7 +140,7 @@ export function SetupScreen() {
   );
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+    <div className="space-y-6">
       <div className="space-y-6">
         <CollapsibleSection
           title="Today's Trips"
@@ -390,13 +390,13 @@ export function SetupScreen() {
 
               {/* Desktop table */}
               <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
-                <Table>
+                <Table className="table-fixed min-w-[720px]">
                   <TableHeader>
                     <TableRow className="bg-panel-2 hover:bg-panel-2">
                       <TableHead className="w-16">Active</TableHead>
-                      <TableHead>Truck</TableHead>
+                      <TableHead className="w-[28%]">Truck</TableHead>
                       <TableHead className="w-28">Max kg</TableHead>
-                      <TableHead className="min-w-[240px]">Today&apos;s Trip</TableHead>
+                      <TableHead className="w-[32%]">Today&apos;s Trip</TableHead>
                       <TableHead className="w-32">Status</TableHead>
                       <TableHead className="w-12" />
                     </TableRow>
@@ -420,11 +420,11 @@ export function SetupScreen() {
                               onCheckedChange={(v) => updateTruck(t.id, { active: !!v })}
                             />
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="min-w-0">
                             <Input
                               value={t.name}
                               onChange={(e) => updateTruck(t.id, { name: e.target.value })}
-                              className="h-8 border-transparent bg-transparent hover:border-border focus:border-ring"
+                              className="h-8 min-w-0 w-full border-transparent bg-transparent hover:border-border focus:border-ring"
                             />
                           </TableCell>
                           <TableCell>
@@ -434,10 +434,10 @@ export function SetupScreen() {
                               onChange={(e) =>
                                 updateTruck(t.id, { maxWeight: Number(e.target.value) })
                               }
-                              className="metric-mono h-8 w-24 border-transparent bg-transparent hover:border-border focus:border-ring"
+                              className="metric-mono h-8 w-full max-w-[6.5rem] border-transparent bg-transparent hover:border-border focus:border-ring"
                             />
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="min-w-0">
                             <TripSelect
                               trips={trips}
                               inactive={inactive}
@@ -473,11 +473,8 @@ export function SetupScreen() {
           )}
         </section>
 
-        {/* Mobile continue panel (inline, above FAB space) */}
-        <aside className="panel p-4 lg:hidden">{continuePanel}</aside>
+        <aside className="panel p-4 sm:p-5">{continuePanel}</aside>
       </div>
-
-      <aside className="panel sticky top-20 hidden h-fit p-5 lg:block">{continuePanel}</aside>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
         <AlertDialogContent className="panel border-border">

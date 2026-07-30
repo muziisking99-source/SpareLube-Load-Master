@@ -28,6 +28,7 @@ import {
   listPlanIndexFromCloud,
   saveLocalSnapshot,
   requestAuditPrune,
+  isPlanDeletePending,
   type CloudStatus,
   type CloudSnapshot,
 } from "./cloudSync";
@@ -191,9 +192,27 @@ let cloudSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingGeneration = 0;
 
 function markDirtyFromPatch(patch: Partial<State>, prev: State) {
-  if (patch.trucks !== undefined) markDirty(["trucks"]);
-  if (patch.trips !== undefined) markDirty(["trips"]);
-  if (patch.customers !== undefined) markDirty(["customers"]);
+  if (patch.trucks !== undefined) {
+    markDirty(["trucks"]);
+    const nextIds = new Set(patch.trucks.map((t) => t.id));
+    for (const t of prev.trucks) {
+      if (!nextIds.has(t.id)) markDirty(["trucks"], { deletedTruckId: t.id });
+    }
+  }
+  if (patch.trips !== undefined) {
+    markDirty(["trips"]);
+    const nextIds = new Set(patch.trips.map((t) => t.id));
+    for (const t of prev.trips) {
+      if (!nextIds.has(t.id)) markDirty(["trips"], { deletedTripId: t.id });
+    }
+  }
+  if (patch.customers !== undefined) {
+    markDirty(["customers"]);
+    const nextIds = new Set(Object.keys(patch.customers));
+    for (const id of Object.keys(prev.customers)) {
+      if (!nextIds.has(id)) markDirty(["customers"], { deletedCustomerId: id });
+    }
+  }
   if (patch.areaHistory !== undefined) markDirty(["areas"]);
   if (
     patch.heldInvoices !== undefined ||
@@ -378,6 +397,7 @@ export const useStore = create<State>((set, get) => {
     deleteTruck: (id) => {
       mutate((s) => ({ trucks: s.trucks.filter((t) => t.id !== id) }));
       log("truck.delete", `Deleted truck ${id}`);
+      void flushSaveNow();
     },
 
     addTrip: (nameRaw, towns = []) => {
@@ -419,6 +439,7 @@ export const useStore = create<State>((set, get) => {
         };
       });
       log("trip.delete", `Deleted trip ${id}`);
+      void flushSaveNow();
     },
     setTripCustomerLoadNumber: (tripId, key, n) => {
       mutate((s) => ({
@@ -584,17 +605,16 @@ export const useStore = create<State>((set, get) => {
         set((s) => {
           const plans = { ...s.plans };
           for (const r of rows) {
-            if (!plans[r.date]) {
-              plans[r.date] = {
-                date: r.date,
-                areas: [],
-                truckDay: [],
-                invoices: [],
-                locked: r.locked,
-                createdAt: r.createdAt,
-                step: r.step,
-              };
-            }
+            if (plans[r.date] || isPlanDeletePending(r.date)) continue;
+            plans[r.date] = {
+              date: r.date,
+              areas: [],
+              truckDay: [],
+              invoices: [],
+              locked: r.locked,
+              createdAt: r.createdAt,
+              step: r.step,
+            };
           }
           return { plans };
         });
@@ -809,6 +829,7 @@ export const useStore = create<State>((set, get) => {
         };
       });
       log("area.delete", `Removed area ${area} from catalog`);
+      void flushSaveNow();
     },
 
     deleteCustomer: (key) => {
@@ -820,6 +841,7 @@ export const useStore = create<State>((set, get) => {
         return { customers };
       });
       log("customers.delete", `Deleted customer ${key}`);
+      void flushSaveNow();
     },
 
     addInvoices: (list) => {
@@ -1152,6 +1174,7 @@ export const useStore = create<State>((set, get) => {
         return { plans: rest };
       });
       log("plan.delete", `Deleted plan ${date}`);
+      void flushSaveNow();
     },
     exportJSON: () => {
       const s = get();

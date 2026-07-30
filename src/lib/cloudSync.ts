@@ -14,6 +14,7 @@ import { getSupabase, isCloudConfigured } from "./supabase";
 import { loadKey, saveKey } from "./db";
 
 const MIGRATED_KEY = "lp:cloudMigrated";
+const DIRTY_KEY = "lp:cloudDirty";
 const PLAN_HYDRATE_DAYS = 60;
 const UPSERT_CHUNK = 250;
 
@@ -44,7 +45,21 @@ type DirtyFlags = {
   slices: Set<DirtySlice>;
   planDates: Set<string>;
   deletedPlanDates: Set<string>;
+  deletedTruckIds: Set<string>;
+  deletedTripIds: Set<string>;
+  deletedCustomerIds: Set<string>;
   pendingAuditIds: Set<string>;
+  pruneAudit: boolean;
+};
+
+type DirtyPersisted = {
+  slices: DirtySlice[];
+  planDates: string[];
+  deletedPlanDates: string[];
+  deletedTruckIds: string[];
+  deletedTripIds: string[];
+  deletedCustomerIds: string[];
+  pendingAuditIds: string[];
   pruneAudit: boolean;
 };
 
@@ -53,12 +68,74 @@ function emptyDirty(): DirtyFlags {
     slices: new Set(),
     planDates: new Set(),
     deletedPlanDates: new Set(),
+    deletedTruckIds: new Set(),
+    deletedTripIds: new Set(),
+    deletedCustomerIds: new Set(),
     pendingAuditIds: new Set(),
     pruneAudit: false,
   };
 }
 
+function dirtyHasWork(f: DirtyFlags): boolean {
+  return (
+    f.slices.size > 0 ||
+    f.deletedPlanDates.size > 0 ||
+    f.deletedTruckIds.size > 0 ||
+    f.deletedTripIds.size > 0 ||
+    f.deletedCustomerIds.size > 0 ||
+    f.pendingAuditIds.size > 0 ||
+    f.pruneAudit
+  );
+}
+
+function serializeDirty(f: DirtyFlags): DirtyPersisted {
+  return {
+    slices: [...f.slices],
+    planDates: [...f.planDates],
+    deletedPlanDates: [...f.deletedPlanDates],
+    deletedTruckIds: [...f.deletedTruckIds],
+    deletedTripIds: [...f.deletedTripIds],
+    deletedCustomerIds: [...f.deletedCustomerIds],
+    pendingAuditIds: [...f.pendingAuditIds],
+    pruneAudit: f.pruneAudit,
+  };
+}
+
+function deserializeDirty(raw: DirtyPersisted | null | undefined): DirtyFlags {
+  if (!raw) return emptyDirty();
+  const f = emptyDirty();
+  for (const s of raw.slices ?? []) f.slices.add(s);
+  for (const d of raw.planDates ?? []) f.planDates.add(d);
+  for (const d of raw.deletedPlanDates ?? []) f.deletedPlanDates.add(d);
+  for (const id of raw.deletedTruckIds ?? []) f.deletedTruckIds.add(id);
+  for (const id of raw.deletedTripIds ?? []) f.deletedTripIds.add(id);
+  for (const id of raw.deletedCustomerIds ?? []) f.deletedCustomerIds.add(id);
+  for (const id of raw.pendingAuditIds ?? []) f.pendingAuditIds.add(id);
+  f.pruneAudit = !!raw.pruneAudit;
+  return f;
+}
+
 let dirty = emptyDirty();
+let dirtyPersistTail: Promise<void> = Promise.resolve();
+
+function scheduleDirtyPersist(): void {
+  const snapshot = serializeDirty(mergeDirty(dirty, queuedDirty));
+  dirtyPersistTail = dirtyPersistTail.then(async () => {
+    if (
+      snapshot.slices.length === 0 &&
+      snapshot.deletedPlanDates.length === 0 &&
+      snapshot.deletedTruckIds.length === 0 &&
+      snapshot.deletedTripIds.length === 0 &&
+      snapshot.deletedCustomerIds.length === 0 &&
+      snapshot.pendingAuditIds.length === 0 &&
+      !snapshot.pruneAudit
+    ) {
+      await saveKey(DIRTY_KEY, null);
+    } else {
+      await saveKey(DIRTY_KEY, snapshot);
+    }
+  });
+}
 
 export function markDirty(
   slices: DirtySlice[],
@@ -66,6 +143,9 @@ export function markDirty(
     planDate?: string;
     planDates?: string[];
     deletedPlanDate?: string;
+    deletedTruckId?: string;
+    deletedTripId?: string;
+    deletedCustomerId?: string;
     auditId?: string;
     pruneAudit?: boolean;
   },
@@ -74,8 +154,12 @@ export function markDirty(
   if (opts?.planDate) dirty.planDates.add(opts.planDate);
   if (opts?.planDates) for (const d of opts.planDates) dirty.planDates.add(d);
   if (opts?.deletedPlanDate) dirty.deletedPlanDates.add(opts.deletedPlanDate);
+  if (opts?.deletedTruckId) dirty.deletedTruckIds.add(opts.deletedTruckId);
+  if (opts?.deletedTripId) dirty.deletedTripIds.add(opts.deletedTripId);
+  if (opts?.deletedCustomerId) dirty.deletedCustomerIds.add(opts.deletedCustomerId);
   if (opts?.auditId) dirty.pendingAuditIds.add(opts.auditId);
   if (opts?.pruneAudit) dirty.pruneAudit = true;
+  scheduleDirtyPersist();
 }
 
 export function markAllDirty(snapshot?: CloudSnapshot): void {
@@ -94,11 +178,17 @@ export function markAllDirty(snapshot?: CloudSnapshot): void {
     for (const d of Object.keys(snapshot.plans)) dirty.planDates.add(d);
     for (const a of snapshot.audit.slice(0, 5000)) dirty.pendingAuditIds.add(a.id);
   }
+  scheduleDirtyPersist();
+}
+
+export function isPlanDeletePending(date: string): boolean {
+  return dirty.deletedPlanDates.has(date) || queuedDirty.deletedPlanDates.has(date);
 }
 
 function takeDirty(): DirtyFlags {
   const taken = dirty;
   dirty = emptyDirty();
+  scheduleDirtyPersist();
   return taken;
 }
 
@@ -110,11 +200,20 @@ function mergeDirty(a: DirtyFlags, b: DirtyFlags): DirtyFlags {
   for (const d of b.planDates) out.planDates.add(d);
   for (const d of a.deletedPlanDates) out.deletedPlanDates.add(d);
   for (const d of b.deletedPlanDates) out.deletedPlanDates.add(d);
+  for (const id of a.deletedTruckIds) out.deletedTruckIds.add(id);
+  for (const id of b.deletedTruckIds) out.deletedTruckIds.add(id);
+  for (const id of a.deletedTripIds) out.deletedTripIds.add(id);
+  for (const id of b.deletedTripIds) out.deletedTripIds.add(id);
+  for (const id of a.deletedCustomerIds) out.deletedCustomerIds.add(id);
+  for (const id of b.deletedCustomerIds) out.deletedCustomerIds.add(id);
   for (const id of a.pendingAuditIds) out.pendingAuditIds.add(id);
   for (const id of b.pendingAuditIds) out.pendingAuditIds.add(id);
   out.pruneAudit = a.pruneAudit || b.pruneAudit;
   return out;
 }
+
+/** Declared early so scheduleDirtyPersist can merge in-flight queue. */
+let queuedDirty: DirtyFlags = emptyDirty();
 
 function emptySnapshot(currentDate: string): CloudSnapshot {
   return {
@@ -472,15 +571,28 @@ async function syncAreas(s: CloudSnapshot): Promise<void> {
   }
 }
 
-async function syncTrucks(s: CloudSnapshot, now: string): Promise<void> {
+async function syncTrucks(s: CloudSnapshot, now: string, flags: DirtyFlags): Promise<void> {
   const sb = getSupabase()!;
-  if (s.trucks.length === 0) return;
+  const explicitDeletes = [...flags.deletedTruckIds];
+
+  if (s.trucks.length === 0) {
+    // Never wipe the whole table — only honor explicit deletes (e.g. last truck removed).
+    if (explicitDeletes.length) {
+      const { error } = await sb.from("trucks").delete().in("id", explicitDeletes);
+      if (error) throw error;
+    }
+    return;
+  }
+
   const { data: existingTrucks, error: trucksReadErr } = await sb.from("trucks").select("id");
   if (trucksReadErr) throw trucksReadErr;
   const wantTruckIds = new Set(s.trucks.map((t) => t.id));
-  const trucksToDelete = (existingTrucks ?? [])
-    .map((t) => t.id)
-    .filter((id) => !wantTruckIds.has(id));
+  const trucksToDelete = [
+    ...new Set([
+      ...explicitDeletes,
+      ...(existingTrucks ?? []).map((t) => t.id).filter((id) => !wantTruckIds.has(id)),
+    ]),
+  ];
   if (trucksToDelete.length) {
     const { error } = await sb.from("trucks").delete().in("id", trucksToDelete);
     if (error) throw error;
@@ -498,16 +610,28 @@ async function syncTrucks(s: CloudSnapshot, now: string): Promise<void> {
   );
 }
 
-async function syncTrips(s: CloudSnapshot, now: string): Promise<void> {
+async function syncTrips(s: CloudSnapshot, now: string, flags: DirtyFlags): Promise<void> {
   const sb = getSupabase()!;
-  if (s.trips.length === 0) return;
+  const explicitDeletes = [...flags.deletedTripIds];
+
+  if (s.trips.length === 0) {
+    if (explicitDeletes.length) {
+      const { error } = await sb.from("trips").delete().in("id", explicitDeletes);
+      if (error && !/does not exist|schema cache/i.test(error.message)) throw error;
+    }
+    return;
+  }
+
   const { data: existingTrips, error: tripsReadErr } = await sb.from("trips").select("id");
   if (tripsReadErr && /does not exist|schema cache/i.test(tripsReadErr.message)) return;
   if (tripsReadErr) throw tripsReadErr;
   const wantTripIds = new Set(s.trips.map((t) => t.id));
-  const tripsToDelete = (existingTrips ?? [])
-    .map((t) => t.id)
-    .filter((id) => !wantTripIds.has(id));
+  const tripsToDelete = [
+    ...new Set([
+      ...explicitDeletes,
+      ...(existingTrips ?? []).map((t) => t.id).filter((id) => !wantTripIds.has(id)),
+    ]),
+  ];
   if (tripsToDelete.length) {
     const { error } = await sb.from("trips").delete().in("id", tripsToDelete);
     if (error) throw error;
@@ -543,16 +667,31 @@ async function syncTrips(s: CloudSnapshot, now: string): Promise<void> {
   }
 }
 
-async function syncCustomers(s: CloudSnapshot, now: string): Promise<void> {
+async function syncCustomers(s: CloudSnapshot, now: string, flags: DirtyFlags): Promise<void> {
   const sb = getSupabase()!;
   const ids = Object.keys(s.customers);
-  if (ids.length === 0) return;
+  const explicitDeletes = [...flags.deletedCustomerIds];
+
+  if (ids.length === 0) {
+    if (explicitDeletes.length) {
+      for (let i = 0; i < explicitDeletes.length; i += UPSERT_CHUNK) {
+        const chunk = explicitDeletes.slice(i, i + UPSERT_CHUNK);
+        const { error } = await sb.from("customers").delete().in("id", chunk);
+        if (error) throw error;
+      }
+    }
+    return;
+  }
+
   const { data: existingCustomers, error: custReadErr } = await sb.from("customers").select("id");
   if (custReadErr) throw custReadErr;
   const wantCustIds = new Set(ids);
-  const custToDelete = (existingCustomers ?? [])
-    .map((c) => c.id)
-    .filter((id) => !wantCustIds.has(id));
+  const custToDelete = [
+    ...new Set([
+      ...explicitDeletes,
+      ...(existingCustomers ?? []).map((c) => c.id).filter((id) => !wantCustIds.has(id)),
+    ]),
+  ];
   for (let i = 0; i < custToDelete.length; i += UPSERT_CHUNK) {
     const chunk = custToDelete.slice(i, i + UPSERT_CHUNK);
     const { error } = await sb.from("customers").delete().in("id", chunk);
@@ -674,9 +813,9 @@ export async function persistToCloud(s: CloudSnapshot, flags?: DirtyFlags): Prom
   const now = new Date().toISOString();
   const tasks: Promise<void>[] = [];
   if (f.slices.has("areas")) tasks.push(syncAreas(s));
-  if (f.slices.has("trucks")) tasks.push(syncTrucks(s, now));
-  if (f.slices.has("trips")) tasks.push(syncTrips(s, now));
-  if (f.slices.has("customers")) tasks.push(syncCustomers(s, now));
+  if (f.slices.has("trucks")) tasks.push(syncTrucks(s, now, f));
+  if (f.slices.has("trips")) tasks.push(syncTrips(s, now, f));
+  if (f.slices.has("customers")) tasks.push(syncCustomers(s, now, f));
   if (f.slices.has("plans")) tasks.push(syncPlans(s, now, f));
   if (f.slices.has("settings")) tasks.push(syncSettings(s, now));
   await Promise.all(tasks);
@@ -684,25 +823,23 @@ export async function persistToCloud(s: CloudSnapshot, flags?: DirtyFlags): Prom
 }
 
 function mergeCloudWithLocal(cloud: CloudSnapshot, local: CloudSnapshot): CloudSnapshot {
-  const tripsById = new Map(cloud.trips.map((t) => [t.id, normalizeTrip(t)]));
-  for (const t of local.trips) {
-    if (!tripsById.has(t.id)) tripsById.set(t.id, normalizeTrip(t));
-  }
+  // Only restore trucks/trips from local when cloud is empty (accidental wipe recovery).
+  // Do NOT re-add local-only ids when cloud has data — that resurrects intentional deletes.
   const trips =
     cloud.trips.length === 0 && local.trips.length > 0
       ? local.trips.map((t) => normalizeTrip(t))
-      : [...tripsById.values()];
+      : cloud.trips.map((t) => normalizeTrip(t));
 
-  const trucksById = new Map(cloud.trucks.map((t) => [t.id, t]));
-  for (const t of local.trucks) {
-    if (!trucksById.has(t.id)) trucksById.set(t.id, t);
-  }
   const trucks =
-    cloud.trucks.length === 0 && local.trucks.length > 0 ? local.trucks : [...trucksById.values()];
+    cloud.trucks.length === 0 && local.trucks.length > 0 ? local.trucks : cloud.trucks;
 
+  // Keep local plan days outside the hydrate window; within the window, cloud wins
+  // (so deletes that synced to cloud stay deleted).
+  const cutoff = daysAgoISO(PLAN_HYDRATE_DAYS);
   const plans = { ...cloud.plans };
   for (const [d, p] of Object.entries(local.plans)) {
-    if (!plans[d]) plans[d] = p;
+    if (plans[d]) continue;
+    if (d < cutoff && d !== cloud.currentDate) plans[d] = p;
   }
 
   // Prefer cloud order; keep local payloads when hydrate omitted them.
@@ -729,6 +866,10 @@ export async function hydrateWarehouse(opts?: {
   migrated: boolean;
 }> {
   const local = await loadLocalSnapshot();
+  const savedDirty = deserializeDirty(await loadKey<DirtyPersisted | null>(DIRTY_KEY, null));
+  if (dirtyHasWork(savedDirty)) {
+    dirty = mergeDirty(dirty, savedDirty);
+  }
 
   if (opts?.preferLocal) {
     const status: CloudStatus =
@@ -747,6 +888,22 @@ export async function hydrateWarehouse(opts?: {
     return { snapshot: local, status: "offline", migrated: false };
   }
 
+  // Pending local deletes/edits survived reload — push local first so cloud doesn't resurrect them.
+  if (dirtyHasWork(dirty)) {
+    const flags = takeDirty();
+    try {
+      await persistToCloud(local, flags);
+      await saveKey(DIRTY_KEY, null);
+      await saveLocalSnapshot(local);
+      return { snapshot: local, status: "cloud", migrated: false };
+    } catch (err) {
+      console.error("Pending cloud sync failed on hydrate", err);
+      dirty = mergeDirty(dirty, flags);
+      scheduleDirtyPersist();
+      return { snapshot: local, status: "error", migrated: false };
+    }
+  }
+
   try {
     const fetched = await hydrateFromCloud();
     if (!fetched) {
@@ -761,17 +918,17 @@ export async function hydrateWarehouse(opts?: {
       markAllDirty(local);
       await persistToCloud(local, takeDirty());
       await saveKey(MIGRATED_KEY, true);
+      await saveKey(DIRTY_KEY, null);
       cloud = local;
       migrated = true;
     } else if (cloudHasData(cloud) && !migratedFlag) {
       await saveKey(MIGRATED_KEY, true);
     }
 
+    // Only recover when cloud wiped an entire collection — not when local has extras (deletes).
     const needsRecovery =
       (cloud.trips.length === 0 && local.trips.length > 0) ||
-      (cloud.trucks.length === 0 && local.trucks.length > 0) ||
-      local.trips.some((t) => !cloud.trips.some((c) => c.id === t.id)) ||
-      local.trucks.some((t) => !cloud.trucks.some((c) => c.id === t.id));
+      (cloud.trucks.length === 0 && local.trucks.length > 0);
 
     cloud = mergeCloudWithLocal(cloud, local);
 
@@ -779,6 +936,7 @@ export async function hydrateWarehouse(opts?: {
       try {
         markAllDirty(cloud);
         await persistToCloud(cloud, takeDirty());
+        await saveKey(DIRTY_KEY, null);
       } catch (err) {
         console.error("Failed to re-push recovered trips/trucks", err);
       }
@@ -796,7 +954,7 @@ let persistInFlight = false;
 let persistTail: Promise<CloudStatus> = Promise.resolve("local");
 let queuedSnapshot: CloudSnapshot | null = null;
 let queuedGeneration = 0;
-let queuedDirty: DirtyFlags = emptyDirty();
+// queuedDirty declared earlier for scheduleDirtyPersist
 let lastSyncedGeneration = 0;
 let latestGeneration = 0;
 
@@ -810,7 +968,8 @@ export function isWarehouseDirty(): boolean {
     latestGeneration > lastSyncedGeneration ||
     persistInFlight ||
     queuedSnapshot !== null ||
-    dirty.slices.size > 0
+    dirtyHasWork(dirty) ||
+    dirtyHasWork(queuedDirty)
   );
 }
 
@@ -823,10 +982,16 @@ async function persistToCloudIfNeeded(
 
   try {
     await persistToCloud(s, flags);
+    if (!dirtyHasWork(dirty) && !dirtyHasWork(queuedDirty)) {
+      await saveKey(DIRTY_KEY, null);
+    } else {
+      scheduleDirtyPersist();
+    }
     return "cloud";
   } catch (err) {
     console.error("Cloud persist failed", err);
     dirty = mergeDirty(dirty, flags);
+    scheduleDirtyPersist();
     return "error";
   }
 }
