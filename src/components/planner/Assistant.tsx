@@ -14,10 +14,13 @@ import {
 } from "@/components/ui/drawer";
 import { AnimatedNumber } from "./ui/AnimatedNumber";
 import { findCustomer } from "@/lib/customers";
+import { townsForTruckDay } from "@/lib/trips";
+import type { PlanStep } from "@/lib/types";
 
 export function Assistant() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
   const trucks = useStore((s) => s.trucks);
+  const trips = useStore((s) => s.trips);
   const customers = useStore((s) => s.customers);
   const heldInvoices = useStore((s) => s.heldInvoices);
   const [desktopOpen, setDesktopOpen] = useState(true);
@@ -57,20 +60,21 @@ export function Assistant() {
   }
   const areaSorted = [...areaTotals.entries()].sort((a, b) => b[1] - a[1]);
 
-  const post =
-    plan.step === "allocate" ||
-    plan.step === "adjust" ||
-    plan.step === "lock" ||
-    plan.step === "print";
+  const trucksWithTrip = active.filter((t) => {
+    const td = plan.truckDay.find((d) => d.truckId === t.id);
+    return townsForTruckDay(td, trips).length > 0;
+  }).length;
 
   const body = (
     <AssistantBody
+      step={plan.step}
       planDate={plan.date}
       invoiceCount={plan.invoices.length}
       totalWeight={totalWeight}
       activeCount={active.length}
       cap={cap}
-      post={post}
+      tripsAssigned={trucksWithTrip}
+      tripCatalog={trips.length}
       known={known}
       newly={newly}
       duplicates={duplicates}
@@ -95,7 +99,6 @@ export function Assistant() {
 
   return (
     <>
-      {/* Mobile: floating button + bottom drawer (< lg) */}
       <div className="no-print lg:hidden">
         <Button
           type="button"
@@ -118,7 +121,6 @@ export function Assistant() {
         </Drawer>
       </div>
 
-      {/* Desktop sidebar (lg+) */}
       {!desktopOpen ? (
         <Button
           type="button"
@@ -152,12 +154,14 @@ export function Assistant() {
 }
 
 function AssistantBody({
+  step,
   planDate,
   invoiceCount,
   totalWeight,
   activeCount,
   cap,
-  post,
+  tripsAssigned,
+  tripCatalog,
   known,
   newly,
   duplicates,
@@ -174,12 +178,14 @@ function AssistantBody({
   topTown,
   lowTown,
 }: {
+  step: PlanStep;
   planDate: string;
   invoiceCount: number;
   totalWeight: number;
   activeCount: number;
   cap: number;
-  post: boolean;
+  tripsAssigned: number;
+  tripCatalog: number;
   known: number;
   newly: number;
   duplicates: number;
@@ -196,54 +202,98 @@ function AssistantBody({
   topTown: string | null;
   lowTown: string | null;
 }) {
+  const isSetup = step === "setup";
+  const isImport = step === "import";
+  const isAllocate = step === "allocate" || step === "adjust";
+  const isSummary = step === "lock" || step === "print";
+
   return (
     <>
       <p className="mb-4 text-xs text-muted-foreground">
         Plan for <span className="font-medium text-foreground">{planDate}</span>
       </p>
 
-      <Section title="Overview">
-        <Row label="Total invoices" value={invoiceCount} />
-        <Row label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />
-        <Row label="Active trucks" value={activeCount} />
-        <Row label="Fleet capacity" value={`${cap} kg`} />
-        <Row label="Held for later" value={heldCount} tone={heldCount ? "warn" : undefined} />
-      </Section>
-
-      <Separator className="my-3 bg-border/60" />
-
-      {!post ? (
-        <Section title="Import health">
-          <Row label="Known customers" value={known} />
-          <Row label="New customers" value={newly} tone={newly ? "warn" : undefined} />
-          <Row label="Duplicate docs" value={duplicates} tone={duplicates ? "crit" : undefined} />
-          <Row label="Missing weights" value={missingWeights} tone="warn" />
-          <Row label="Missing towns" value={missingTowns} tone="warn" />
-          <Row label="Held invoices" value={heldCount} tone={heldCount ? "warn" : undefined} />
-          <Row label="Remaining capacity" value={`${remaining.toFixed(0)} kg`} />
+      {isSetup && (
+        <Section title="Readiness">
+          <Row label="Trips in catalog" value={tripCatalog} />
+          <Row label="Active trucks" value={activeCount} tone={activeCount ? "good" : "warn"} />
+          <Row label="Fleet capacity" value={`${cap} kg`} />
+          <Row
+            label="Trucks with trip"
+            value={`${tripsAssigned}/${activeCount || 0}`}
+            tone={activeCount > 0 && tripsAssigned === activeCount ? "good" : "warn"}
+          />
+          <Row label="Held for later" value={heldCount} tone={heldCount ? "warn" : undefined} />
         </Section>
-      ) : (
-        <Section title="Allocation">
+      )}
+
+      {isImport && (
+        <>
+          <Section title="Overview">
+            <Row label="Total invoices" value={invoiceCount} />
+            <Row label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />
+            <Row label="Active trucks" value={activeCount} />
+            <Row label="Fleet capacity" value={`${cap} kg`} />
+            <Row label="Held for later" value={heldCount} tone={heldCount ? "warn" : undefined} />
+          </Section>
+          <Separator className="my-3 bg-border/60" />
+          <Section title="Import health">
+            <Row label="Known customers" value={known} />
+            <Row label="New customers" value={newly} tone={newly ? "warn" : undefined} />
+            <Row label="Duplicate docs" value={duplicates} tone={duplicates ? "crit" : undefined} />
+            <Row label="Missing weights" value={missingWeights} tone={missingWeights ? "warn" : undefined} />
+            <Row label="Missing towns" value={missingTowns} tone={missingTowns ? "warn" : undefined} />
+            <Row label="Remaining capacity" value={`${remaining.toFixed(0)} kg`} />
+          </Section>
+        </>
+      )}
+
+      {isAllocate && (
+        <>
+          <Section title="Overview">
+            <Row label="Total invoices" value={invoiceCount} />
+            <Row label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />
+            <Row label="Active trucks" value={activeCount} />
+            <Row label="Fleet capacity" value={`${cap} kg`} />
+          </Section>
+          <Separator className="my-3 bg-border/60" />
+          <Section title="Allocation">
+            <Row label="Allocated" value={allocatedCount} tone="good" />
+            <Row
+              label="Unallocated"
+              value={unallocatedCount}
+              tone={unallocatedCount ? "crit" : "good"}
+            />
+            <div className="space-y-1.5 py-1">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Fleet utilisation</span>
+                <span className="metric-mono text-foreground">
+                  <AnimatedNumber value={Math.round(util)} suffix="%" />
+                </span>
+              </div>
+              <Progress value={util} className="animate-breathe h-1.5" />
+            </div>
+            <Row label="Trucks at 90%+" value={above90} tone={above90 ? "warn" : undefined} />
+            {heaviest && <Row label="Heaviest" value={heaviest} />}
+            {lightest && <Row label="Lightest" value={lightest} />}
+            {topTown && <Row label="Top town" value={topTown} />}
+            {lowTown && <Row label="Low town" value={lowTown} />}
+          </Section>
+        </>
+      )}
+
+      {isSummary && (
+        <Section title="Summary">
+          <Row label="Total invoices" value={invoiceCount} />
+          <Row label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />
           <Row label="Allocated" value={allocatedCount} tone="good" />
           <Row
             label="Unallocated"
             value={unallocatedCount}
             tone={unallocatedCount ? "crit" : "good"}
           />
-          <div className="space-y-1.5 py-1">
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Fleet utilisation</span>
-              <span className="metric-mono text-foreground">
-                <AnimatedNumber value={Math.round(util)} suffix="%" />
-              </span>
-            </div>
-            <Progress value={util} className="animate-breathe h-1.5" />
-          </div>
-          <Row label="Trucks at 90%+" value={above90} tone={above90 ? "warn" : undefined} />
-          {heaviest && <Row label="Heaviest" value={heaviest} />}
-          {lightest && <Row label="Lightest" value={lightest} />}
-          {topTown && <Row label="Top town" value={topTown} />}
-          {lowTown && <Row label="Low town" value={lowTown} />}
+          <Row label="Fleet utilisation" value={`${Math.round(util)}%`} />
+          <Row label="Active trucks" value={activeCount} />
         </Section>
       )}
     </>

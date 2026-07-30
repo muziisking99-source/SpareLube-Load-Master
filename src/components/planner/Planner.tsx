@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { stepList, useStore } from "@/lib/store";
-import { isCloudConfigured } from "@/lib/supabase";
 import { isWarehouseDirty } from "@/lib/cloudSync";
 import { SetupScreen } from "./SetupScreen";
 import { ImportScreen } from "./ImportScreen";
@@ -18,7 +17,6 @@ import { ResumeModal } from "./ResumeModal";
 export function Planner() {
   const hydrated = useStore((s) => s.hydrated);
   const hydrate = useStore((s) => s.hydrate);
-  const cloudStatus = useStore((s) => s.cloudStatus);
   const currentDate = useStore((s) => s.currentDate);
   const plan = useStore((s) => s.plans[currentDate]);
   const setStep = useStore((s) => s.setStep);
@@ -35,38 +33,48 @@ export function Planner() {
 
   useEffect(() => {
     if (!hydrated) return;
-    if (cloudStatus === "error") {
-      toast.error("Cloud sync unavailable — using data on this device");
-    } else if (cloudStatus === "cloud" && isCloudConfigured()) {
-      // silent success
-    } else if (cloudStatus === "local" && !isCloudConfigured()) {
-      // no env — silent; TopBar shows Local
-    }
-  }, [hydrated, cloudStatus]);
+    // Errors are surfaced via SyncStatusChip + auto-retry toast; avoid noisy mount toasts.
+  }, [hydrated]);
 
   useEffect(() => {
     const onOnline = () => {
-      // Only re-hydrate from cloud when local is clean; otherwise push local first
       const flush = useStore.getState().flushSave;
       void (async () => {
         if (isWarehouseDirty()) {
-          await flush();
+          const status = await flush();
+          if (status === "cloud") toast.success("Back online — synced");
+        } else {
+          await hydrate({ force: true });
+          toast.success("Back online — synced");
         }
-        await hydrate({ force: true });
       })();
     };
     const onOffline = () => {
-      useStore.setState({ cloudStatus: "offline" });
+      useStore.setState({ cloudStatus: "offline", syncState: "offline" });
     };
-    const onBeforeUnload = () => {
+    const flushPending = () => {
       void useStore.getState().flushSave();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flushPending();
+    };
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      flushPending();
+      if (isWarehouseDirty()) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
     };
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
+    window.addEventListener("pagehide", flushPending);
+    document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => {
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
+      window.removeEventListener("pagehide", flushPending);
+      document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
   }, [hydrate]);

@@ -973,6 +973,29 @@ export function isWarehouseDirty(): boolean {
   );
 }
 
+/** Human-readable summary of pending dirty slices for sync tooltips. */
+export function getDirtySummary(): string {
+  const f = mergeDirty(dirty, queuedDirty);
+  if (!dirtyHasWork(f) && latestGeneration <= lastSyncedGeneration && !persistInFlight) {
+    return "";
+  }
+  const parts: string[] = [];
+  if (f.slices.has("trucks") || f.deletedTruckIds.size) parts.push("trucks");
+  if (f.slices.has("trips") || f.deletedTripIds.size) parts.push("trips");
+  if (f.slices.has("customers") || f.deletedCustomerIds.size) parts.push("customers");
+  if (f.slices.has("areas")) parts.push("towns");
+  if (f.slices.has("plans") || f.planDates.size || f.deletedPlanDates.size) {
+    const dates = [...f.planDates, ...f.deletedPlanDates].slice(0, 2);
+    parts.push(dates.length ? `plan ${dates.join(", ")}` : "plans");
+  }
+  if (f.slices.has("settings")) parts.push("settings");
+  if (f.slices.has("audit") || f.pendingAuditIds.size) parts.push("audit");
+  if (parts.length === 0 && (persistInFlight || latestGeneration > lastSyncedGeneration)) {
+    return "Pending changes…";
+  }
+  return parts.length ? `Saving ${parts.join(", ")}…` : "";
+}
+
 async function persistToCloudIfNeeded(
   s: CloudSnapshot,
   flags: DirtyFlags,

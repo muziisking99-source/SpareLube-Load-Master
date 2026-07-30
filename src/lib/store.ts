@@ -29,9 +29,14 @@ import {
   saveLocalSnapshot,
   requestAuditPrune,
   isPlanDeletePending,
+  getDirtySummary,
   type CloudStatus,
   type CloudSnapshot,
 } from "./cloudSync";
+import { isCloudConfigured } from "./supabase";
+import { toast } from "sonner";
+
+export type SyncState = "saved" | "saving" | "offline" | "error" | "local";
 
 function tomorrowISO(): string {
   const d = new Date();
@@ -60,6 +65,10 @@ type UndoAction = { label: string; undo: () => void };
 type State = {
   hydrated: boolean;
   cloudStatus: CloudStatus;
+  /** User-facing sync indicator (Saving / Saved / Error / …). */
+  syncState: SyncState;
+  lastSyncedAt: string | null;
+  pendingSummary: string;
   trucks: Truck[];
   trips: Trip[];
   customers: Record<string, CustomerMemory>;
@@ -185,11 +194,16 @@ function toSnapshot(state: State): CloudSnapshot {
 }
 
 const LOCAL_DEBOUNCE_MS = 300;
-const CLOUD_DEBOUNCE_MS = 1500;
+const CLOUD_DEBOUNCE_MS = 500;
+const RETRY_DELAYS_MS = [5_000, 15_000, 30_000];
 
 let localSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let cloudSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingGeneration = 0;
+let retryAttempt = 0;
+let errorSinceMs: number | null = null;
+let failureToastShown = false;
 
 function markDirtyFromPatch(patch: Partial<State>, prev: State) {
   if (patch.trucks !== undefined) {
@@ -240,17 +254,121 @@ function markDirtyFromPatch(patch: Partial<State>, prev: State) {
   }
 }
 
+function clearRetryTimer() {
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+}
+
+function applyPersistResult(status: CloudStatus, opts?: { cloudAttempt?: boolean }) {
+  const summary = getDirtySummary();
+  const dirty = isWarehouseDirty();
+
+  if (status === "offline") {
+    useStore.setState({
+      cloudStatus: "offline",
+      syncState: "offline",
+      pendingSummary: summary,
+    });
+    clearRetryTimer();
+    return;
+  }
+
+  if (status === "error") {
+    if (errorSinceMs == null) errorSinceMs = Date.now();
+    useStore.setState({
+      cloudStatus: "error",
+      syncState: "error",
+      pendingSummary: summary || "Sync failed — click to retry",
+    });
+    if (!failureToastShown && errorSinceMs != null && Date.now() - errorSinceMs >= 30_000) {
+      failureToastShown = true;
+      toast.error("Cloud sync keeps failing — click the sync chip to retry");
+    }
+    scheduleAutoRetry();
+    return;
+  }
+
+  if (!isCloudConfigured()) {
+    useStore.setState({
+      cloudStatus: "local",
+      syncState: "local",
+      pendingSummary: "",
+    });
+    clearRetryTimer();
+    return;
+  }
+
+  if (opts?.cloudAttempt && status === "cloud" && !dirty) {
+    retryAttempt = 0;
+    errorSinceMs = null;
+    failureToastShown = false;
+    clearRetryTimer();
+    useStore.setState({
+      cloudStatus: "cloud",
+      syncState: "saved",
+      lastSyncedAt: new Date().toISOString(),
+      pendingSummary: "",
+    });
+    return;
+  }
+
+  // Local-only write, or cloud write that left more work queued
+  if (dirty) {
+    useStore.setState({
+      cloudStatus: status === "cloud" ? "cloud" : useStore.getState().cloudStatus,
+      syncState: "saving",
+      pendingSummary: summary || "Saving…",
+    });
+    return;
+  }
+
+  if (status === "cloud") {
+    retryAttempt = 0;
+    errorSinceMs = null;
+    failureToastShown = false;
+    clearRetryTimer();
+    useStore.setState({
+      cloudStatus: "cloud",
+      syncState: "saved",
+      lastSyncedAt: new Date().toISOString(),
+      pendingSummary: "",
+    });
+  }
+}
+
+function scheduleAutoRetry() {
+  if (typeof navigator !== "undefined" && !navigator.onLine) return;
+  if (!isCloudConfigured()) return;
+  clearRetryTimer();
+  const delay = RETRY_DELAYS_MS[Math.min(retryAttempt, RETRY_DELAYS_MS.length - 1)];
+  retryAttempt += 1;
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    if (!isWarehouseDirty() && useStore.getState().syncState !== "error") return;
+    void flushSaveNow();
+  }, delay);
+}
+
 function scheduleSave() {
   const gen = bumpSyncGeneration();
   pendingGeneration = gen;
+
+  useStore.setState({
+    syncState: isCloudConfigured()
+      ? typeof navigator !== "undefined" && !navigator.onLine
+        ? "offline"
+        : "saving"
+      : "local",
+    pendingSummary: getDirtySummary() || "Saving…",
+  });
 
   if (localSaveTimer) clearTimeout(localSaveTimer);
   localSaveTimer = setTimeout(() => {
     localSaveTimer = null;
     void persistWarehouse(toSnapshot(useStore.getState()), gen, { skipCloud: true }).then(
-      (status) => {
-        useStore.setState({ cloudStatus: status });
-      },
+      (status) => applyPersistResult(status),
     );
   }, LOCAL_DEBOUNCE_MS);
 
@@ -258,9 +376,7 @@ function scheduleSave() {
   cloudSaveTimer = setTimeout(() => {
     cloudSaveTimer = null;
     void persistWarehouse(toSnapshot(useStore.getState()), gen, { skipLocal: true }).then(
-      (status) => {
-        useStore.setState({ cloudStatus: status });
-      },
+      (status) => applyPersistResult(status, { cloudAttempt: true }),
     );
   }, CLOUD_DEBOUNCE_MS);
 }
@@ -274,11 +390,21 @@ async function flushSaveNow(): Promise<CloudStatus> {
     clearTimeout(cloudSaveTimer);
     cloudSaveTimer = null;
   }
+  clearRetryTimer();
+
+  if (isCloudConfigured()) {
+    useStore.setState({
+      syncState:
+        typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "saving",
+      pendingSummary: getDirtySummary() || "Saving…",
+    });
+  }
+
   const state = useStore.getState();
   const gen = pendingGeneration || bumpSyncGeneration();
   pendingGeneration = gen;
   const status = await persistWarehouse(toSnapshot(state), gen);
-  useStore.setState({ cloudStatus: status });
+  applyPersistResult(status, { cloudAttempt: true });
   return status;
 }
 
@@ -316,6 +442,9 @@ export const useStore = create<State>((set, get) => {
   return {
     hydrated: false,
     cloudStatus: "local",
+    syncState: "local",
+    lastSyncedAt: null,
+    pendingSummary: "",
     trucks: [],
     trips: [],
     customers: {},
@@ -341,7 +470,7 @@ export const useStore = create<State>((set, get) => {
         const { snapshot, status } = await hydrateWarehouse({ preferLocal });
         // If we preferred local because dirty, keep in-memory state (already newer)
         if (preferLocal && already) {
-          set({ cloudStatus: status });
+          applyPersistResult(status, { cloudAttempt: status === "cloud" });
           return;
         }
         const {
@@ -358,9 +487,20 @@ export const useStore = create<State>((set, get) => {
 
         const existing = plans[currentDate];
         const showResume = !!existing && !existing.locked && existing.invoices.length > 0;
+        const syncState: SyncState =
+          status === "cloud"
+            ? "saved"
+            : status === "offline"
+              ? "offline"
+              : status === "error"
+                ? "error"
+                : "local";
         set({
           hydrated: true,
           cloudStatus: status,
+          syncState,
+          lastSyncedAt: status === "cloud" ? new Date().toISOString() : get().lastSyncedAt,
+          pendingSummary: "",
           trucks,
           trips: (trips ?? []).map((t) => normalizeTrip(t)),
           customers,
@@ -375,7 +515,7 @@ export const useStore = create<State>((set, get) => {
           showResume,
         });
       } catch {
-        set({ hydrated: true, cloudStatus: "error" });
+        set({ hydrated: true, cloudStatus: "error", syncState: "error" });
       }
     },
 

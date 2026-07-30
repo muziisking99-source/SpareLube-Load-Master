@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowRight, Trash2 } from "lucide-react";
+import { ArrowRight, Check, Circle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "@tanstack/react-router";
 import { useStore } from "@/lib/store";
@@ -34,6 +34,9 @@ import { FormField } from "./ui/FormField";
 import { AdminSearchInput, matchesQuery } from "./AdminSearchInput";
 import { cn } from "@/lib/utils";
 
+const EDITABLE_INPUT =
+  "h-8 w-full min-w-0 rounded-md border-0 border-b border-border/70 bg-panel-2/40 px-2 shadow-none hover:border-border focus-visible:border-primary focus-visible:ring-0";
+
 export function SetupScreen() {
   const plan = useStore((s) => s.plans[s.currentDate]);
   const plans = useStore((s) => s.plans);
@@ -53,6 +56,7 @@ export function SetupScreen() {
   const [truckForm, setTruckForm] = useState({ name: "", maxWeight: 3000 });
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [tripSearch, setTripSearch] = useState("");
+  const [continueAttempted, setContinueAttempted] = useState(false);
 
   const truckDayById = new Map((plan?.truckDay ?? []).map((td) => [td.truckId, td]));
   const activeTrucks = trucks.filter((t) => t.active);
@@ -68,6 +72,34 @@ export function SetupScreen() {
     return td && !td.tripId && (td.areas?.length ?? 0) > 0;
   });
   const canContinue = activeTrucks.length > 0 && missingTrip.length === 0;
+  const showErrors = continueAttempted && !canContinue;
+
+  const checklist = [
+    {
+      id: "trips",
+      label:
+        trips.length === 0
+          ? "Create trips in Admin"
+          : `${trips.length} trip${trips.length === 1 ? "" : "s"} available`,
+      ok: trips.length > 0,
+    },
+    {
+      id: "active",
+      label:
+        activeTrucks.length === 0
+          ? "Activate at least one truck"
+          : `${activeTrucks.length} truck${activeTrucks.length === 1 ? "" : "s"} active`,
+      ok: activeTrucks.length > 0,
+    },
+    {
+      id: "assigned",
+      label:
+        missingTrip.length === 0
+          ? "Every active truck has a trip"
+          : `${missingTrip.length} truck${missingTrip.length === 1 ? "" : "s"} need a trip`,
+      ok: missingTrip.length === 0 && activeTrucks.length > 0,
+    },
+  ];
 
   const filteredTrips = useMemo(() => {
     const q = tripSearch.trim();
@@ -98,32 +130,44 @@ export function SetupScreen() {
   const continuePanel = (
     <>
       <h3 className="font-semibold tracking-tight">Ready to continue?</h3>
-      <ul className="mb-4 mt-3 space-y-2 text-sm">
-        <li className="flex justify-between">
-          <span className="text-muted-foreground">Trips available</span>
-          <span className="metric-mono font-medium">{trips.length}</span>
-        </li>
-        <li className="flex justify-between">
-          <span className="text-muted-foreground">Active trucks</span>
-          <span className="metric-mono font-medium">{activeTrucks.length}</span>
-        </li>
-        <li className="flex justify-between">
-          <span className="text-muted-foreground">Missing trip</span>
-          <span className={`metric-mono font-medium ${missingTrip.length ? "text-warn" : ""}`}>
-            {missingTrip.length}
-          </span>
-        </li>
+      <ul className="mb-4 mt-3 space-y-2.5 text-sm">
+        {checklist.map((item) => (
+          <li key={item.id} className="flex items-start gap-2.5">
+            {item.ok ? (
+              <Check className="mt-0.5 size-4 shrink-0 text-good" aria-hidden />
+            ) : (
+              <Circle
+                className={cn(
+                  "mt-0.5 size-4 shrink-0",
+                  showErrors ? "text-crit" : "text-muted-foreground",
+                )}
+                aria-hidden
+              />
+            )}
+            <span
+              className={cn(
+                item.ok
+                  ? "text-foreground"
+                  : showErrors
+                    ? "text-crit"
+                    : "text-muted-foreground",
+              )}
+            >
+              {item.label}
+            </span>
+          </li>
+        ))}
       </ul>
-      {activeTrucks.length === 0 && (
-        <p className="mb-3 text-sm text-crit">At least one truck must be active.</p>
+      {showErrors && activeTrucks.length === 0 && (
+        <p className="mb-3 text-sm text-crit">Turn on Active for at least one truck below.</p>
       )}
-      {trips.length === 0 && (
-        <p className="mb-3 text-sm text-warn">
+      {showErrors && trips.length === 0 && (
+        <p className="mb-3 text-sm text-crit">
           Create named trips in Admin → Trips before assigning trucks.
         </p>
       )}
-      {missingTrip.length > 0 && (
-        <p className="mb-3 text-sm text-warn">
+      {showErrors && missingTrip.length > 0 && activeTrucks.length > 0 && (
+        <p className="mb-3 text-sm text-crit">
           Assign a trip to every active truck before continuing.
         </p>
       )}
@@ -132,7 +176,17 @@ export function SetupScreen() {
           {legacyOnly.length} truck(s) still use legacy towns — assign a named trip when convenient.
         </p>
       )}
-      <Button disabled={!canContinue} className="w-full" size="lg" onClick={() => setStep("import")}>
+      <Button
+        className="w-full"
+        size="lg"
+        onClick={() => {
+          if (!canContinue) {
+            setContinueAttempted(true);
+            return;
+          }
+          setStep("import");
+        }}
+      >
         Continue to Import
         <ArrowRight className="size-4" />
       </Button>
@@ -142,20 +196,25 @@ export function SetupScreen() {
   return (
     <div className="space-y-6">
       <div className="space-y-6">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <ScreenHeader
+            title="Daily Setup"
+            description="Pick the plan date, activate trucks, and assign today’s trips."
+          />
+          <FormField label="Plan date" className="gap-1">
+            <Input
+              type="date"
+              value={plan?.date ?? currentDate}
+              onChange={(e) => setDate(e.target.value)}
+              className="h-9 w-full sm:h-8 sm:w-auto"
+            />
+          </FormField>
+        </div>
+
         <CollapsibleSection
           title="Today's Trips"
           description="Named runs available to assign to trucks. Manage trips in Admin."
           defaultOpen={false}
-          action={
-            <FormField label="Plan date" className="gap-1">
-              <Input
-                type="date"
-                value={plan?.date ?? ""}
-                onChange={(e) => setDate(e.target.value)}
-                className="h-9 w-full sm:h-8 sm:w-auto"
-              />
-            </FormField>
-          }
         >
           {trips.length === 0 ? (
             <EmptyState
@@ -424,7 +483,7 @@ export function SetupScreen() {
                             <Input
                               value={t.name}
                               onChange={(e) => updateTruck(t.id, { name: e.target.value })}
-                              className="h-8 min-w-0 w-full border-transparent bg-transparent hover:border-border focus:border-ring"
+                              className={EDITABLE_INPUT}
                             />
                           </TableCell>
                           <TableCell>
@@ -434,7 +493,7 @@ export function SetupScreen() {
                               onChange={(e) =>
                                 updateTruck(t.id, { maxWeight: Number(e.target.value) })
                               }
-                              className="metric-mono h-8 w-full max-w-[6.5rem] border-transparent bg-transparent hover:border-border focus:border-ring"
+                              className={cn(EDITABLE_INPUT, "metric-mono max-w-[6.5rem]")}
                             />
                           </TableCell>
                           <TableCell className="min-w-0">

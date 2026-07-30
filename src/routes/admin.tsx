@@ -33,7 +33,19 @@ import {
   matchesQuery,
 } from "@/components/planner/AdminSearchInput";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { SyncStatusChip } from "@/components/planner/SyncStatusChip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { customersInArea } from "@/lib/loadingOrder";
+import { isWarehouseDirty } from "@/lib/cloudSync";
 import type { CustomerMemory } from "@/lib/types";
 
 export const Route = createFileRoute("/admin")({
@@ -61,8 +73,27 @@ function AdminPage() {
   }, [hydrate]);
 
   useEffect(() => {
-    return () => {
+    const flushPending = () => {
       void useStore.getState().flushSave();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flushPending();
+    };
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      flushPending();
+      if (isWarehouseDirty()) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("pagehide", flushPending);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      flushPending();
+      window.removeEventListener("pagehide", flushPending);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("beforeunload", onBeforeUnload);
     };
   }, []);
 
@@ -165,6 +196,13 @@ function AdminConsole({
   const [auditSearch, setAuditSearch] = useState("");
   const [planSearch, setPlanSearch] = useState("");
   const [adminTab, setAdminTab] = useState("customers");
+  const [confirmDelete, setConfirmDelete] = useState<
+    | { kind: "customer"; name: string }
+    | { kind: "town"; name: string; count: number }
+    | { kind: "truck"; id: string; name: string }
+    | { kind: "plan"; date: string }
+    | null
+  >(null);
   const openAuditPanel = useStore((s) => s.openAuditPanel);
   const refreshPlanIndex = useStore((s) => s.refreshPlanIndex);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -413,7 +451,8 @@ function AdminConsole({
             <span className="sm:hidden">Back</span>
           </Link>
           <span className="truncate text-sm text-muted-foreground">Admin</span>
-          <ThemeToggle className="ml-auto" />
+          <SyncStatusChip className="ml-auto" />
+          <ThemeToggle />
           <Button variant="outline" size="sm" className="shrink-0 size-9 px-0 sm:size-auto sm:px-3" onClick={download} aria-label="Export JSON" title="Export JSON">
             <Download className="size-4" />
             <span className="hidden sm:inline">Export JSON</span>
@@ -528,10 +567,7 @@ function AdminConsole({
                       );
                     }}
                     onDelete={(name) => {
-                      if (confirm(`Delete ${name}?`)) {
-                        deleteCustomer(name);
-                        toast.success("Customer removed");
-                      }
+                      setConfirmDelete({ kind: "customer", name });
                     }}
                   />
                 )}
@@ -653,14 +689,7 @@ function AdminConsole({
                                 size="sm"
                                 className="text-destructive"
                                 onClick={() => {
-                                  const msg =
-                                    count > 0
-                                      ? `Delete "${area}"? ${count} customer(s) will be unassigned.`
-                                      : `Delete town "${area}"?`;
-                                  if (!confirm(msg)) return;
-                                  deleteAreaCatalog(area);
-                                  if (areaFilter === area) setAreaFilter("all");
-                                  toast.success(`Removed ${area}`);
+                                  setConfirmDelete({ kind: "town", name: area, count });
                                 }}
                               >
                                 Delete
@@ -810,10 +839,7 @@ function AdminConsole({
                               size="sm"
                               className="text-destructive"
                               onClick={() => {
-                                if (confirm(`Delete ${t.name}?`)) {
-                                  deleteTruck(t.id);
-                                  toast.success("Truck deleted");
-                                }
+                                setConfirmDelete({ kind: "truck", id: t.id, name: t.name });
                               }}
                             >
                               Delete
@@ -929,10 +955,7 @@ function AdminConsole({
                               size="sm"
                               className="h-auto p-0 text-destructive"
                               onClick={() => {
-                                if (confirm(`Delete plan ${p.date}?`)) {
-                                  deleteDay(p.date);
-                                  toast.success("Plan deleted");
-                                }
+                                setConfirmDelete({ kind: "plan", date: p.date });
                               }}
                             >
                               Delete
@@ -977,6 +1000,74 @@ function AdminConsole({
           </TabsContent>
         </Tabs>
       </main>
+
+      <AlertDialog open={!!confirmDelete} onOpenChange={(o) => !o && setConfirmDelete(null)}>
+        <AlertDialogContent className="panel border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmDelete?.kind === "customer"
+                ? "Delete customer?"
+                : confirmDelete?.kind === "town"
+                  ? "Delete town?"
+                  : confirmDelete?.kind === "truck"
+                    ? "Delete truck?"
+                    : "Delete plan?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmDelete?.kind === "customer" && (
+                <>
+                  Remove <strong>{confirmDelete.name}</strong> from the catalog. This cannot be
+                  undone.
+                </>
+              )}
+              {confirmDelete?.kind === "town" && (
+                <>
+                  Delete town <strong>{confirmDelete.name}</strong>
+                  {confirmDelete.count > 0
+                    ? `? ${confirmDelete.count} customer(s) will be unassigned.`
+                    : "?"}
+                </>
+              )}
+              {confirmDelete?.kind === "truck" && (
+                <>
+                  Remove <strong>{confirmDelete.name}</strong> from the fleet. This cannot be undone.
+                </>
+              )}
+              {confirmDelete?.kind === "plan" && (
+                <>
+                  Delete plan for <strong>{confirmDelete.date}</strong>? This cannot be undone.
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (!confirmDelete) return;
+                if (confirmDelete.kind === "customer") {
+                  deleteCustomer(confirmDelete.name);
+                  toast.success("Customer removed");
+                } else if (confirmDelete.kind === "town") {
+                  deleteAreaCatalog(confirmDelete.name);
+                  if (areaFilter === confirmDelete.name) setAreaFilter("all");
+                  toast.success(`Removed ${confirmDelete.name}`);
+                } else if (confirmDelete.kind === "truck") {
+                  deleteTruck(confirmDelete.id);
+                  toast.success("Truck deleted");
+                } else if (confirmDelete.kind === "plan") {
+                  deleteDay(confirmDelete.date);
+                  toast.success("Plan deleted");
+                }
+                setConfirmDelete(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

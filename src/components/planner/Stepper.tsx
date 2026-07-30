@@ -67,7 +67,7 @@ export function Stepper({
                   {shortLabels[s]}
                 </span>
                 <span className="hidden whitespace-nowrap text-sm font-medium sm:inline">
-                  {stepLabels[s]}
+                  {stepLabels[s].replace(/^\d+\.\s*/, "")}
                 </span>
                 {active && (
                   <motion.span
