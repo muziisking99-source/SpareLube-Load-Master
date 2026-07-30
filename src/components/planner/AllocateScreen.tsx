@@ -1,13 +1,19 @@
 import { useMemo, useState } from "react";
-import { ArrowRight, Ban, Play, RotateCcw, Undo2 } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, Ban, Play, RotateCcw, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
 import { truckWeight } from "@/lib/allocation";
+import { customerKey, findCustomerKey } from "@/lib/customers";
+import {
+  compareByLoadingNumber,
+  loadingNumberFor,
+} from "@/lib/loadingOrder";
 import { townsForTruckDay, tripById } from "@/lib/trips";
 import type { Invoice, Truck } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -19,6 +25,7 @@ import {
 import { ScreenHeader } from "./ui/ScreenHeader";
 import { EmptyState } from "./ui/EmptyState";
 import { FormField } from "./ui/FormField";
+import { cn } from "@/lib/utils";
 
 export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const plan = useStore((s) => s.plans[s.currentDate])!;
@@ -175,6 +182,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
           <TruckCard
             key={t.id}
             truck={t}
+            tripId={plan.truckDay.find((td) => td.truckId === t.id)?.tripId ?? null}
             tripName={dayTripName.get(t.id)}
             towns={dayTowns.get(t.id) ?? []}
             invoices={inv.filter((i) => i.truckId === t.id)}
@@ -203,6 +211,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                 inv={i}
                 mode={mode}
                 selected={selected.includes(i.id)}
+                tripId={null}
                 onToggleSelect={() => toggleSelect(i.id)}
                 onMove={() => setMoveTarget({ inv: i })}
               />
@@ -238,6 +247,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
 
 function TruckCard({
   truck,
+  tripId,
   tripName,
   towns,
   invoices,
@@ -250,6 +260,7 @@ function TruckCard({
   onClearSelected,
 }: {
   truck: Truck;
+  tripId: string | null;
   tripName: string | null | undefined;
   towns: string[];
   invoices: Invoice[];
@@ -263,9 +274,17 @@ function TruckCard({
 }) {
   const sendToSecondRound = useStore((s) => s.sendToSecondRound);
   const setInvoiceRound = useStore((s) => s.setInvoiceRound);
+  const customers = useStore((s) => s.customers);
+  const trips = useStore((s) => s.trips);
 
-  const round1 = invoices.filter((i) => (i.round ?? 1) === 1);
-  const round2 = invoices.filter((i) => (i.round ?? 1) === 2);
+  const sortedInvoices = useMemo(() => {
+    return [...invoices].sort((a, b) =>
+      compareByLoadingNumber(customers, a, b, tripId, trips),
+    );
+  }, [invoices, customers, tripId, trips]);
+
+  const round1 = sortedInvoices.filter((i) => (i.round ?? 1) === 1);
+  const round2 = sortedInvoices.filter((i) => (i.round ?? 1) === 2);
   const weight = round1.reduce((s, i) => s + i.weight, 0);
   const round2Weight = round2.reduce((s, i) => s + i.weight, 0);
   const pct = truck.maxWeight ? (weight / truck.maxWeight) * 100 : 0;
@@ -320,9 +339,7 @@ function TruckCard({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="font-semibold tracking-tight">{truck.name}</div>
-          {tripName && (
-            <div className="text-xs text-muted-foreground">{tripName}</div>
-          )}
+          {tripName && <div className="text-xs text-muted-foreground">{tripName}</div>}
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {towns.length === 0 ? (
               <span className="chip">no towns</span>
@@ -380,6 +397,10 @@ function TruckCard({
         </div>
       )}
 
+      {mode === "adjust" && tripId && invoices.length > 0 && (
+        <TruckStopOrderEditor tripId={tripId} invoices={sortedInvoices} />
+      )}
+
       {invoices.length === 0 ? (
         <div className="mt-3">
           <EmptyState title="No invoices assigned" className="w-full py-4" />
@@ -391,6 +412,7 @@ function TruckCard({
             list={round1}
             mode={mode}
             selected={selected}
+            tripId={tripId}
             onToggleSelect={onToggleSelect}
             onMove={onMove}
             onUnallocate={onUnallocate}
@@ -401,6 +423,7 @@ function TruckCard({
               list={round2}
               mode={mode}
               selected={selected}
+              tripId={tripId}
               onToggleSelect={onToggleSelect}
               onMove={onMove}
               onUnallocate={onUnallocate}
@@ -413,11 +436,112 @@ function TruckCard({
   );
 }
 
+function TruckStopOrderEditor({
+  tripId,
+  invoices,
+}: {
+  tripId: string;
+  invoices: Invoice[];
+}) {
+  const customers = useStore((s) => s.customers);
+  const trips = useStore((s) => s.trips);
+  const reorderTripStopsPartial = useStore((s) => s.reorderTripStopsPartial);
+  const setTripCustomerLoadNumber = useStore((s) => s.setTripCustomerLoadNumber);
+
+  const stops = useMemo(() => {
+    const byKey = new Map<string, { key: string; name: string; area: string }>();
+    for (const inv of invoices) {
+      const key =
+        findCustomerKey(customers, inv.customer) ||
+        customerKey({ code: "", name: inv.customer }) ||
+        inv.customer;
+      if (!key || byKey.has(key)) continue;
+      byKey.set(key, { key, name: inv.customer, area: inv.area });
+    }
+    return [...byKey.values()].sort((a, b) => {
+      const la = loadingNumberFor(customers, a.name, a.area, tripId, trips);
+      const lb = loadingNumberFor(customers, b.name, b.area, tripId, trips);
+      const aUnset = la <= 0 ? 1 : 0;
+      const bUnset = lb <= 0 ? 1 : 0;
+      if (aUnset !== bUnset) return aUnset - bUnset;
+      if (la !== lb) return la - lb;
+      return a.name.localeCompare(b.name);
+    });
+  }, [invoices, customers, tripId, trips]);
+
+  if (stops.length < 2) return null;
+
+  function move(index: number, dir: -1 | 1) {
+    const j = index + dir;
+    if (j < 0 || j >= stops.length) return;
+    const next = stops.map((s) => s.key);
+    [next[index], next[j]] = [next[j], next[index]];
+    reorderTripStopsPartial(tripId, next);
+    toast.success("Stop order saved to trip");
+  }
+
+  return (
+    <div className="mt-3 rounded-xl border border-border bg-panel-2/50 p-3">
+      <div className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Stop order (saves to Admin → Trips)
+      </div>
+      <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-panel">
+        {stops.map((stop, i) => {
+          const loadNo = loadingNumberFor(customers, stop.name, stop.area, tripId, trips);
+          return (
+            <li key={stop.key} className="flex items-center gap-2 px-2.5 py-2 text-sm">
+              <span className="w-5 metric-mono text-xs text-muted-foreground">{i + 1}</span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">{stop.name}</div>
+                <div className="truncate text-[11px] text-muted-foreground">{stop.area || "—"}</div>
+              </div>
+              <Input
+                type="number"
+                min={0}
+                value={loadNo || ""}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setTripCustomerLoadNumber(tripId, stop.key, Number.isFinite(n) ? n : 0);
+                }}
+                className="metric-mono h-8 w-14"
+                title="Load #"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                disabled={i === 0}
+                onClick={() => move(i, -1)}
+                aria-label="Move up"
+              >
+                <ArrowUp className="size-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                disabled={i === stops.length - 1}
+                onClick={() => move(i, 1)}
+                aria-label="Move down"
+              >
+                <ArrowDown className="size-3.5" />
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 function RoundGroup({
   label,
   list,
   mode,
   selected,
+  tripId,
   onToggleSelect,
   onMove,
   onUnallocate,
@@ -427,6 +551,7 @@ function RoundGroup({
   list: Invoice[];
   mode: "allocate" | "adjust";
   selected: string[];
+  tripId: string | null;
   onToggleSelect: (id: string) => void;
   onMove: (i: Invoice) => void;
   onUnallocate: (i: Invoice) => void;
@@ -436,20 +561,21 @@ function RoundGroup({
   return (
     <div>
       <div
-        className={`mb-1.5 text-[11px] font-medium uppercase tracking-wider ${
-          accent ? "text-warn" : "text-muted-foreground"
-        }`}
+        className={cn(
+          "mb-2 text-[11px] font-medium uppercase tracking-wider",
+          accent ? "text-warn" : "text-muted-foreground",
+        )}
       >
         {label}
-        <span className="metric-mono ml-1.5 opacity-80">{list.length}</span>
       </div>
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-2">
         {list.map((i) => (
           <InvoiceChip
             key={i.id}
             inv={i}
             mode={mode}
             selected={selected.includes(i.id)}
+            tripId={tripId}
             onToggleSelect={() => onToggleSelect(i.id)}
             onMove={() => onMove(i)}
             onUnallocate={() => onUnallocate(i)}
@@ -464,6 +590,7 @@ function InvoiceChip({
   inv,
   mode,
   selected,
+  tripId,
   onToggleSelect,
   onMove,
   onUnallocate,
@@ -471,36 +598,64 @@ function InvoiceChip({
   inv: Invoice;
   mode: "allocate" | "adjust";
   selected: boolean;
+  tripId?: string | null;
   onToggleSelect: () => void;
   onMove: () => void;
   onUnallocate?: () => void;
 }) {
+  const customers = useStore((s) => s.customers);
+  const trips = useStore((s) => s.trips);
   const c = areaColor(inv.area || "—");
+  const loadNo = loadingNumberFor(customers, inv.customer, inv.area, tripId, trips);
+
   return (
     <span
-      className="chip min-h-11 items-center gap-1.5 py-2 transition-colors sm:min-h-0 sm:py-1"
+      className={cn(
+        "inline-flex min-h-11 max-w-full flex-wrap items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm shadow-none transition-colors sm:min-h-0 sm:py-1",
+        selected && "ring-2 ring-primary/40",
+      )}
       style={{
         borderColor: selected ? "var(--primary)" : c.border,
-        background: selected ? "color-mix(in oklab, var(--primary) 15%, transparent)" : c.bg,
+        background: selected
+          ? "color-mix(in oklab, var(--primary) 12%, var(--panel))"
+          : c.bg,
+        color: c.text,
       }}
     >
       {mode === "adjust" && (
         <Checkbox
           checked={selected}
           onCheckedChange={onToggleSelect}
-          className="mr-0.5 size-5 sm:size-4"
+          className="mr-0.5 size-5 border-current sm:size-4"
         />
       )}
-      <span className="metric-mono text-xs sm:text-[11px]">{inv.doc}</span>
-      <span className="max-w-[14ch] truncate opacity-80">{inv.customer}</span>
-      <span className="metric-mono opacity-80">{inv.weight}kg</span>
+      {loadNo > 0 && (
+        <span className="metric-mono rounded bg-background/70 px-1 text-[10px] font-semibold text-foreground">
+          #{loadNo}
+        </span>
+      )}
+      <span className="metric-mono text-xs font-semibold text-foreground sm:text-[11px]">
+        {inv.doc}
+      </span>
+      <span className="max-w-[14ch] truncate text-foreground/80">{inv.customer}</span>
+      <span className="metric-mono text-foreground/70">{inv.weight}kg</span>
+      {inv.exception && (
+        <Badge variant="warn" className="h-5 px-1.5 text-[10px]">
+          Exc
+        </Badge>
+      )}
+      {inv.collection && (
+        <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">
+          Coll
+        </Badge>
+      )}
       {mode === "adjust" && (
         <>
           <Button
             type="button"
             variant="ghost"
             size="sm"
-            className="h-9 px-3 text-xs sm:h-6 sm:px-2 sm:text-[10px]"
+            className="h-9 px-3 text-xs text-foreground sm:h-6 sm:px-2 sm:text-[10px]"
             onClick={onMove}
           >
             Move
@@ -510,7 +665,7 @@ function InvoiceChip({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-9 sm:size-6"
+              className="size-9 text-foreground/70 sm:size-6"
               onClick={onUnallocate}
               title="Move to unallocated"
             >

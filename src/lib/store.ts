@@ -15,6 +15,7 @@ import {
   assignCustomerArea,
   reorderCustomersInArea,
   setCustomerLoadingNumber as applyLoadingNumber,
+  mergePartialTripReorder,
 } from "./loadingOrder";
 import { customerKey, findCustomerKey } from "./customers";
 import { normalizeTrip, townsForTruckDay } from "./trips";
@@ -144,13 +145,27 @@ type State = {
 
   // held invoices (warehouse pool across days)
   holdInvoices: (
-    items: Omit<HeldInvoice, "id" | "heldAt" | "reason">[],
+    items: Omit<HeldInvoice, "id" | "heldAt" | "reason" | "collection">[],
     reason: HeldInvoice["reason"],
   ) => number;
   holdFromPlan: (invoiceId: string) => boolean;
-  pickHeld: (id: string) => "ok" | "duplicate" | "missing";
-  updateHeld: (id: string, patch: Partial<Pick<HeldInvoice, "doc" | "customer" | "weight" | "area">>) => void;
+  /** Pick held into today's plan. asException allows off-trip towns. */
+  pickHeld: (
+    id: string,
+    opts?: { asException?: boolean; asCollection?: boolean },
+  ) => "ok" | "duplicate" | "missing" | "off_trip";
+  updateHeld: (
+    id: string,
+    patch: Partial<Pick<HeldInvoice, "doc" | "customer" | "weight" | "area" | "collection" | "reason">>,
+  ) => void;
   removeHeld: (id: string) => void;
+  /** Mark / unmark held invoice as a collection. */
+  setHeldCollection: (id: string, collection: boolean) => void;
+  /**
+   * Reorder a subset of trip customers (e.g. those on a truck in Adjust).
+   * Merges into full trip stopOrder so Admin stay in sync.
+   */
+  reorderTripStopsPartial: (tripId: string, orderedKeys: string[]) => void;
 
   // allocation
   runAllocation: () => void;
@@ -609,6 +624,16 @@ export const useStore = create<State>((set, get) => {
         }),
       }));
       log("trip.reorder", `Reordered ${orderedKeys.length} stops on trip ${tripId}`);
+    },
+    reorderTripStopsPartial: (tripId, orderedKeys) => {
+      mutate((s) => ({
+        trips: s.trips.map((t) => {
+          if (t.id !== tripId) return t;
+          const stopOrder = mergePartialTripReorder(s.customers, t, orderedKeys);
+          return normalizeTrip({ ...t, stopOrder });
+        }),
+      }));
+      log("trip.reorder", `Adjusted stop order on trip ${tripId}`);
     },
     importTrips: (rows) => {
       let added = 0;
@@ -1124,12 +1149,21 @@ export const useStore = create<State>((set, get) => {
       return true;
     },
 
-    pickHeld: (id) => {
+    pickHeld: (id, opts) => {
       const s = get();
       const held = s.heldInvoices.find((h) => h.id === id);
       if (!held) return "missing";
       const plan = s.plans[s.currentDate] ?? emptyPlan(s.currentDate);
       if (held.doc && plan.invoices.some((i) => i.doc === held.doc)) return "duplicate";
+
+      const todayTowns = new Set(
+        plan.truckDay.flatMap((td) => townsForTruckDay(td, s.trips)),
+      );
+      const offTrip = !!held.area && !todayTowns.has(held.area);
+      const asException = !!opts?.asException;
+      const asCollection = !!opts?.asCollection || !!held.collection;
+      if (offTrip && !asException && !asCollection) return "off_trip";
+
       mutate((st) => ({
         heldInvoices: st.heldInvoices.filter((h) => h.id !== id),
         plans: {
@@ -1147,19 +1181,41 @@ export const useStore = create<State>((set, get) => {
                 source: held.source,
                 truckId: null,
                 round: 1,
+                exception: asException || (offTrip && asCollection),
+                collection: asCollection,
               },
             ],
           },
         },
       }));
-      log("held.pick", `Picked ${held.doc} into plan`);
+      log(
+        "held.pick",
+        `Picked ${held.doc} into plan${asException ? " (exception)" : ""}${asCollection ? " (collection)" : ""}`,
+      );
       return "ok";
     },
 
     updateHeld: (id, patch) => {
       mutate((s) => ({
-        heldInvoices: s.heldInvoices.map((h) => (h.id === id ? { ...h, ...patch } : h)),
+        heldInvoices: s.heldInvoices.map((h) => {
+          if (h.id !== id) return h;
+          return normalizeHeldInvoice({ ...h, ...patch });
+        }),
       }));
+    },
+
+    setHeldCollection: (id, collection) => {
+      mutate((s) => ({
+        heldInvoices: s.heldInvoices.map((h) => {
+          if (h.id !== id) return h;
+          return normalizeHeldInvoice({
+            ...h,
+            collection,
+            reason: collection ? "collection" : h.reason === "collection" ? "manual" : h.reason,
+          });
+        }),
+      }));
+      log("held.collection", collection ? `Marked ${id} as collection` : `Cleared collection on ${id}`);
     },
 
     removeHeld: (id) => {

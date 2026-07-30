@@ -27,6 +27,10 @@ export type Invoice = {
   truckId: string | null; // null = unallocated
   /** 1 = first trip, 2 = second round for the same truck */
   round: number;
+  /** Town not on today's trips, but delivering today anyway */
+  exception?: boolean;
+  /** Collection stop (not a normal delivery) */
+  collection?: boolean;
 };
 
 /** Warehouse-scoped invoice waiting for a day when its town is on a trip */
@@ -38,7 +42,9 @@ export type HeldInvoice = {
   area: string;
   source: InvoiceSource;
   heldAt: string;
-  reason: "town_not_on_trips" | "manual";
+  reason: "town_not_on_trips" | "manual" | "collection";
+  /** Marked as a collection (stays in Held until picked / cleared) */
+  collection?: boolean;
 };
 
 export type Trip = {
@@ -118,12 +124,20 @@ export function normalizeInvoice(raw: Partial<Invoice> & Pick<Invoice, "id" | "d
     source: raw.source ?? "SYSTEM",
     truckId: raw.truckId ?? null,
     round: raw.round === 2 ? 2 : 1,
+    exception: !!raw.exception,
+    collection: !!raw.collection,
   };
 }
 
 export function normalizeHeldInvoice(
   raw: Partial<HeldInvoice> & Pick<HeldInvoice, "id" | "doc" | "customer">,
 ): HeldInvoice {
+  const reason =
+    raw.reason === "manual"
+      ? "manual"
+      : raw.reason === "collection" || raw.collection
+        ? "collection"
+        : "town_not_on_trips";
   return {
     id: raw.id,
     doc: raw.doc,
@@ -132,6 +146,7 @@ export function normalizeHeldInvoice(
     area: raw.area ?? "",
     source: raw.source ?? "SYSTEM",
     heldAt: raw.heldAt ?? new Date().toISOString(),
-    reason: raw.reason === "manual" ? "manual" : "town_not_on_trips",
+    reason,
+    collection: reason === "collection" || !!raw.collection,
   };
 }

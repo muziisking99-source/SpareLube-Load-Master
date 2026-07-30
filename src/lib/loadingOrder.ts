@@ -176,3 +176,45 @@ export function compareByLoadingNumber(
   if (la !== lb) return la - lb;
   return a.doc.localeCompare(b.doc);
 }
+
+/**
+ * Rebuild trip stopOrder after reordering a subset of customers (e.g. those on a truck today).
+ * Preserves relative order of customers not in the subset.
+ */
+export function mergePartialTripReorder(
+  customers: Record<string, CustomerMemory>,
+  trip: Trip,
+  orderedSubsetKeys: string[],
+): Record<string, number> {
+  const all = customersForTrip(customers, trip);
+  const allKeys = all.map((c) => customerKey(c));
+  const subset = new Set(orderedSubsetKeys.filter(Boolean));
+  const queue = [...orderedSubsetKeys.filter((k) => k && subset.has(k))];
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  for (const key of allKeys) {
+    if (subset.has(key)) {
+      const next = queue.shift();
+      if (next && !seen.has(next)) {
+        merged.push(next);
+        seen.add(next);
+      }
+    } else if (!seen.has(key)) {
+      merged.push(key);
+      seen.add(key);
+    }
+  }
+  for (const key of queue) {
+    if (!seen.has(key)) {
+      merged.push(key);
+      seen.add(key);
+    }
+  }
+
+  const stopOrder: Record<string, number> = {};
+  merged.forEach((key, i) => {
+    stopOrder[key] = i + 1;
+  });
+  return stopOrder;
+}

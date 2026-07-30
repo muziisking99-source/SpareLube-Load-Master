@@ -21,6 +21,7 @@ import { townsForPlan } from "@/lib/trips";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import {
   Table,
@@ -55,6 +56,7 @@ export function ImportScreen() {
   const pickHeld = useStore((s) => s.pickHeld);
   const updateHeld = useStore((s) => s.updateHeld);
   const removeHeld = useStore((s) => s.removeHeld);
+  const setHeldCollection = useStore((s) => s.setHeldCollection);
   const setStep = useStore((s) => s.setStep);
 
   const fileRef = useRef<HTMLInputElement>(null);
@@ -192,10 +194,19 @@ export function ImportScreen() {
     }
   }
 
-  function handlePick(id: string) {
-    const result = pickHeld(id);
-    if (result === "ok") toast.success("Added to today’s plan");
-    else if (result === "duplicate") toast.error("That doc is already on today’s plan");
+  function handlePick(id: string, opts?: { asException?: boolean; asCollection?: boolean }) {
+    const result = pickHeld(id, opts);
+    if (result === "ok") {
+      toast.success(
+        opts?.asException
+          ? "Added as delivery exception"
+          : opts?.asCollection
+            ? "Added as collection"
+            : "Added to today’s plan",
+      );
+    } else if (result === "duplicate") toast.error("That doc is already on today’s plan");
+    else if (result === "off_trip")
+      toast.error("Town isn’t on today’s trips — use Pick as exception");
     else toast.error("Held invoice not found");
   }
 
@@ -284,7 +295,7 @@ export function ImportScreen() {
 
       <CollapsibleSection
         title="Held for later"
-        description="Invoices waiting for a day when their town is on a trip. Always visible across days."
+        description="Waiting for a matching trip day — or mark as Collection / pick as Exception if delivering today."
         defaultOpen={false}
         action={
           <Badge variant="outline" className="gap-1">
@@ -308,7 +319,9 @@ export function ImportScreen() {
                   todayTowns={areas}
                   townOptions={heldTownOptions}
                   onChange={(patch) => updateHeld(h.id, patch)}
+                  onToggleCollection={(v) => setHeldCollection(h.id, v)}
                   onPick={() => handlePick(h.id)}
+                  onPickException={() => handlePick(h.id, { asException: true })}
                   onRemove={() => {
                     removeHeld(h.id);
                     toast.success("Removed from held");
@@ -317,15 +330,15 @@ export function ImportScreen() {
               ))}
             </div>
             <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
-              <table className="w-full min-w-[720px] border-collapse text-sm">
+              <table className="w-full min-w-[820px] border-collapse text-sm">
                 <thead className="bg-panel-2">
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
                     <th className="w-[8rem] px-3 py-2.5 font-medium">Doc</th>
                     <th className="px-3 py-2.5 font-medium">Customer</th>
                     <th className="w-[7rem] px-3 py-2.5 font-medium">Weight</th>
                     <th className="w-[11rem] px-3 py-2.5 font-medium">Town</th>
-                    <th className="w-[7rem] px-3 py-2.5 font-medium">Reason</th>
-                    <th className="w-[10rem] px-3 py-2.5 font-medium" />
+                    <th className="w-[8rem] px-3 py-2.5 font-medium">Type</th>
+                    <th className="w-[14rem] px-3 py-2.5 font-medium" />
                   </tr>
                 </thead>
                 <tbody>
@@ -336,7 +349,9 @@ export function ImportScreen() {
                       todayTowns={areas}
                       townOptions={heldTownOptions}
                       onChange={(patch) => updateHeld(h.id, patch)}
+                      onToggleCollection={(v) => setHeldCollection(h.id, v)}
                       onPick={() => handlePick(h.id)}
+                      onPickException={() => handlePick(h.id, { asException: true })}
                       onRemove={() => {
                         removeHeld(h.id);
                         toast.success("Removed from held");
@@ -984,22 +999,35 @@ function canPickHeld(held: HeldInvoice, todayTowns: string[]) {
   return !held.area || todayTowns.includes(held.area);
 }
 
+function heldTypeBadge(held: HeldInvoice) {
+  if (held.collection || held.reason === "collection") {
+    return <Badge variant="secondary">Collection</Badge>;
+  }
+  if (held.reason === "manual") return <Badge variant="outline">Manual</Badge>;
+  return <Badge variant="warn">Off-trip</Badge>;
+}
+
 function HeldCard({
   held,
   todayTowns,
   townOptions,
   onChange,
+  onToggleCollection,
   onPick,
+  onPickException,
   onRemove,
 }: {
   held: HeldInvoice;
   todayTowns: string[];
   townOptions: string[];
   onChange: (p: Partial<Pick<HeldInvoice, "weight" | "area" | "doc" | "customer">>) => void;
+  onToggleCollection: (v: boolean) => void;
   onPick: () => void;
+  onPickException: () => void;
   onRemove: () => void;
 }) {
   const pickable = canPickHeld(held, todayTowns);
+  const isCollection = !!held.collection || held.reason === "collection";
   return (
     <div className="space-y-3 rounded-xl border border-border bg-panel-2/40 p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1007,9 +1035,7 @@ function HeldCard({
           <div className="metric-mono text-sm font-medium">{held.doc}</div>
           <div className="mt-0.5 truncate text-sm">{held.customer}</div>
         </div>
-        <Badge variant={held.reason === "manual" ? "outline" : "warn"}>
-          {held.reason === "manual" ? "Manual" : "Off-trip town"}
-        </Badge>
+        {heldTypeBadge(held)}
       </div>
       <FormField label="Weight (kg)">
         <Input
@@ -1034,17 +1060,28 @@ function HeldCard({
           buttonClassName="h-11 w-full"
         />
       </FormField>
+      <label className="flex items-center gap-2 text-sm">
+        <Checkbox checked={isCollection} onCheckedChange={(v) => onToggleCollection(!!v)} />
+        Mark as collection
+      </label>
       {!pickable && held.area && (
-        <p className="text-xs text-warn">Waiting for a trip with {held.area}</p>
+        <p className="text-xs text-muted-foreground">
+          {held.area} isn’t on today’s trips — pick as exception if delivering today.
+        </p>
       )}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <Button type="button" className="w-full" disabled={!pickable} onClick={onPick}>
           Pick today
         </Button>
+        {!pickable && (
+          <Button type="button" variant="secondary" className="w-full" onClick={onPickException}>
+            Pick as exception
+          </Button>
+        )}
         <Button
           type="button"
           variant="outline"
-          className="w-full text-muted-foreground hover:text-destructive"
+          className="w-full text-muted-foreground hover:text-destructive sm:col-span-2"
           onClick={onRemove}
         >
           <Trash2 className="size-4" />
@@ -1060,17 +1097,22 @@ function HeldRow({
   todayTowns,
   townOptions,
   onChange,
+  onToggleCollection,
   onPick,
+  onPickException,
   onRemove,
 }: {
   held: HeldInvoice;
   todayTowns: string[];
   townOptions: string[];
   onChange: (p: Partial<Pick<HeldInvoice, "weight" | "area" | "doc" | "customer">>) => void;
+  onToggleCollection: (v: boolean) => void;
   onPick: () => void;
+  onPickException: () => void;
   onRemove: () => void;
 }) {
   const pickable = canPickHeld(held, todayTowns);
+  const isCollection = !!held.collection || held.reason === "collection";
   return (
     <tr className="border-b border-border last:border-0">
       <td className="px-3 py-2 align-middle">
@@ -1099,19 +1141,32 @@ function HeldRow({
           buttonClassName="h-9 w-full min-w-[9rem]"
         />
         {!pickable && held.area && (
-          <p className="mt-1 text-[11px] text-warn">Waiting for trip with {held.area}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">Off today’s trips</p>
         )}
       </td>
       <td className="px-3 py-2 align-middle">
-        <Badge variant={held.reason === "manual" ? "outline" : "warn"}>
-          {held.reason === "manual" ? "Manual" : "Off-trip"}
-        </Badge>
+        <div className="flex flex-col gap-2">
+          {heldTypeBadge(held)}
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Checkbox
+              checked={isCollection}
+              onCheckedChange={(v) => onToggleCollection(!!v)}
+              className="size-3.5"
+            />
+            Collection
+          </label>
+        </div>
       </td>
       <td className="px-3 py-2 align-middle">
-        <div className="flex items-center justify-end gap-1">
+        <div className="flex flex-wrap items-center justify-end gap-1">
           <Button type="button" size="sm" disabled={!pickable} onClick={onPick}>
             Pick
           </Button>
+          {!pickable && (
+            <Button type="button" size="sm" variant="secondary" onClick={onPickException}>
+              Exception
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
