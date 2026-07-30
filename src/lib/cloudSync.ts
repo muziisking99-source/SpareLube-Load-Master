@@ -166,6 +166,7 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
   const sb = getSupabase();
   if (!sb) return null;
 
+  // Select trips without stop_order first so a missing column cannot empty the list
   const [areasRes, trucksRes, tripsRes, customersRes, plansRes, auditRes, settingsRes] =
     await Promise.all([
       sb.from("areas").select("name"),
@@ -185,11 +186,10 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
       sb.from("app_settings").select("active_date,admin_pin,held_invoices").eq("id", 1).maybeSingle(),
     ]);
 
-  // Trips table may not exist yet before migration 002 — treat as empty
-  const tripsError =
-    tripsRes.error && !/does not exist|schema cache/i.test(tripsRes.error.message)
-      ? tripsRes.error
-      : null;
+  // Trips table may not exist yet before migration 002 — treat as empty only if table missing
+  const tripsTableMissing =
+    !!tripsRes.error && /does not exist|schema cache/i.test(tripsRes.error.message);
+  const tripsError = tripsRes.error && !tripsTableMissing ? tripsRes.error : null;
 
   // held_invoices column may not exist yet before migration 003
   const settingsMissingHeldCol =
@@ -254,13 +254,30 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
     active: !!t.active,
   }));
 
-  const trips: Trip[] = (tripsRes.data ?? []).map((t) =>
-    normalizeTrip({
-      id: t.id,
-      name: t.name,
-      towns: Array.isArray(t.towns) ? (t.towns as string[]) : [],
-    }),
-  );
+  // Optional stop_order enrichment (migration 004) — never fail hydrate if missing
+  const stopOrderById = new Map<string, Record<string, number>>();
+  if (!tripsTableMissing && (tripsRes.data?.length ?? 0) > 0) {
+    const stopRes = await sb.from("trips").select("id,stop_order");
+    if (!stopRes.error && stopRes.data) {
+      for (const row of stopRes.data) {
+        const raw = (row as { id: string; stop_order?: unknown }).stop_order;
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          stopOrderById.set(row.id, raw as Record<string, number>);
+        }
+      }
+    }
+  }
+
+  const trips: Trip[] = tripsTableMissing
+    ? []
+    : (tripsRes.data ?? []).map((t) =>
+        normalizeTrip({
+          id: t.id,
+          name: t.name,
+          towns: Array.isArray(t.towns) ? (t.towns as string[]) : [],
+          stopOrder: stopOrderById.get(t.id) ?? {},
+        }),
+      );
 
   const audit: AuditEntry[] = (auditRes.data ?? []).map((a) => ({
     id: a.id,
@@ -307,18 +324,18 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
     if (error) throw error;
   }
 
-  // Trucks: replace set
+  // Trucks: replace set — never wipe all cloud trucks from an empty local snapshot
   const { data: existingTrucks, error: trucksReadErr } = await sb.from("trucks").select("id");
   if (trucksReadErr) throw trucksReadErr;
-  const wantTruckIds = new Set(s.trucks.map((t) => t.id));
-  const trucksToDelete = (existingTrucks ?? [])
-    .map((t) => t.id)
-    .filter((id) => !wantTruckIds.has(id));
-  if (trucksToDelete.length) {
-    const { error } = await sb.from("trucks").delete().in("id", trucksToDelete);
-    if (error) throw error;
-  }
-  if (s.trucks.length) {
+  if (s.trucks.length > 0) {
+    const wantTruckIds = new Set(s.trucks.map((t) => t.id));
+    const trucksToDelete = (existingTrucks ?? [])
+      .map((t) => t.id)
+      .filter((id) => !wantTruckIds.has(id));
+    if (trucksToDelete.length) {
+      const { error } = await sb.from("trucks").delete().in("id", trucksToDelete);
+      if (error) throw error;
+    }
     const { error } = await sb.from("trucks").upsert(
       s.trucks.map((t) => ({
         id: t.id,
@@ -333,11 +350,13 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
   }
 
   // Trips: replace set (skip if table missing)
+  // CRITICAL: never delete cloud trips when local list is empty — that usually means
+  // a bad hydrate, not an intentional wipe of every trip.
   const { data: existingTrips, error: tripsReadErr } = await sb.from("trips").select("id");
   if (tripsReadErr && !/does not exist|schema cache/i.test(tripsReadErr.message)) {
     throw tripsReadErr;
   }
-  if (!tripsReadErr) {
+  if (!tripsReadErr && s.trips.length > 0) {
     const wantTripIds = new Set(s.trips.map((t) => t.id));
     const tripsToDelete = (existingTrips ?? [])
       .map((t) => t.id)
@@ -346,8 +365,19 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
       const { error } = await sb.from("trips").delete().in("id", tripsToDelete);
       if (error) throw error;
     }
-    if (s.trips.length) {
-      const { error } = await sb.from("trips").upsert(
+    const { error } = await sb.from("trips").upsert(
+      s.trips.map((t) => ({
+        id: t.id,
+        name: t.name,
+        towns: t.towns,
+        stop_order: t.stopOrder ?? {},
+        updated_at: now,
+      })),
+      { onConflict: "id" },
+    );
+    // stop_order column may not exist yet before migration 004
+    if (error && /stop_order|schema cache|does not exist/i.test(error.message)) {
+      const { error: fallbackErr } = await sb.from("trips").upsert(
         s.trips.map((t) => ({
           id: t.id,
           name: t.name,
@@ -356,7 +386,9 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
         })),
         { onConflict: "id" },
       );
-      if (error) throw error;
+      if (fallbackErr) throw fallbackErr;
+    } else if (error) {
+      throw error;
     }
   }
 
@@ -474,15 +506,56 @@ export async function persistToCloud(s: CloudSnapshot): Promise<void> {
 }
 
 /**
+ * Prefer cloud data, but never discard local trips/trucks that cloud is missing.
+ * Protects against empty-cloud / failed-select hydrates wiping warehouse lists.
+ */
+function mergeCloudWithLocal(cloud: CloudSnapshot, local: CloudSnapshot): CloudSnapshot {
+  const tripsById = new Map(cloud.trips.map((t) => [t.id, normalizeTrip(t)]));
+  for (const t of local.trips) {
+    if (!tripsById.has(t.id)) tripsById.set(t.id, normalizeTrip(t));
+  }
+  // If cloud returned zero trips but local still has some, keep local entirely
+  const trips =
+    cloud.trips.length === 0 && local.trips.length > 0
+      ? local.trips.map((t) => normalizeTrip(t))
+      : [...tripsById.values()];
+
+  const trucksById = new Map(cloud.trucks.map((t) => [t.id, t]));
+  for (const t of local.trucks) {
+    if (!trucksById.has(t.id)) trucksById.set(t.id, t);
+  }
+  const trucks =
+    cloud.trucks.length === 0 && local.trucks.length > 0
+      ? local.trucks
+      : [...trucksById.values()];
+
+  return { ...cloud, trips, trucks };
+}
+
+/**
  * Hydrate preferring Cloud when configured & online.
  * Migrates IndexedDB → Cloud once if cloud is empty.
+ * When preferLocal is true (unsynced local edits / persist in flight), return local
+ * and do not overwrite IndexedDB with cloud.
  */
-export async function hydrateWarehouse(): Promise<{
+export async function hydrateWarehouse(opts?: {
+  preferLocal?: boolean;
+}): Promise<{
   snapshot: CloudSnapshot;
   status: CloudStatus;
   migrated: boolean;
 }> {
   const local = await loadLocalSnapshot();
+
+  if (opts?.preferLocal) {
+    const status: CloudStatus =
+      !isCloudConfigured()
+        ? "local"
+        : typeof navigator !== "undefined" && !navigator.onLine
+          ? "offline"
+          : "cloud";
+    return { snapshot: local, status, migrated: false };
+  }
 
   if (!isCloudConfigured()) {
     return { snapshot: local, status: "local", migrated: false };
@@ -492,11 +565,12 @@ export async function hydrateWarehouse(): Promise<{
   }
 
   try {
-    let cloud = await hydrateFromCloud();
-    if (!cloud) {
+    const fetched = await hydrateFromCloud();
+    if (!fetched) {
       return { snapshot: local, status: "local", migrated: false };
     }
 
+    let cloud: CloudSnapshot = fetched;
     const migratedFlag = await loadKey<boolean>(MIGRATED_KEY, false);
     let migrated = false;
 
@@ -509,6 +583,23 @@ export async function hydrateWarehouse(): Promise<{
       await saveKey(MIGRATED_KEY, true);
     }
 
+    // Restore any local trips/trucks missing from cloud (e.g. wiped by a bad empty persist)
+    const needsRecovery =
+      (cloud.trips.length === 0 && local.trips.length > 0) ||
+      (cloud.trucks.length === 0 && local.trucks.length > 0) ||
+      local.trips.some((t) => !cloud.trips.some((c) => c.id === t.id)) ||
+      local.trucks.some((t) => !cloud.trucks.some((c) => c.id === t.id));
+
+    cloud = mergeCloudWithLocal(cloud, local);
+
+    if (needsRecovery) {
+      try {
+        await persistToCloud(cloud);
+      } catch (err) {
+        console.error("Failed to re-push recovered trips/trucks", err);
+      }
+    }
+
     await saveLocalSnapshot(cloud);
     return { snapshot: cloud, status: "cloud", migrated };
   } catch (err) {
@@ -517,10 +608,24 @@ export async function hydrateWarehouse(): Promise<{
   }
 }
 
-/** Persist to IDB always; also to Cloud when online & configured. */
-export async function persistWarehouse(s: CloudSnapshot): Promise<CloudStatus> {
-  await saveLocalSnapshot(s);
+/** True while a cloud upload is running or a newer snapshot is queued behind it. */
+let persistInFlight = false;
+let persistTail: Promise<CloudStatus> = Promise.resolve("local");
+let queuedSnapshot: CloudSnapshot | null = null;
+let queuedGeneration = 0;
+let lastSyncedGeneration = 0;
+let latestGeneration = 0;
 
+export function bumpSyncGeneration(): number {
+  latestGeneration += 1;
+  return latestGeneration;
+}
+
+export function isWarehouseDirty(): boolean {
+  return latestGeneration > lastSyncedGeneration || persistInFlight || queuedSnapshot !== null;
+}
+
+async function persistToCloudIfNeeded(s: CloudSnapshot): Promise<CloudStatus> {
   if (!isCloudConfigured()) return "local";
   if (typeof navigator !== "undefined" && !navigator.onLine) return "offline";
 
@@ -531,6 +636,46 @@ export async function persistWarehouse(s: CloudSnapshot): Promise<CloudStatus> {
     console.error("Cloud persist failed", err);
     return "error";
   }
+}
+
+/**
+ * Persist to IDB always; also to Cloud when online & configured.
+ * Single-flight: overlapping calls queue the latest snapshot.
+ */
+export async function persistWarehouse(
+  s: CloudSnapshot,
+  generation?: number,
+): Promise<CloudStatus> {
+  const gen = generation ?? bumpSyncGeneration();
+  latestGeneration = Math.max(latestGeneration, gen);
+  await saveLocalSnapshot(s);
+
+  queuedSnapshot = s;
+  queuedGeneration = gen;
+
+  const runQueue = async (): Promise<CloudStatus> => {
+    let status: CloudStatus = "local";
+    while (queuedSnapshot) {
+      const snap = queuedSnapshot;
+      const snapGen = queuedGeneration;
+      queuedSnapshot = null;
+      persistInFlight = true;
+      try {
+        // IDB already written for latest; rewrite in case an older run raced
+        await saveLocalSnapshot(snap);
+        status = await persistToCloudIfNeeded(snap);
+        if (status === "cloud" && snapGen >= lastSyncedGeneration) {
+          lastSyncedGeneration = snapGen;
+        }
+      } finally {
+        persistInFlight = false;
+      }
+    }
+    return status;
+  };
+
+  persistTail = persistTail.then(runQueue, runQueue);
+  return persistTail;
 }
 
 export { emptySnapshot, isCloudConfigured };

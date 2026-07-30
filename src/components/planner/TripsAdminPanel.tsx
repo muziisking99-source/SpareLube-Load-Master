@@ -3,9 +3,11 @@ import { ChevronDown, ChevronUp, Download, FileSpreadsheet, Plus, Trash2, Upload
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
+import { customerKey } from "@/lib/customers";
+import { customersForTrip, loadingNumberFor } from "@/lib/loadingOrder";
 import { parseTripExcelFile } from "@/lib/parse";
 import { downloadTripTemplate } from "@/lib/excelTemplates";
-import type { Trip } from "@/lib/types";
+import type { CustomerMemory, Trip } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -16,10 +18,13 @@ import { TownCombobox } from "@/components/planner/TownCombobox";
 
 export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
   const trips = useStore((s) => s.trips);
+  const customers = useStore((s) => s.customers);
   const addTrip = useStore((s) => s.addTrip);
   const updateTrip = useStore((s) => s.updateTrip);
   const deleteTrip = useStore((s) => s.deleteTrip);
   const importTrips = useStore((s) => s.importTrips);
+  const setTripCustomerLoadNumber = useStore((s) => s.setTripCustomerLoadNumber);
+  const reorderTripCustomers = useStore((s) => s.reorderTripCustomers);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
@@ -29,6 +34,7 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
   const [draftTowns, setDraftTowns] = useState<string[]>([]);
   const [newName, setNewName] = useState("");
   const [newTowns, setNewTowns] = useState<string[]>([]);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const filteredTrips = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -44,6 +50,7 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
     setEditingId(trip.id);
     setDraftName(trip.name);
     setDraftTowns([...trip.towns]);
+    setExpandedId(trip.id);
   }
 
   function cancelEdit() {
@@ -105,8 +112,8 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
         <div>
           <h3 className="font-semibold tracking-tight">Trips</h3>
           <p className="mt-1 max-w-[65ch] text-sm text-muted-foreground">
-            Import trip names from Excel, then add towns with Edit. Or create a trip below.
-            Assign one trip per truck on Daily Setup.
+            Import trip names from Excel, then add towns and set load order for customers on this
+            trip. Same customer can have a different load # on each trip.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -208,93 +215,233 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
               description={`Nothing matched “${search.trim()}”.`}
             />
           ) : (
-        <ul className="space-y-3">
-          {filteredTrips.map((trip) => {
-            const editing = editingId === trip.id;
-            return (
-              <li
-                key={trip.id}
-                className="rounded-xl border border-border px-4 py-3 transition-colors hover:bg-panel-2/40"
-              >
-                {editing ? (
-                  <div className="space-y-3">
-                    <FormField label="Trip name">
-                      <Input
-                        value={draftName}
-                        onChange={(e) => setDraftName(e.target.value)}
-                        className="max-w-sm"
-                      />
-                    </FormField>
-                    <TownPicker
-                      towns={draftTowns}
-                      options={townOptions}
-                      onAdd={(t) => addTownTo(draftTowns, t, setDraftTowns)}
-                      onRemove={(t) => setDraftTowns(draftTowns.filter((x) => x !== t))}
-                      onMove={(i, d) => setDraftTowns(moveTown(draftTowns, i, d))}
-                    />
-                    <div className="flex gap-2">
-                      <Button type="button" size="sm" onClick={saveEdit}>
-                        Save
-                      </Button>
-                      <Button type="button" size="sm" variant="outline" onClick={cancelEdit}>
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium tracking-tight">{trip.name}</div>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {trip.towns.length === 0 ? (
-                          <span className="text-xs text-warn">No towns yet — click Edit to add</span>
-                        ) : (
-                          trip.towns.map((town, i) => {
-                            const c = areaColor(town);
-                            return (
-                              <span
-                                key={`${town}-${i}`}
-                                className="chip text-xs"
-                                style={{
-                                  borderColor: c.border,
-                                  color: c.text,
-                                  background: c.bg,
-                                }}
-                              >
-                                {i + 1}. {town}
-                              </span>
-                            );
-                          })
-                        )}
+            <ul className="space-y-3">
+              {filteredTrips.map((trip) => {
+                const editing = editingId === trip.id;
+                const expanded = expandedId === trip.id || editing;
+                const tripCustomers = customersForTrip(customers, trip);
+                return (
+                  <li
+                    key={trip.id}
+                    className="rounded-xl border border-border px-4 py-3 transition-colors hover:bg-panel-2/40"
+                  >
+                    {editing ? (
+                      <div className="space-y-3">
+                        <FormField label="Trip name">
+                          <Input
+                            value={draftName}
+                            onChange={(e) => setDraftName(e.target.value)}
+                            className="max-w-sm"
+                          />
+                        </FormField>
+                        <TownPicker
+                          towns={draftTowns}
+                          options={townOptions}
+                          onAdd={(t) => addTownTo(draftTowns, t, setDraftTowns)}
+                          onRemove={(t) => setDraftTowns(draftTowns.filter((x) => x !== t))}
+                          onMove={(i, d) => setDraftTowns(moveTown(draftTowns, i, d))}
+                        />
+                        <div className="flex gap-2">
+                          <Button type="button" size="sm" onClick={saveEdit}>
+                            Save
+                          </Button>
+                          <Button type="button" size="sm" variant="outline" onClick={cancelEdit}>
+                            Cancel
+                          </Button>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      <Button type="button" size="sm" variant="outline" onClick={() => startEdit(trip)}>
-                        Edit
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="text-destructive"
-                        onClick={() => {
-                          if (!confirm(`Delete trip "${trip.name}"?`)) return;
-                          deleteTrip(trip.id);
-                          toast.success("Trip deleted");
-                        }}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+                    ) : (
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() =>
+                            setExpandedId((id) => (id === trip.id ? null : trip.id))
+                          }
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium tracking-tight">{trip.name}</span>
+                            <Badge variant="outline" className="text-[10px]">
+                              {tripCustomers.length} customers
+                            </Badge>
+                            <ChevronDown
+                              className={`size-4 text-muted-foreground transition-transform ${
+                                expanded ? "" : "-rotate-90"
+                              }`}
+                            />
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {trip.towns.length === 0 ? (
+                              <span className="text-xs text-warn">
+                                No towns yet — click Edit to add
+                              </span>
+                            ) : (
+                              trip.towns.map((town, i) => {
+                                const c = areaColor(town);
+                                return (
+                                  <span
+                                    key={`${town}-${i}`}
+                                    className="chip text-xs"
+                                    style={{
+                                      borderColor: c.border,
+                                      color: c.text,
+                                      background: c.bg,
+                                    }}
+                                  >
+                                    {i + 1}. {town}
+                                  </span>
+                                );
+                              })
+                            )}
+                          </div>
+                        </button>
+                        <div className="flex shrink-0 gap-1">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => startEdit(trip)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="text-destructive"
+                            onClick={() => {
+                              if (!confirm(`Delete trip "${trip.name}"?`)) return;
+                              deleteTrip(trip.id);
+                              toast.success("Trip deleted");
+                            }}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {expanded && !editing && (
+                      <TripStopOrderEditor
+                        trip={trip}
+                        list={tripCustomers}
+                        customers={customers}
+                        onSetLoad={(key, n) => setTripCustomerLoadNumber(trip.id, key, n)}
+                        onReorder={(keys) => reorderTripCustomers(trip.id, keys)}
+                      />
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function TripStopOrderEditor({
+  trip,
+  list,
+  customers,
+  onSetLoad,
+  onReorder,
+}: {
+  trip: Trip;
+  list: CustomerMemory[];
+  customers: Record<string, CustomerMemory>;
+  onSetLoad: (customerKey: string, n: number) => void;
+  onReorder: (orderedKeys: string[]) => void;
+}) {
+  if (trip.towns.length === 0) {
+    return (
+      <p className="mt-3 text-sm text-muted-foreground">
+        Add towns to this trip to see customers and set load order.
+      </p>
+    );
+  }
+
+  if (list.length === 0) {
+    return (
+      <p className="mt-3 text-sm text-muted-foreground">
+        No customers assigned to towns on this trip yet. Assign towns on the Customers tab.
+      </p>
+    );
+  }
+
+  const keys = list.map((c) => customerKey(c));
+
+  function move(index: number, dir: -1 | 1) {
+    const j = index + dir;
+    if (j < 0 || j >= keys.length) return;
+    const next = [...keys];
+    [next[index], next[j]] = [next[j], next[index]];
+    onReorder(next);
+  }
+
+  return (
+    <div className="mt-4 space-y-2 border-t border-border pt-3">
+      <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Load order for this trip
+      </div>
+      <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+        {list.map((c, i) => {
+          const key = customerKey(c);
+          const tripLoad = loadingNumberFor(customers, c.name, c.defaultArea, trip.id, [trip]);
+          const hasOverride = (trip.stopOrder?.[key] ?? 0) > 0;
+          return (
+            <li key={key} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+              <span className="w-5 metric-mono text-muted-foreground">{i + 1}</span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">{c.name}</div>
+                <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                  <span>{c.defaultArea}</span>
+                  {c.code ? <span className="metric-mono">{c.code}</span> : null}
+                  {!hasOverride && c.loadingNumber > 0 ? (
+                    <span>Town default #{c.loadingNumber}</span>
+                  ) : null}
+                </div>
+              </div>
+              <FormField label="Load #" className="w-20 gap-0.5">
+                <Input
+                  type="number"
+                  min={0}
+                  value={tripLoad > 0 ? tripLoad : ""}
+                  placeholder="—"
+                  className="metric-mono h-8"
+                  onChange={(e) => {
+                    const v = e.target.value === "" ? 0 : Number(e.target.value);
+                    onSetLoad(key, v);
+                  }}
+                />
+              </FormField>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                disabled={i === 0}
+                onClick={() => move(i, -1)}
+                aria-label="Move up"
+              >
+                <ChevronUp className="size-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                disabled={i === list.length - 1}
+                onClick={() => move(i, 1)}
+                aria-label="Move down"
+              >
+                <ChevronDown className="size-4" />
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

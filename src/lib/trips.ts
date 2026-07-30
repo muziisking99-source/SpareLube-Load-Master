@@ -34,9 +34,17 @@ export function tripById(trips: Trip[], id: string | null | undefined): Trip | u
 }
 
 export function normalizeTrip(raw: Partial<Trip> & { id: string; name: string }): Trip {
+  const stopOrder: Record<string, number> = {};
+  if (raw.stopOrder && typeof raw.stopOrder === "object" && !Array.isArray(raw.stopOrder)) {
+    for (const [k, v] of Object.entries(raw.stopOrder)) {
+      const n = typeof v === "number" ? v : Number(v);
+      if (k && Number.isFinite(n) && n >= 1) stopOrder[k] = Math.floor(n);
+    }
+  }
   return {
     id: raw.id,
     name: raw.name.trim() || "Untitled trip",
     towns: Array.isArray(raw.towns) ? raw.towns.filter(Boolean) : [],
+    stopOrder,
   };
 }

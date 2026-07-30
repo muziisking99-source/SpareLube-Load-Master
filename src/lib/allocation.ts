@@ -15,10 +15,12 @@ export function truckWeight(inv: Invoice[], truckId: string, round?: number) {
 export function sortForLoad(
   list: Invoice[],
   customers: Record<string, CustomerMemory>,
+  tripId?: string | null,
+  trips?: Trip[],
 ): Invoice[] {
   return [...list].sort((a, b) => {
-    const la = loadingNumberFor(customers, a.customer, a.area);
-    const lb = loadingNumberFor(customers, b.customer, b.area);
+    const la = loadingNumberFor(customers, a.customer, a.area, tripId, trips);
+    const lb = loadingNumberFor(customers, b.customer, b.area, tripId, trips);
     const aUnset = la <= 0 ? 1 : 0;
     const bUnset = lb <= 0 ? 1 : 0;
     if (aUnset !== bUnset) return aUnset - bUnset;
@@ -36,10 +38,14 @@ export function overflowInvoiceIds(
   truckId: string,
   maxWeight: number,
   customers: Record<string, CustomerMemory>,
+  tripId?: string | null,
+  trips?: Trip[],
 ): string[] {
   const r1 = sortForLoad(
     invoices.filter((i) => i.truckId === truckId && (i.round ?? 1) === 1),
     customers,
+    tripId,
+    trips,
   );
   let w = 0;
   const overflow: string[] = [];
@@ -60,6 +66,9 @@ export function allocate(
   const dayTowns = new Map(
     plan.truckDay.map((td) => [td.truckId, townsForTruckDay(td, trips)]),
   );
+  const tripByTruck = new Map(
+    plan.truckDay.map((td) => [td.truckId, td.tripId] as const),
+  );
   const invoices = plan.invoices.map((i) => ({
     ...i,
     truckId: null as string | null,
@@ -74,9 +83,18 @@ export function allocate(
     byArea.get(key)!.push(inv);
   }
 
+  // Prefer trip order when exactly one trip covers this town today; else town fallback
   for (const [area, list] of byArea) {
-    const sorted = sortForLoad(list, customers);
-    byArea.set(area, sorted);
+    const tripIds = [
+      ...new Set(
+        [...tripByTruck.entries()]
+          .filter(([truckId]) => (dayTowns.get(truckId) ?? []).includes(area))
+          .map(([, tripId]) => tripId)
+          .filter(Boolean),
+      ),
+    ] as string[];
+    const tripId = tripIds.length === 1 ? tripIds[0] : null;
+    byArea.set(area, sortForLoad(list, customers, tripId, trips));
   }
 
   for (const [area, list] of byArea) {

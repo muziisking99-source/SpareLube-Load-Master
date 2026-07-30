@@ -46,6 +46,8 @@ export type Trip = {
   name: string;
   /** Ordered town names from the area/town catalog */
   towns: string[];
+  /** Customer key → load # for this trip only (overrides town Load #) */
+  stopOrder: Record<string, number>;
 };
 
 export type TruckDay = {

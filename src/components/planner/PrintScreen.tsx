@@ -84,10 +84,14 @@ function LoadStopsTable({
   stops,
   customers,
   totalWeight,
+  tripId,
+  trips,
 }: {
   stops: LoadStop[];
   customers: Record<string, import("@/lib/types").CustomerMemory>;
   totalWeight: number;
+  tripId?: string | null;
+  trips?: import("@/lib/types").Trip[];
 }) {
   return (
     <table style={{ marginTop: 4, width: "100%", borderCollapse: "collapse" }}>
@@ -101,7 +105,7 @@ function LoadStopsTable({
       </thead>
       <tbody>
         {stops.map((stop) => {
-          const loadNo = loadingNumberFor(customers, stop.customer, stop.area);
+          const loadNo = loadingNumberFor(customers, stop.customer, stop.area, tripId, trips);
           return (
             <tr key={stop.key}>
               <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
@@ -175,6 +179,9 @@ export function PrintScreen() {
 
   const active = trucks.filter((t) => t.active);
   const customers = useStore((s) => s.customers);
+  const dayTripId = new Map(
+    plan.truckDay.map((td) => [td.truckId, td.tripId] as const),
+  );
   const dayTripName = new Map(
     plan.truckDay.map((td) => {
       const trip = tripById(trips, td.tripId);
@@ -188,17 +195,27 @@ export function PrintScreen() {
   }
 
   /** Truck sheets: load # lowest → highest; invoices without a load # last. */
-  function sortInvoices(list: typeof plan.invoices) {
-    return [...list].sort((a, b) => compareByLoadingNumber(customers, a, b));
+  function sortInvoices(list: typeof plan.invoices, tripId?: string | null) {
+    return [...list].sort((a, b) =>
+      compareByLoadingNumber(customers, a, b, tripId, trips),
+    );
   }
 
   /** One page per truck. Round 2 (if any) prints on the same page under Round 1. */
   const truckSheets = active.map((t) => {
+    const tripId = dayTripId.get(t.id);
     const onTruck = plan.invoices.filter((i) => i.truckId === t.id);
-    const r1 = sortInvoices(onTruck.filter((i) => (i.round ?? 1) === 1));
-    const r2 = sortInvoices(onTruck.filter((i) => (i.round ?? 1) === 2));
+    const r1 = sortInvoices(
+      onTruck.filter((i) => (i.round ?? 1) === 1),
+      tripId,
+    );
+    const r2 = sortInvoices(
+      onTruck.filter((i) => (i.round ?? 1) === 2),
+      tripId,
+    );
     return {
       truck: t,
+      tripId,
       rounds: [
         { round: 1, list: r1, stops: groupStopsForLoadSheet(r1) },
         ...(r2.length > 0
@@ -252,7 +269,7 @@ export function PrintScreen() {
       {view === "truck" && (
         <div className="print-root" style={{ display: "block" }}>
           {truckSheets.map((sheet) => {
-            const { truck: t, rounds } = sheet;
+            const { truck: t, tripId, rounds } = sheet;
             return (
               <div key={t.id} className="load-sheet">
                 <div
@@ -313,6 +330,8 @@ export function PrintScreen() {
                         stops={r.stops}
                         customers={customers}
                         totalWeight={wt}
+                        tripId={tripId}
+                        trips={trips}
                       />
                     </div>
                   );
@@ -382,7 +401,14 @@ export function PrintScreen() {
               </thead>
               <tbody>
                 {sortInvoices(plan.invoices).map((i) => {
-                  const loadNo = loadingNumberFor(customers, i.customer, i.area);
+                  const tripId = i.truckId ? dayTripId.get(i.truckId) : null;
+                  const loadNo = loadingNumberFor(
+                    customers,
+                    i.customer,
+                    i.area,
+                    tripId,
+                    trips,
+                  );
                   return (
                     <tr key={i.id}>
                       <td style={{ textAlign: "right" }}>{loadNo > 0 ? loadNo : ""}</td>

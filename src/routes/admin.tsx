@@ -60,6 +60,12 @@ function AdminPage() {
     void hydrate();
   }, [hydrate]);
 
+  useEffect(() => {
+    return () => {
+      void useStore.getState().flushSave();
+    };
+  }, []);
+
   if (!hydrated) {
     return (
       <div className="grid min-h-[100dvh] place-items-center p-4">

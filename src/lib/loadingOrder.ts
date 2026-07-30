@@ -1,5 +1,6 @@
-import type { CustomerMemory } from "./types";
-import { findCustomer } from "./customers";
+import type { CustomerMemory, Trip } from "./types";
+import { customerKey, findCustomer } from "./customers";
+import { tripById } from "./trips";
 
 /** Customers in an area, sorted by load # ascending (unset last). */
 export function customersInArea(
@@ -88,13 +89,29 @@ export function setCustomerLoadingNumber(
   };
 }
 
+/**
+ * Resolve load #: trip stopOrder first, else town defaultArea loadingNumber.
+ */
 export function loadingNumberFor(
   customers: Record<string, CustomerMemory>,
   customerName: string,
   area: string,
+  tripId?: string | null,
+  trips?: Trip[],
 ): number {
   const c = findCustomer(customers, customerName);
-  if (!c || !area || c.defaultArea !== area) return 0;
+  if (!c) return 0;
+
+  if (tripId && trips?.length) {
+    const trip = tripById(trips, tripId);
+    if (trip) {
+      const key = customerKey(c);
+      const fromTrip = trip.stopOrder?.[key] ?? trip.stopOrder?.[c.name];
+      if (typeof fromTrip === "number" && fromTrip > 0) return fromTrip;
+    }
+  }
+
+  if (!area || c.defaultArea !== area) return 0;
   return c.loadingNumber || 0;
 }
 
@@ -121,14 +138,38 @@ export function reorderCustomersInArea(
   return next;
 }
 
+/** Customers on a trip's towns, sorted by trip load # (fallback town #), unset last. */
+export function customersForTrip(
+  customers: Record<string, CustomerMemory>,
+  trip: Trip,
+): CustomerMemory[] {
+  const townSet = new Set(trip.towns);
+  const list = Object.values(customers).filter((c) => c.defaultArea && townSet.has(c.defaultArea));
+  return list.sort((a, b) => {
+    const la = loadingNumberFor(customers, a.name, a.defaultArea, trip.id, [trip]);
+    const lb = loadingNumberFor(customers, b.name, b.defaultArea, trip.id, [trip]);
+    const aUnset = la <= 0 ? 1 : 0;
+    const bUnset = lb <= 0 ? 1 : 0;
+    if (aUnset !== bUnset) return aUnset - bUnset;
+    if (la !== lb) return la - lb;
+    // Keep town order along the trip as secondary sort
+    const ai = trip.towns.indexOf(a.defaultArea);
+    const bi = trip.towns.indexOf(b.defaultArea);
+    if (ai !== bi) return ai - bi;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 /** Compare invoices for truck sheets: load # lowest → highest, unset last. */
 export function compareByLoadingNumber(
   customers: Record<string, CustomerMemory>,
   a: { customer: string; area: string; doc: string },
   b: { customer: string; area: string; doc: string },
+  tripId?: string | null,
+  trips?: Trip[],
 ): number {
-  const la = loadingNumberFor(customers, a.customer, a.area);
-  const lb = loadingNumberFor(customers, b.customer, b.area);
+  const la = loadingNumberFor(customers, a.customer, a.area, tripId, trips);
+  const lb = loadingNumberFor(customers, b.customer, b.area, tripId, trips);
   const aUnset = la <= 0 ? 1 : 0;
   const bUnset = lb <= 0 ? 1 : 0;
   if (aUnset !== bUnset) return aUnset - bUnset;

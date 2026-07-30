@@ -21,7 +21,10 @@ import { normalizeTrip, townsForTruckDay } from "./trips";
 import {
   hydrateWarehouse,
   persistWarehouse,
+  bumpSyncGeneration,
+  isWarehouseDirty,
   type CloudStatus,
+  type CloudSnapshot,
 } from "./cloudSync";
 
 function tomorrowISO(): string {
@@ -62,7 +65,10 @@ type State = {
   undoStack: UndoAction[];
   showResume: boolean;
 
-  hydrate: () => Promise<void>;
+  /** Hydrate from cloud/IDB. Skips if already hydrated unless force. Won't overwrite dirty local. */
+  hydrate: (opts?: { force?: boolean }) => Promise<void>;
+  /** Flush pending debounce and await cloud/IDB persist. */
+  flushSave: () => Promise<CloudStatus>;
   currentPlan: () => Plan;
 
   // trucks
@@ -72,12 +78,14 @@ type State = {
 
   // trips
   addTrip: (name: string, towns?: string[]) => string;
-  updateTrip: (id: string, patch: Partial<Pick<Trip, "name" | "towns">>) => void;
+  updateTrip: (id: string, patch: Partial<Pick<Trip, "name" | "towns" | "stopOrder">>) => void;
   deleteTrip: (id: string) => void;
   /** Import trip names (towns optional). Merges towns onto existing names. */
   importTrips: (
     rows: { name: string; towns?: string[] }[],
   ) => { added: number; skipped: number; updated: number };
+  setTripCustomerLoadNumber: (tripId: string, customerKey: string, n: number) => void;
+  reorderTripCustomers: (tripId: string, orderedKeys: string[]) => void;
 
   // areas / towns catalog
   addArea: (name: string) => void;
@@ -152,28 +160,50 @@ type State = {
   adminPin: string;
 };
 
+function toSnapshot(state: State): CloudSnapshot {
+  return {
+    trucks: state.trucks,
+    trips: state.trips,
+    customers: state.customers,
+    areaHistory: state.areaHistory,
+    heldInvoices: state.heldInvoices,
+    plans: state.plans,
+    audit: state.audit,
+    currentDate: state.currentDate,
+    adminPin: state.adminPin,
+  };
+}
+
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
-function scheduleSave(state: State) {
+let pendingGeneration = 0;
+
+function scheduleSave() {
+  const gen = bumpSyncGeneration();
+  pendingGeneration = gen;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    void persistWarehouse({
-      trucks: state.trucks,
-      trips: state.trips,
-      customers: state.customers,
-      areaHistory: state.areaHistory,
-      heldInvoices: state.heldInvoices,
-      plans: state.plans,
-      audit: state.audit,
-      currentDate: state.currentDate,
-      adminPin: state.adminPin,
-    }).then((status) => {
+    saveTimer = null;
+    void persistWarehouse(toSnapshot(useStore.getState()), gen).then((status) => {
       useStore.setState({ cloudStatus: status });
     });
   }, 120);
 }
 
+async function flushSaveNow(): Promise<CloudStatus> {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  const state = useStore.getState();
+  const gen = pendingGeneration || bumpSyncGeneration();
+  pendingGeneration = gen;
+  const status = await persistWarehouse(toSnapshot(state), gen);
+  useStore.setState({ cloudStatus: status });
+  return status;
+}
+
 export const useStore = create<State>((set, get) => {
-  const persist = () => scheduleSave(get());
+  const persist = () => scheduleSave();
   const mutate = (fn: (s: State) => Partial<State> | void) => {
     set((s) => {
       const patch = fn(s);
@@ -217,9 +247,22 @@ export const useStore = create<State>((set, get) => {
     showResume: false,
     adminPin: "",
 
-    hydrate: async () => {
+    hydrate: async (opts) => {
+      const force = !!opts?.force;
+      const already = get().hydrated;
+      if (already && !force) return;
+
+      // Never clobber unsynced local edits with an older cloud snapshot
+      if (already && isWarehouseDirty() && !force) return;
+
       try {
-        const { snapshot, status } = await hydrateWarehouse();
+        const preferLocal = isWarehouseDirty();
+        const { snapshot, status } = await hydrateWarehouse({ preferLocal });
+        // If we preferred local because dirty, keep in-memory state (already newer)
+        if (preferLocal && already) {
+          set({ cloudStatus: status });
+          return;
+        }
         const {
           trucks,
           trips,
@@ -255,6 +298,8 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
+    flushSave: () => flushSaveNow(),
+
     currentPlan: () => {
       const s = get();
       return s.plans[s.currentDate] ?? emptyPlan(s.currentDate);
@@ -288,6 +333,7 @@ export const useStore = create<State>((set, get) => {
                 ...t,
                 name: patch.name ?? t.name,
                 towns: patch.towns ?? t.towns,
+                stopOrder: patch.stopOrder ?? t.stopOrder,
               })
             : t,
         ),
@@ -311,6 +357,35 @@ export const useStore = create<State>((set, get) => {
         };
       });
       log("trip.delete", `Deleted trip ${id}`);
+    },
+    setTripCustomerLoadNumber: (tripId, key, n) => {
+      mutate((s) => ({
+        trips: s.trips.map((t) => {
+          if (t.id !== tripId) return t;
+          const stopOrder = { ...t.stopOrder };
+          const num = Math.floor(n);
+          if (!Number.isFinite(num) || num < 1) {
+            delete stopOrder[key];
+          } else {
+            stopOrder[key] = num;
+          }
+          return normalizeTrip({ ...t, stopOrder });
+        }),
+      }));
+      log("trip.load", `Set ${key} load #${n} on trip ${tripId}`);
+    },
+    reorderTripCustomers: (tripId, orderedKeys) => {
+      mutate((s) => ({
+        trips: s.trips.map((t) => {
+          if (t.id !== tripId) return t;
+          const stopOrder: Record<string, number> = {};
+          orderedKeys.forEach((key, i) => {
+            if (key) stopOrder[key] = i + 1;
+          });
+          return normalizeTrip({ ...t, stopOrder });
+        }),
+      }));
+      log("trip.reorder", `Reordered ${orderedKeys.length} stops on trip ${tripId}`);
     },
     importTrips: (rows) => {
       let added = 0;
@@ -916,7 +991,14 @@ export const useStore = create<State>((set, get) => {
           return inv?.truckId === truckId && (inv.round ?? 1) !== 2;
         });
       } else {
-        ids = overflowInvoiceIds(plan.invoices, truckId, truck.maxWeight, s.customers);
+        ids = overflowInvoiceIds(
+          plan.invoices,
+          truckId,
+          truck.maxWeight,
+          s.customers,
+          plan.truckDay.find((td) => td.truckId === truckId)?.tripId,
+          s.trips,
+        );
       }
       if (ids.length === 0) return 0;
       get().setInvoiceRound(ids, 2);

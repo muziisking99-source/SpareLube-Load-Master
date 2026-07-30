@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { stepList, useStore } from "@/lib/store";
 import { isCloudConfigured } from "@/lib/supabase";
+import { isWarehouseDirty } from "@/lib/cloudSync";
 import { SetupScreen } from "./SetupScreen";
 import { ImportScreen } from "./ImportScreen";
 import { AllocateScreen } from "./AllocateScreen";
@@ -45,7 +46,14 @@ export function Planner() {
 
   useEffect(() => {
     const onOnline = () => {
-      void hydrate();
+      // Only re-hydrate from cloud when local is clean; otherwise push local first
+      const flush = useStore.getState().flushSave;
+      void (async () => {
+        if (isWarehouseDirty()) {
+          await flush();
+        }
+        await hydrate({ force: true });
+      })();
     };
     const onOffline = () => {
       useStore.setState({ cloudStatus: "offline" });
