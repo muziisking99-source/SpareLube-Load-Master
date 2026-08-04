@@ -472,7 +472,13 @@ function AdminConsole({
     toast.success("Export downloaded");
   }
 
+  async function signOutAdmin() {
+    await lock({});
+    await router.navigate({ to: "/admin-unlock", replace: true });
+  }
+
   return (
+
     <div className="min-h-[100dvh]">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-3 sm:gap-4 sm:px-4">
