@@ -3,6 +3,8 @@ import { Settings } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { Logo } from "@/components/Logo";
+
 import { useIsMobile } from "@/hooks/use-mobile";
 import { cn } from "@/lib/utils";
 import type { Invoice } from "@/lib/types";
@@ -23,10 +25,8 @@ export function TopBar({
     <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md no-print">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-3 sm:gap-4 sm:px-4">
         <div className="flex min-w-0 shrink-0 items-center gap-2 sm:gap-3">
-          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-            L
-          </div>
-          <div className="min-w-0">
+          <Logo className="h-9 w-auto shrink-0 object-contain sm:h-10" />
+          <div className="hidden min-w-0 sm:block">
             <div className="truncate text-sm font-semibold tracking-tight sm:text-base">
               Load Planner
             </div>
@@ -35,6 +35,7 @@ export function TopBar({
             </div>
           </div>
         </div>
+
 
         <div className="relative min-w-0 flex-1 sm:max-w-md">
           <Input
