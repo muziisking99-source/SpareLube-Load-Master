@@ -1,10 +1,10 @@
+"use client";
+
 import { useMemo, useState } from "react";
-import { ArrowRight, Check, Circle, Trash2 } from "lucide-react";
+import { ArrowRight, Check, Circle } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "@tanstack/react-router";
 import { useStore } from "@/lib/store";
-import { townsForTruckDay, tripById } from "@/lib/trips";
-import type { Trip, Truck, TruckDay } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -17,16 +17,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { ScreenHeader } from "./ui/ScreenHeader";
 import { CollapsibleSection } from "./ui/CollapsibleSection";
 import { EmptyState } from "./ui/EmptyState";
@@ -34,49 +24,27 @@ import { FormField } from "./ui/FormField";
 import { AdminSearchInput, matchesQuery } from "./AdminSearchInput";
 import { cn } from "@/lib/utils";
 
-const EDITABLE_INPUT =
-  "h-8 w-full min-w-0 rounded-md border-0 border-b border-border/70 bg-panel-2/40 px-2 shadow-none hover:border-border focus-visible:border-primary focus-visible:ring-0";
-
 export function SetupScreen() {
   const plan = useStore((s) => s.plans[s.currentDate]);
   const plans = useStore((s) => s.plans);
   const currentDate = useStore((s) => s.currentDate);
-  const trucks = useStore((s) => s.trucks);
   const trips = useStore((s) => s.trips);
   const setDate = useStore((s) => s.setDate);
-  const setTruckDayTrip = useStore((s) => s.setTruckDayTrip);
-  const updateTruck = useStore((s) => s.updateTruck);
-  const addTruck = useStore((s) => s.addTruck);
-  const deleteTruck = useStore((s) => s.deleteTruck);
+  const setPlanTrips = useStore((s) => s.setPlanTrips);
   const setStep = useStore((s) => s.setStep);
-  const ensureTruckDay = useStore((s) => s.ensureTruckDay);
   const deleteDay = useStore((s) => s.deleteDay);
 
-  const [showAddTruck, setShowAddTruck] = useState(false);
-  const [truckForm, setTruckForm] = useState({ name: "", maxWeight: 3000 });
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [tripSearch, setTripSearch] = useState("");
   const [continueAttempted, setContinueAttempted] = useState(false);
 
-  const truckDayById = new Map((plan?.truckDay ?? []).map((td) => [td.truckId, td]));
-  const activeTrucks = trucks.filter((t) => t.active);
-  const assignedTripIds = new Set(
-    (plan?.truckDay ?? []).map((td) => td.tripId).filter(Boolean) as string[],
-  );
-  const missingTrip = activeTrucks.filter((t) => {
-    const td = truckDayById.get(t.id);
-    return townsForTruckDay(td, trips).length === 0;
-  });
-  const legacyOnly = activeTrucks.filter((t) => {
-    const td = truckDayById.get(t.id);
-    return td && !td.tripId && (td.areas?.length ?? 0) > 0;
-  });
-  const canContinue = activeTrucks.length > 0 && missingTrip.length === 0;
+  const selectedTripIds = plan?.tripIds ?? [];
+  const selectedSet = useMemo(() => new Set(selectedTripIds), [selectedTripIds]);
+  const canContinue = selectedTripIds.length > 0;
   const showErrors = continueAttempted && !canContinue;
 
   const checklist = [
     {
-      id: "trips",
+      id: "trips-available",
       label:
         trips.length === 0
           ? "Create trips in Admin"
@@ -84,20 +52,12 @@ export function SetupScreen() {
       ok: trips.length > 0,
     },
     {
-      id: "active",
+      id: "trips-selected",
       label:
-        activeTrucks.length === 0
-          ? "Activate at least one truck"
-          : `${activeTrucks.length} truck${activeTrucks.length === 1 ? "" : "s"} active`,
-      ok: activeTrucks.length > 0,
-    },
-    {
-      id: "assigned",
-      label:
-        missingTrip.length === 0
-          ? "Every active truck has a trip"
-          : `${missingTrip.length} truck${missingTrip.length === 1 ? "" : "s"} need a trip`,
-      ok: missingTrip.length === 0 && activeTrucks.length > 0,
+        selectedTripIds.length === 0
+          ? "Select at least one trip for today"
+          : `${selectedTripIds.length} trip${selectedTripIds.length === 1 ? "" : "s"} selected`,
+      ok: selectedTripIds.length > 0,
     },
   ];
 
@@ -115,17 +75,18 @@ export function SetupScreen() {
     [plans],
   );
 
-  const todayAssignments = useMemo(() => {
-    return activeTrucks.map((t) => {
-      const td = truckDayById.get(t.id);
-      const trip = tripById(trips, td?.tripId);
-      return {
-        truckId: t.id,
-        truckName: t.name,
-        tripName: trip?.name ?? (td?.areas?.length ? td.areas.join(", ") : null),
-      };
-    });
-  }, [activeTrucks, plan?.truckDay, trips]);
+  const selectedTrips = useMemo(
+    () => trips.filter((t) => selectedSet.has(t.id)),
+    [trips, selectedSet],
+  );
+
+  function toggleTrip(tripId: string) {
+    if (selectedSet.has(tripId)) {
+      setPlanTrips(selectedTripIds.filter((id) => id !== tripId));
+    } else {
+      setPlanTrips([...selectedTripIds, tripId]);
+    }
+  }
 
   const continuePanel = (
     <>
@@ -158,23 +119,13 @@ export function SetupScreen() {
           </li>
         ))}
       </ul>
-      {showErrors && activeTrucks.length === 0 && (
-        <p className="mb-3 text-sm text-crit">Turn on Active for at least one truck below.</p>
-      )}
       {showErrors && trips.length === 0 && (
         <p className="mb-3 text-sm text-crit">
-          Create named trips in Admin → Trips before assigning trucks.
+          Create named trips in Admin → Trips before continuing.
         </p>
       )}
-      {showErrors && missingTrip.length > 0 && activeTrucks.length > 0 && (
-        <p className="mb-3 text-sm text-crit">
-          Assign a trip to every active truck before continuing.
-        </p>
-      )}
-      {legacyOnly.length > 0 && missingTrip.length === 0 && (
-        <p className="mb-3 text-sm text-muted-foreground">
-          {legacyOnly.length} truck(s) still use legacy towns — assign a named trip when convenient.
-        </p>
+      {showErrors && trips.length > 0 && selectedTripIds.length === 0 && (
+        <p className="mb-3 text-sm text-crit">Select at least one trip for today.</p>
       )}
       <Button
         className="w-full"
@@ -187,7 +138,7 @@ export function SetupScreen() {
           setStep("import");
         }}
       >
-        Continue to Import
+        Continue to Enter Invoices
         <ArrowRight className="size-4" />
       </Button>
     </>
@@ -199,7 +150,7 @@ export function SetupScreen() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <ScreenHeader
             title="Daily Setup"
-            description="Pick the plan date, activate trucks, and assign today’s trips."
+            description="Pick the plan date and which trips run today. Trucks are assigned later."
           />
           <FormField label="Plan date" className="gap-1">
             <Input
@@ -211,15 +162,17 @@ export function SetupScreen() {
           </FormField>
         </div>
 
-        <CollapsibleSection
-          title="Today's Trips"
-          description="Named runs available to assign to trucks. Manage trips in Admin."
-          defaultOpen={false}
-        >
+        <section className="panel p-4 sm:p-5">
+          <ScreenHeader
+            title="Today's Trips"
+            description="Select the runs for today. You’ll pair trucks to these trips after entering invoices."
+            className="mb-4"
+          />
+
           {trips.length === 0 ? (
             <EmptyState
               title="No trips yet"
-              description="Create named trips with towns in Admin, then assign them to trucks below."
+              description="Create named trips with towns in Admin, then select them here."
               action={
                 <Button asChild variant="secondary" size="sm">
                   <Link to="/admin">Open Admin → Trips</Link>
@@ -242,27 +195,39 @@ export function SetupScreen() {
               ) : (
                 <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
                   {filteredTrips.map((trip) => {
-                    const inUse = assignedTripIds.has(trip.id);
+                    const selected = selectedSet.has(trip.id);
                     return (
-                      <li
-                        key={trip.id}
-                        className="flex items-start gap-3 px-3 py-3 transition-colors hover:bg-panel-2/60"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="truncate text-sm font-medium">{trip.name}</span>
-                            {inUse ? (
-                              <Badge variant="good" className="text-[10px]">
-                                Assigned today
-                              </Badge>
-                            ) : null}
+                      <li key={trip.id}>
+                        <button
+                          type="button"
+                          onClick={() => toggleTrip(trip.id)}
+                          className={cn(
+                            "flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-panel-2/60",
+                            selected && "bg-primary/5",
+                          )}
+                        >
+                          <Checkbox
+                            checked={selected}
+                            onCheckedChange={() => toggleTrip(trip.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            className="mt-0.5"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="truncate text-sm font-medium">{trip.name}</span>
+                              {selected ? (
+                                <Badge variant="good" className="text-[10px]">
+                                  Selected
+                                </Badge>
+                              ) : null}
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                              {trip.towns.length === 0
+                                ? "No towns on this trip yet — edit in Admin"
+                                : trip.towns.join(" · ")}
+                            </p>
                           </div>
-                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                            {trip.towns.length === 0
-                              ? "No towns on this trip yet — edit in Admin"
-                              : trip.towns.join(" · ")}
-                          </p>
-                        </div>
+                        </button>
                       </li>
                     );
                   })}
@@ -270,7 +235,25 @@ export function SetupScreen() {
               )}
             </>
           )}
-        </CollapsibleSection>
+        </section>
+
+        {selectedTrips.length > 0 && (
+          <div className="rounded-xl border border-border bg-panel-2/40 p-3">
+            <div className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Selected for {currentDate}
+            </div>
+            <ul className="space-y-1.5 text-sm">
+              {selectedTrips.map((t) => (
+                <li key={t.id} className="flex justify-between gap-3">
+                  <span className="truncate font-medium">{t.name}</span>
+                  <span className="shrink-0 text-muted-foreground">
+                    {t.towns.length} town{t.towns.length === 1 ? "" : "s"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <CollapsibleSection
           title="Daily plans"
@@ -282,22 +265,6 @@ export function SetupScreen() {
             </Badge>
           }
         >
-          {todayAssignments.length > 0 && (
-            <div className="mb-4 rounded-xl border border-border bg-panel-2/40 p-3">
-              <div className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                Today’s assignments · {currentDate}
-              </div>
-              <ul className="space-y-1.5 text-sm">
-                {todayAssignments.map((a) => (
-                  <li key={a.truckId} className="flex justify-between gap-3">
-                    <span className="truncate font-medium">{a.truckName}</span>
-                    <span className="shrink-0 text-muted-foreground">{a.tripName ?? "No trip"}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
           {dailyPlans.length === 0 ? (
             <EmptyState
               title="No plans yet"
@@ -368,342 +335,8 @@ export function SetupScreen() {
           )}
         </CollapsibleSection>
 
-        <section className="panel p-4 sm:p-5">
-          <ScreenHeader
-            title="Trucks"
-            description="Assign each active truck to a named trip for today."
-            action={
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => setShowAddTruck((v) => !v)}
-              >
-                {showAddTruck ? "Cancel" : "Add Truck"}
-              </Button>
-            }
-            className="mb-4"
-          />
-
-          {showAddTruck && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!truckForm.name) return;
-                addTruck({
-                  name: truckForm.name,
-                  maxWeight: Number(truckForm.maxWeight) || 0,
-                  active: true,
-                });
-                setTruckForm({ name: "", maxWeight: 3000 });
-                setShowAddTruck(false);
-                setTimeout(ensureTruckDay, 0);
-                toast.success(`Truck "${truckForm.name}" added`);
-              }}
-              className="mb-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap"
-            >
-              <Input
-                autoFocus
-                value={truckForm.name}
-                onChange={(e) => setTruckForm({ ...truckForm, name: e.target.value })}
-                placeholder="Truck name"
-                className="min-w-0 flex-1 sm:min-w-[140px]"
-              />
-              <Input
-                type="number"
-                value={truckForm.maxWeight}
-                onChange={(e) =>
-                  setTruckForm({ ...truckForm, maxWeight: Number(e.target.value) })
-                }
-                placeholder="Max kg"
-                className="w-full sm:w-32"
-              />
-              <Button type="submit" className="w-full sm:w-auto">
-                Save
-              </Button>
-            </form>
-          )}
-
-          {trucks.length === 0 ? (
-            <EmptyState title="No trucks yet" description="Add a truck using the button above." />
-          ) : (
-            <>
-              {/* Mobile cards */}
-              <div className="space-y-3 md:hidden">
-                {trucks.map((t, idx) => {
-                  const td = truckDayById.get(t.id);
-                  return (
-                    <TruckCard
-                      key={t.id}
-                      truck={t}
-                      td={td}
-                      trips={trips}
-                      index={idx}
-                      onUpdate={(patch) => updateTruck(t.id, patch)}
-                      onTripChange={(tripId) => setTruckDayTrip(t.id, tripId)}
-                      onDelete={() => setDeleteTarget({ id: t.id, name: t.name })}
-                    />
-                  );
-                })}
-              </div>
-
-              {/* Desktop table */}
-              <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
-                <Table className="table-fixed min-w-[720px]">
-                  <TableHeader>
-                    <TableRow className="bg-panel-2 hover:bg-panel-2">
-                      <TableHead className="w-16">Active</TableHead>
-                      <TableHead className="w-[28%]">Truck</TableHead>
-                      <TableHead className="w-28">Max kg</TableHead>
-                      <TableHead className="w-[32%]">Today&apos;s Trip</TableHead>
-                      <TableHead className="w-32">Status</TableHead>
-                      <TableHead className="w-12" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {trucks.map((t, idx) => {
-                      const td = truckDayById.get(t.id);
-                      const trip = tripById(trips, td?.tripId);
-                      const dayTowns = townsForTruckDay(td, trips);
-                      const inactive = !t.active;
-                      const isLegacy = !td?.tripId && (td?.areas?.length ?? 0) > 0;
-                      return (
-                        <TableRow
-                          key={t.id}
-                          style={{ "--index": idx } as React.CSSProperties}
-                          className={cn("stagger-item", inactive && "opacity-50")}
-                        >
-                          <TableCell>
-                            <Checkbox
-                              checked={t.active}
-                              onCheckedChange={(v) => updateTruck(t.id, { active: !!v })}
-                            />
-                          </TableCell>
-                          <TableCell className="min-w-0">
-                            <Input
-                              value={t.name}
-                              onChange={(e) => updateTruck(t.id, { name: e.target.value })}
-                              className={EDITABLE_INPUT}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Input
-                              type="number"
-                              value={t.maxWeight}
-                              onChange={(e) =>
-                                updateTruck(t.id, { maxWeight: Number(e.target.value) })
-                              }
-                              className={cn(EDITABLE_INPUT, "metric-mono max-w-[6.5rem]")}
-                            />
-                          </TableCell>
-                          <TableCell className="min-w-0">
-                            <TripSelect
-                              trips={trips}
-                              inactive={inactive}
-                              tripId={td?.tripId}
-                              dayTowns={dayTowns}
-                              trip={trip}
-                              isLegacy={isLegacy}
-                              onChange={(tripId) => setTruckDayTrip(t.id, tripId)}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <TruckStatusBadge inactive={inactive} dayTowns={dayTowns} />
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="size-8 text-muted-foreground hover:text-destructive"
-                              onClick={() => setDeleteTarget({ id: t.id, name: t.name })}
-                              aria-label="Delete truck"
-                            >
-                              <Trash2 className="size-4" />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
-            </>
-          )}
-        </section>
-
         <aside className="panel p-4 sm:p-5">{continuePanel}</aside>
       </div>
-
-      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <AlertDialogContent className="panel border-border">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete truck?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Remove <strong>{deleteTarget?.name}</strong> from the fleet. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                if (deleteTarget) {
-                  deleteTruck(deleteTarget.id);
-                  toast.success(`Truck "${deleteTarget.name}" removed`);
-                  setDeleteTarget(null);
-                }
-              }}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  );
-}
-
-function TruckStatusBadge({ inactive, dayTowns }: { inactive: boolean; dayTowns: string[] }) {
-  if (inactive) return <Badge variant="outline">Off Duty</Badge>;
-  if (dayTowns.length > 0) return <Badge variant="good">Ready</Badge>;
-  return <Badge variant="warn">Needs trip</Badge>;
-}
-
-function TripSelect({
-  trips,
-  inactive,
-  tripId,
-  dayTowns,
-  trip,
-  isLegacy,
-  onChange,
-  fullWidth,
-}: {
-  trips: Trip[];
-  inactive: boolean;
-  tripId?: string | null;
-  dayTowns: string[];
-  trip?: Trip | null;
-  isLegacy: boolean;
-  onChange: (tripId: string | null) => void;
-  fullWidth?: boolean;
-}) {
-  if (trips.length === 0) {
-    return <span className="text-xs text-muted-foreground">Create trips in Admin first</span>;
-  }
-  return (
-    <div className="space-y-1 py-1">
-      <select
-        disabled={inactive}
-        className={cn(
-          "h-10 rounded-md border border-input bg-background px-2 text-sm md:h-8",
-          fullWidth ? "w-full" : "w-full max-w-xs",
-        )}
-        value={tripId ?? ""}
-        onChange={(e) => onChange(e.target.value || null)}
-      >
-        <option value="">Unassigned</option>
-        {trips.map((tr) => (
-          <option key={tr.id} value={tr.id}>
-            {tr.name}
-          </option>
-        ))}
-      </select>
-      {dayTowns.length > 0 && (
-        <p className="line-clamp-2 text-[11px] text-muted-foreground">{dayTowns.join(" · ")}</p>
-      )}
-      {trip && dayTowns.length === 0 && (
-        <p className="text-[11px] text-warn">Trip has no towns — edit in Admin</p>
-      )}
-      {isLegacy && (
-        <p className="text-[11px] text-warn">Legacy towns — pick a named trip when ready</p>
-      )}
-    </div>
-  );
-}
-
-function TruckCard({
-  truck,
-  td,
-  trips,
-  index,
-  onUpdate,
-  onTripChange,
-  onDelete,
-}: {
-  truck: Truck;
-  td?: TruckDay;
-  trips: Trip[];
-  index: number;
-  onUpdate: (patch: Partial<Truck>) => void;
-  onTripChange: (tripId: string | null) => void;
-  onDelete: () => void;
-}) {
-  const trip = tripById(trips, td?.tripId);
-  const dayTowns = townsForTruckDay(td, trips);
-  const inactive = !truck.active;
-  const isLegacy = !td?.tripId && (td?.areas?.length ?? 0) > 0;
-
-  return (
-    <div
-      style={{ "--index": index } as React.CSSProperties}
-      className={cn(
-        "stagger-item space-y-3 rounded-xl border border-border bg-panel-2/40 p-4",
-        inactive && "opacity-60",
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <label className="flex items-center gap-3">
-          <Checkbox
-            checked={truck.active}
-            onCheckedChange={(v) => onUpdate({ active: !!v })}
-            className="size-5"
-          />
-          <span className="text-sm font-medium">Active</span>
-        </label>
-        <TruckStatusBadge inactive={inactive} dayTowns={dayTowns} />
-      </div>
-
-      <FormField label="Truck name">
-        <Input
-          value={truck.name}
-          onChange={(e) => onUpdate({ name: e.target.value })}
-          className="h-10"
-        />
-      </FormField>
-
-      <FormField label="Max kg">
-        <Input
-          type="number"
-          value={truck.maxWeight}
-          onChange={(e) => onUpdate({ maxWeight: Number(e.target.value) })}
-          className="metric-mono h-10"
-        />
-      </FormField>
-
-      <FormField label="Today's trip">
-        <TripSelect
-          trips={trips}
-          inactive={inactive}
-          tripId={td?.tripId}
-          dayTowns={dayTowns}
-          trip={trip}
-          isLegacy={isLegacy}
-          onChange={onTripChange}
-          fullWidth
-        />
-      </FormField>
-
-      <Button
-        type="button"
-        variant="outline"
-        className="w-full text-muted-foreground hover:text-destructive"
-        onClick={onDelete}
-      >
-        <Trash2 className="size-4" />
-        Delete truck
-      </Button>
     </div>
   );
 }

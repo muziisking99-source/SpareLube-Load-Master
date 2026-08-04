@@ -6,6 +6,7 @@ import type { CustomerMemory } from "@/lib/types";
 import { customerKey } from "@/lib/customers";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import { TownCombobox } from "@/components/planner/TownCombobox";
 import { LoadingNumberInput } from "@/components/planner/LoadingNumbersBoard";
@@ -32,6 +33,7 @@ export function CustomerAreaBoard({
   hideEmptyUnassigned = false,
   onSetArea,
   onSetLoadingNumber,
+  onSetCollection,
   onDelete,
 }: {
   areas: string[];
@@ -41,6 +43,7 @@ export function CustomerAreaBoard({
   hideEmptyUnassigned?: boolean;
   onSetArea: (key: string, area: string) => void;
   onSetLoadingNumber: (key: string, area: string, n: number) => void;
+  onSetCollection?: (key: string, collection: boolean) => void;
   onDelete: (key: string) => void;
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>(() => {
@@ -122,6 +125,16 @@ export function CustomerAreaBoard({
                         }
                       />
                     </label>
+                    {onSetCollection && (
+                      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Checkbox
+                          checked={!!c.collection}
+                          onCheckedChange={(v) => onSetCollection(key, !!v)}
+                          className="size-3.5"
+                        />
+                        Collection
+                      </label>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -162,6 +175,11 @@ export function CustomerAreaBoard({
                           #{c.loadingNumber}
                         </Badge>
                       )}
+                      {c.collection && (
+                        <Badge variant="secondary" className="shrink-0 text-[10px]">
+                          Collection
+                        </Badge>
+                      )}
                       <TownCombobox
                         value={area}
                         options={areaOptions}
@@ -178,6 +196,16 @@ export function CustomerAreaBoard({
                           onCommit={(n) => onSetLoadingNumber(key, area, n)}
                         />
                       </label>
+                      {onSetCollection && (
+                        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Checkbox
+                            checked={!!c.collection}
+                            onCheckedChange={(v) => onSetCollection(key, !!v)}
+                            className="size-3.5"
+                          />
+                          Collection
+                        </label>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"

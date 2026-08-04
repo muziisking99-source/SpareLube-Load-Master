@@ -13,17 +13,35 @@ export function townsForTruckDay(
   return [...(td.areas ?? [])].filter(Boolean);
 }
 
-/** Unique towns for the plan day from assigned truck trips (fallback: plan.areas). */
+/** Unique towns for the plan day: prefer selected tripIds, else truck trips, else plan.areas. */
 export function townsForPlan(plan: Plan | undefined, trips: Trip[]): string[] {
   if (!plan) return [];
   const set = new Set<string>();
-  for (const td of plan.truckDay ?? []) {
-    for (const town of townsForTruckDay(td, trips)) set.add(town);
+  const tripIds = plan.tripIds ?? [];
+  if (tripIds.length > 0) {
+    for (const id of tripIds) {
+      const trip = trips.find((t) => t.id === id);
+      if (trip) for (const town of trip.towns) if (town) set.add(town);
+    }
+  } else {
+    for (const td of plan.truckDay ?? []) {
+      for (const town of townsForTruckDay(td, trips)) set.add(town);
+    }
   }
   if (set.size === 0) {
     for (const a of plan.areas ?? []) {
       if (a) set.add(a);
     }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+/** Derive sorted unique town list from trip id list. */
+export function townsFromTripIds(tripIds: string[], trips: Trip[]): string[] {
+  const set = new Set<string>();
+  for (const id of tripIds) {
+    const trip = trips.find((t) => t.id === id);
+    if (trip) for (const town of trip.towns) if (town) set.add(town);
   }
   return [...set].sort((a, b) => a.localeCompare(b));
 }

@@ -78,6 +78,8 @@ export function allocate(
 
   const byArea = new Map<string, Invoice[]>();
   for (const inv of invoices) {
+    // Customer-collects stay on the plan but are never auto-allocated
+    if (inv.collection) continue;
     const key = inv.area || "__NONE__";
     if (!byArea.has(key)) byArea.set(key, []);
     byArea.get(key)!.push(inv);

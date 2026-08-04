@@ -80,6 +80,7 @@ export type Database = {
       customers: {
         Row: {
           code: string
+          collection: boolean
           default_area: string
           first_seen: string
           id: string
@@ -89,6 +90,7 @@ export type Database = {
         }
         Insert: {
           code?: string
+          collection?: boolean
           default_area?: string
           first_seen?: string
           id: string
@@ -98,6 +100,7 @@ export type Database = {
         }
         Update: {
           code?: string
+          collection?: boolean
           default_area?: string
           first_seen?: string
           id?: string
@@ -115,6 +118,7 @@ export type Database = {
           invoices: Json
           locked: boolean
           step: string
+          trip_ids: Json
           truck_day: Json
           updated_at: string
         }
@@ -125,6 +129,7 @@ export type Database = {
           invoices?: Json
           locked?: boolean
           step?: string
+          trip_ids?: Json
           truck_day?: Json
           updated_at?: string
         }
@@ -135,6 +140,7 @@ export type Database = {
           invoices?: Json
           locked?: boolean
           step?: string
+          trip_ids?: Json
           truck_day?: Json
           updated_at?: string
         }

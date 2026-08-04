@@ -18,7 +18,7 @@ import {
   mergePartialTripReorder,
 } from "./loadingOrder";
 import { customerKey, findCustomerKey } from "./customers";
-import { normalizeTrip, townsForTruckDay } from "./trips";
+import { normalizeTrip, townsForTruckDay, townsFromTripIds, townsForPlan } from "./trips";
 import {
   hydrateWarehouse,
   persistWarehouse,
@@ -53,6 +53,7 @@ function emptyPlan(date: string): Plan {
   return {
     date,
     areas: [],
+    tripIds: [],
     truckDay: [],
     invoices: [],
     locked: false,
@@ -123,6 +124,8 @@ type State = {
   setTruckDayAreas: (truckId: string, areas: string[]) => void;
   /** @deprecated use setTruckDayTrip */
   setTruckDayArea: (truckId: string, area: string) => void;
+  /** Select which trips run today (Step 1). Derives plan.areas from trip towns. */
+  setPlanTrips: (tripIds: string[]) => void;
   ensureTruckDay: () => void;
   dismissResume: () => void;
   newPlan: (date?: string) => void;
@@ -133,6 +136,7 @@ type State = {
   ) => { added: number; skipped: number; updated: number };
   setCustomerArea: (name: string, area: string) => void;
   setCustomerLoadingNumber: (name: string, area: string, n: number) => void;
+  setCustomerCollection: (key: string, collection: boolean) => void;
   reorderCustomersInArea: (area: string, orderedNames: string[]) => void;
   deleteCustomer: (name: string) => void;
 
@@ -774,6 +778,7 @@ export const useStore = create<State>((set, get) => {
             plans[r.date] = {
               date: r.date,
               areas: [],
+              tripIds: [],
               truckDay: [],
               invoices: [],
               locked: r.locked,
@@ -793,7 +798,6 @@ export const useStore = create<State>((set, get) => {
       scheduleSave();
     },
     setTruckDayTrip: (truckId, tripId) => {
-      const s = get();
       patchPlan((p) => {
         const exists = p.truckDay.find((t) => t.truckId === truckId);
         const next: TruckDay = {
@@ -804,13 +808,30 @@ export const useStore = create<State>((set, get) => {
         const truckDay = exists
           ? p.truckDay.map((t) => (t.truckId === truckId ? next : t))
           : [...p.truckDay, next];
+        // Keep plan.areas from tripIds when set; otherwise derive from truck assignments (legacy)
+        if ((p.tripIds ?? []).length > 0) {
+          return { ...p, truckDay };
+        }
+        const s = get();
         const areas = [
-          ...new Set(
-            truckDay.flatMap((td) => townsForTruckDay(td, s.trips)),
-          ),
+          ...new Set(truckDay.flatMap((td) => townsForTruckDay(td, s.trips))),
         ].sort((a, b) => a.localeCompare(b));
         return { ...p, truckDay, areas };
       });
+    },
+    setPlanTrips: (tripIds) => {
+      const s = get();
+      const clean = [...new Set(tripIds.filter(Boolean))];
+      const areas = townsFromTripIds(clean, s.trips);
+      patchPlan((p) => ({
+        ...p,
+        tripIds: clean,
+        areas,
+      }));
+      log(
+        "plan.trips",
+        `Selected ${clean.length} trip(s) for ${s.currentDate}`,
+      );
     },
     setTruckDayAreas: (truckId, areas) => {
       const clean = [...new Set(areas.filter(Boolean))];
@@ -890,6 +911,7 @@ export const useStore = create<State>((set, get) => {
           defaultArea: "",
           loadingNumber: 0,
           firstSeen: now,
+          collection: false,
         };
         added++;
       }
@@ -920,6 +942,23 @@ export const useStore = create<State>((set, get) => {
         return { customers, areaHistory: history };
       });
       log("customers.loading", `Set ${key} loading #${n} in ${area}`);
+    },
+    setCustomerCollection: (key, collection) => {
+      mutate((s) => {
+        const id = findCustomerKey(s.customers, key) ?? key;
+        const prev = s.customers[id];
+        if (!prev) return {};
+        return {
+          customers: {
+            ...s.customers,
+            [id]: { ...prev, collection: !!collection },
+          },
+        };
+      });
+      log(
+        "customers.collection",
+        collection ? `Marked ${key} as collection` : `Cleared collection on ${key}`,
+      );
     },
     reorderCustomersInArea: (area, orderedNames) => {
       mutate((s) => {
@@ -1146,6 +1185,7 @@ export const useStore = create<State>((set, get) => {
         },
       }));
       log("held.from_plan", `Held ${inv.doc} from plan`);
+      void flushSaveNow();
       return true;
     },
 
@@ -1156,9 +1196,7 @@ export const useStore = create<State>((set, get) => {
       const plan = s.plans[s.currentDate] ?? emptyPlan(s.currentDate);
       if (held.doc && plan.invoices.some((i) => i.doc === held.doc)) return "duplicate";
 
-      const todayTowns = new Set(
-        plan.truckDay.flatMap((td) => townsForTruckDay(td, s.trips)),
-      );
+      const todayTowns = new Set(townsForPlan(plan, s.trips));
       const offTrip = !!held.area && !todayTowns.has(held.area);
       const asException = !!opts?.asException;
       const asCollection = !!opts?.asCollection || !!held.collection;
@@ -1192,6 +1230,7 @@ export const useStore = create<State>((set, get) => {
         "held.pick",
         `Picked ${held.doc} into plan${asException ? " (exception)" : ""}${asCollection ? " (collection)" : ""}`,
       );
+      void flushSaveNow();
       return "ok";
     },
 
@@ -1224,6 +1263,7 @@ export const useStore = create<State>((set, get) => {
         heldInvoices: s.heldInvoices.filter((h) => h.id !== id),
       }));
       if (held) log("held.remove", `Removed held ${held.doc}`);
+      void flushSaveNow();
     },
 
     runAllocation: () => {
@@ -1410,8 +1450,8 @@ export const stepList: Plan["step"][] = [
 
 export const stepLabels: Record<Plan["step"], string> = {
   setup: "1. Daily Setup",
-  import: "2. Import & Review",
-  allocate: "3. Auto Allocation",
+  import: "2. Enter Invoices",
+  allocate: "3. Trucks & Allocation",
   adjust: "4. Adjust",
   lock: "5. Lock",
   print: "6. Print",

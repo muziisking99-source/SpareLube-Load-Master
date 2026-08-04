@@ -116,10 +116,15 @@ function deserializeDirty(raw: DirtyPersisted | null | undefined): DirtyFlags {
 }
 
 let dirty = emptyDirty();
+let queuedDirty = emptyDirty();
+/** Flags currently being written to cloud — must stay in DIRTY_KEY until ack. */
+let inFlightDirty = emptyDirty();
 let dirtyPersistTail: Promise<void> = Promise.resolve();
 
 function scheduleDirtyPersist(): void {
-  const snapshot = serializeDirty(mergeDirty(dirty, queuedDirty));
+  const snapshot = serializeDirty(
+    mergeDirty(mergeDirty(dirty, queuedDirty), inFlightDirty),
+  );
   dirtyPersistTail = dirtyPersistTail.then(async () => {
     if (
       snapshot.slices.length === 0 &&
@@ -182,13 +187,18 @@ export function markAllDirty(snapshot?: CloudSnapshot): void {
 }
 
 export function isPlanDeletePending(date: string): boolean {
-  return dirty.deletedPlanDates.has(date) || queuedDirty.deletedPlanDates.has(date);
+  return (
+    dirty.deletedPlanDates.has(date) ||
+    queuedDirty.deletedPlanDates.has(date) ||
+    inFlightDirty.deletedPlanDates.has(date)
+  );
 }
 
 function takeDirty(): DirtyFlags {
   const taken = dirty;
   dirty = emptyDirty();
-  scheduleDirtyPersist();
+  // Do NOT persist here — caller merges into queuedDirty/inFlightDirty first,
+  // otherwise DIRTY_KEY briefly loses delete tombstones mid-sync.
   return taken;
 }
 
@@ -211,9 +221,6 @@ function mergeDirty(a: DirtyFlags, b: DirtyFlags): DirtyFlags {
   out.pruneAudit = a.pruneAudit || b.pruneAudit;
   return out;
 }
-
-/** Declared early so scheduleDirtyPersist can merge in-flight queue. */
-let queuedDirty: DirtyFlags = emptyDirty();
 
 function emptySnapshot(currentDate: string): CloudSnapshot {
   return {
@@ -244,9 +251,14 @@ function daysAgoISO(days: number): string {
 function normalizePlans(raw: Record<string, Plan>): Record<string, Plan> {
   const plans: Record<string, Plan> = {};
   for (const [date, p] of Object.entries(raw ?? {})) {
+    const tripIds = Array.isArray(p.tripIds)
+      ? p.tripIds.filter((id): id is string => typeof id === "string" && !!id)
+      : [];
     plans[date] = {
       ...p,
       date: p.date ?? date,
+      tripIds,
+      areas: Array.isArray(p.areas) ? p.areas : [],
       truckDay: (p.truckDay ?? []).map((td) =>
         normalizeTruckDay(td as TruckDay & { area?: string }),
       ),
@@ -371,16 +383,28 @@ function cloudHasData(s: CloudSnapshot): boolean {
 export async function fetchPlanFromCloud(date: string): Promise<Plan | null> {
   const sb = getSupabase();
   if (!sb) return null;
-  const { data, error } = await sb
+  let { data, error } = await sb
     .from("plans")
-    .select("date,areas,truck_day,invoices,locked,created_at,step")
+    .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids")
     .eq("date", date)
     .maybeSingle();
+  if (error && /trip_ids|schema cache|does not exist/i.test(error.message)) {
+    const fallback = await sb
+      .from("plans")
+      .select("date,areas,truck_day,invoices,locked,created_at,step")
+      .eq("date", date)
+      .maybeSingle();
+    data = fallback.data as typeof data;
+    error = fallback.error;
+  }
   if (error || !data) return null;
   return normalizePlans({
     [date]: {
       date: data.date,
       areas: (data.areas as string[]) ?? [],
+      tripIds: Array.isArray((data as { trip_ids?: unknown }).trip_ids)
+        ? ((data as { trip_ids: string[] }).trip_ids ?? [])
+        : [],
       truckDay: (data.truck_day as TruckDay[]) ?? [],
       invoices: (data.invoices as Plan["invoices"]) ?? [],
       locked: !!data.locked,
@@ -424,10 +448,10 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
   const [areasRes, trucksRes, customersRes, plansRes, auditRes, settingsRes] = await Promise.all([
     sb.from("areas").select("name"),
     sb.from("trucks").select("id,name,max_weight,active"),
-    sb.from("customers").select("id,code,name,default_area,loading_number,first_seen"),
+    sb.from("customers").select("id,code,name,default_area,loading_number,first_seen,collection"),
     sb
       .from("plans")
-      .select("date,areas,truck_day,invoices,locked,created_at,step")
+      .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids")
       .gte("date", cutoff),
     sb
       .from("audit_entries")
@@ -436,6 +460,28 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
       .limit(5000),
     sb.from("app_settings").select("active_date,admin_pin,held_invoices").eq("id", 1).maybeSingle(),
   ]);
+
+  // Graceful fallbacks when migration 006 not applied yet
+  let customersData = customersRes.data;
+  let customersError = customersRes.error;
+  if (customersError && /collection|schema cache|does not exist/i.test(customersError.message)) {
+    const fallback = await sb
+      .from("customers")
+      .select("id,code,name,default_area,loading_number,first_seen");
+    customersData = fallback.data as typeof customersData;
+    customersError = fallback.error;
+  }
+
+  let plansData = plansRes.data;
+  let plansError = plansRes.error;
+  if (plansError && /trip_ids|schema cache|does not exist/i.test(plansError.message)) {
+    const fallback = await sb
+      .from("plans")
+      .select("date,areas,truck_day,invoices,locked,created_at,step")
+      .gte("date", cutoff);
+    plansData = fallback.data as typeof plansData;
+    plansError = fallback.error;
+  }
 
   const tripsTableMissing =
     !!tripsRes.error && /does not exist|schema cache/i.test(tripsRes.error.message);
@@ -464,42 +510,53 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
     areasRes.error ||
     trucksRes.error ||
     tripsError ||
-    customersRes.error ||
-    plansRes.error ||
+    customersError ||
+    plansError ||
     auditRes.error;
   if (firstError) throw firstError;
 
   const activeDate = settingsData?.active_date || tomorrowISO();
   if (activeDate < cutoff) {
-    const extra = await sb
+    let extra = await sb
       .from("plans")
-      .select("date,areas,truck_day,invoices,locked,created_at,step")
+      .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids")
       .eq("date", activeDate)
       .maybeSingle();
+    if (extra.error && /trip_ids|schema cache|does not exist/i.test(extra.error.message)) {
+      extra = await sb
+        .from("plans")
+        .select("date,areas,truck_day,invoices,locked,created_at,step")
+        .eq("date", activeDate)
+        .maybeSingle();
+    }
     if (!extra.error && extra.data) {
-      (plansRes.data as typeof extra.data[] | null) ??= [];
-      (plansRes.data as NonNullable<typeof plansRes.data>).push(extra.data);
+      (plansData as typeof extra.data[] | null) ??= [];
+      (plansData as NonNullable<typeof plansData>).push(extra.data);
     }
   }
 
   const customers: Record<string, CustomerMemory> = {};
-  for (const row of customersRes.data ?? []) {
+  for (const row of customersData ?? []) {
     const c = normalizeCustomer({
       code: row.code ?? "",
       name: row.name,
       defaultArea: row.default_area ?? "",
       loadingNumber: row.loading_number ?? 0,
       firstSeen: row.first_seen ?? new Date().toISOString(),
+      collection: !!(row as { collection?: boolean }).collection,
     });
     customers[row.id || customerKey(c)] = c;
   }
 
   const plans: Record<string, Plan> = {};
-  for (const row of plansRes.data ?? []) {
+  for (const row of plansData ?? []) {
     plans[row.date] = normalizePlans({
       [row.date]: {
         date: row.date,
         areas: (row.areas as string[]) ?? [],
+        tripIds: Array.isArray((row as { trip_ids?: unknown }).trip_ids)
+          ? ((row as { trip_ids: string[] }).trip_ids ?? [])
+          : [],
         truckDay: (row.truck_day as TruckDay[]) ?? [],
         invoices: (row.invoices as Plan["invoices"]) ?? [],
         locked: !!row.locked,
@@ -618,12 +675,14 @@ async function syncTrips(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
     if (explicitDeletes.length) {
       const { error } = await sb.from("trips").delete().in("id", explicitDeletes);
       if (error && !/does not exist|schema cache/i.test(error.message)) throw error;
+      // Schema-cache / missing table: don't pretend the delete succeeded
+      if (error) throw error;
     }
     return;
   }
 
   const { data: existingTrips, error: tripsReadErr } = await sb.from("trips").select("id");
-  if (tripsReadErr && /does not exist|schema cache/i.test(tripsReadErr.message)) return;
+  // Never treat "can't read trips" as a successful sync — that clears dirty and resurrects deletes
   if (tripsReadErr) throw tripsReadErr;
   const wantTripIds = new Set(s.trips.map((t) => t.id));
   const tripsToDelete = [
@@ -697,19 +756,27 @@ async function syncCustomers(s: CloudSnapshot, now: string, flags: DirtyFlags): 
     const { error } = await sb.from("customers").delete().in("id", chunk);
     if (error) throw error;
   }
-  await upsertInChunks(
-    "customers",
-    Object.entries(s.customers).map(([id, c]) => ({
-      id,
-      code: c.code ?? "",
-      name: c.name,
-      default_area: c.defaultArea ?? "",
-      loading_number: c.loadingNumber ?? 0,
-      first_seen: c.firstSeen || now,
-      updated_at: now,
-    })),
-    "id",
-  );
+  const withCollection = Object.entries(s.customers).map(([id, c]) => ({
+    id,
+    code: c.code ?? "",
+    name: c.name,
+    default_area: c.defaultArea ?? "",
+    loading_number: c.loadingNumber ?? 0,
+    collection: !!c.collection,
+    first_seen: c.firstSeen || now,
+    updated_at: now,
+  }));
+  try {
+    await upsertInChunks("customers", withCollection, "id");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/collection|schema cache|does not exist/i.test(msg)) throw err;
+    await upsertInChunks(
+      "customers",
+      withCollection.map(({ collection: _c, ...rest }) => rest),
+      "id",
+    );
+  }
 }
 
 async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Promise<void> {
@@ -728,6 +795,7 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
     .map((p) => ({
       date: p.date,
       areas: p.areas ?? [],
+      trip_ids: p.tripIds ?? [],
       truck_day: p.truckDay ?? [],
       invoices: p.invoices ?? [],
       locked: !!p.locked,
@@ -735,7 +803,19 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
       step: p.step || "setup",
       updated_at: now,
     }));
-  if (planRows.length) await upsertInChunks("plans", planRows, "date");
+  if (planRows.length) {
+    try {
+      await upsertInChunks("plans", planRows, "date");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/trip_ids|schema cache|does not exist/i.test(msg)) throw err;
+      await upsertInChunks(
+        "plans",
+        planRows.map(({ trip_ids: _t, ...rest }) => rest),
+        "date",
+      );
+    }
+  }
 }
 
 async function syncAuditAppend(s: CloudSnapshot, flags: DirtyFlags): Promise<void> {
@@ -783,20 +863,9 @@ async function syncSettings(s: CloudSnapshot, now: string): Promise<void> {
     { onConflict: "id" },
   );
   if (settingsErr) {
-    if (/held_invoices|schema cache|does not exist/i.test(settingsErr.message)) {
-      const { error: fallbackErr } = await sb.from("app_settings").upsert(
-        {
-          id: 1,
-          active_date: s.currentDate,
-          admin_pin: s.adminPin ?? "",
-          updated_at: now,
-        },
-        { onConflict: "id" },
-      );
-      if (fallbackErr) throw fallbackErr;
-    } else {
-      throw settingsErr;
-    }
+    // Do not fall back to writing settings without held_invoices — that would
+    // clear dirty flags while leaving deleted held invoices alive in cloud.
+    throw settingsErr;
   }
 }
 
@@ -891,13 +960,17 @@ export async function hydrateWarehouse(opts?: {
   // Pending local deletes/edits survived reload — push local first so cloud doesn't resurrect them.
   if (dirtyHasWork(dirty)) {
     const flags = takeDirty();
+    inFlightDirty = mergeDirty(inFlightDirty, flags);
+    scheduleDirtyPersist();
     try {
       await persistToCloud(local, flags);
+      inFlightDirty = emptyDirty();
       await saveKey(DIRTY_KEY, null);
       await saveLocalSnapshot(local);
       return { snapshot: local, status: "cloud", migrated: false };
     } catch (err) {
       console.error("Pending cloud sync failed on hydrate", err);
+      inFlightDirty = emptyDirty();
       dirty = mergeDirty(dirty, flags);
       scheduleDirtyPersist();
       return { snapshot: local, status: "error", migrated: false };
@@ -969,13 +1042,14 @@ export function isWarehouseDirty(): boolean {
     persistInFlight ||
     queuedSnapshot !== null ||
     dirtyHasWork(dirty) ||
-    dirtyHasWork(queuedDirty)
+    dirtyHasWork(queuedDirty) ||
+    dirtyHasWork(inFlightDirty)
   );
 }
 
 /** Human-readable summary of pending dirty slices for sync tooltips. */
 export function getDirtySummary(): string {
-  const f = mergeDirty(dirty, queuedDirty);
+  const f = mergeDirty(mergeDirty(dirty, queuedDirty), inFlightDirty);
   if (!dirtyHasWork(f) && latestGeneration <= lastSyncedGeneration && !persistInFlight) {
     return "";
   }
@@ -1005,7 +1079,13 @@ async function persistToCloudIfNeeded(
 
   try {
     await persistToCloud(s, flags);
-    if (!dirtyHasWork(dirty) && !dirtyHasWork(queuedDirty)) {
+    // Caller clears inFlightDirty after this returns; only wipe DIRTY_KEY when
+    // nothing else (including this in-flight batch) is pending.
+    if (
+      !dirtyHasWork(dirty) &&
+      !dirtyHasWork(queuedDirty) &&
+      !dirtyHasWork(inFlightDirty)
+    ) {
       await saveKey(DIRTY_KEY, null);
     } else {
       scheduleDirtyPersist();
@@ -1042,6 +1122,8 @@ export async function persistWarehouse(
   queuedSnapshot = s;
   queuedGeneration = gen;
   queuedDirty = mergeDirty(queuedDirty, flags);
+  // Persist tombstones immediately so a reload mid-sync can't resurrect deletes
+  scheduleDirtyPersist();
 
   const runQueue = async (): Promise<CloudStatus> => {
     let status: CloudStatus = "local";
@@ -1051,6 +1133,8 @@ export async function persistWarehouse(
       const snapDirty = queuedDirty;
       queuedSnapshot = null;
       queuedDirty = emptyDirty();
+      inFlightDirty = mergeDirty(inFlightDirty, snapDirty);
+      scheduleDirtyPersist();
       persistInFlight = true;
       try {
         status = await persistToCloudIfNeeded(snap, snapDirty);
@@ -1058,6 +1142,9 @@ export async function persistWarehouse(
           lastSyncedGeneration = snapGen;
         }
       } finally {
+        // On error, flags were restored into `dirty` by persistToCloudIfNeeded
+        inFlightDirty = emptyDirty();
+        scheduleDirtyPersist();
         persistInFlight = false;
       }
     }

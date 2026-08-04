@@ -64,6 +64,7 @@ export function Assistant() {
     const td = plan.truckDay.find((d) => d.truckId === t.id);
     return townsForTruckDay(td, trips).length > 0;
   }).length;
+  const tripsSelected = (plan.tripIds ?? []).length;
 
   const body = (
     <AssistantBody
@@ -74,6 +75,7 @@ export function Assistant() {
       activeCount={active.length}
       cap={cap}
       tripsAssigned={trucksWithTrip}
+      tripsSelected={tripsSelected}
       tripCatalog={trips.length}
       known={known}
       newly={newly}
@@ -161,6 +163,7 @@ function AssistantBody({
   activeCount,
   cap,
   tripsAssigned,
+  tripsSelected,
   tripCatalog,
   known,
   newly,
@@ -185,6 +188,7 @@ function AssistantBody({
   activeCount: number;
   cap: number;
   tripsAssigned: number;
+  tripsSelected: number;
   tripCatalog: number;
   known: number;
   newly: number;
@@ -216,12 +220,10 @@ function AssistantBody({
       {isSetup && (
         <Section title="Readiness">
           <Row label="Trips in catalog" value={tripCatalog} />
-          <Row label="Active trucks" value={activeCount} tone={activeCount ? "good" : "warn"} />
-          <Row label="Fleet capacity" value={`${cap} kg`} />
           <Row
-            label="Trucks with trip"
-            value={`${tripsAssigned}/${activeCount || 0}`}
-            tone={activeCount > 0 && tripsAssigned === activeCount ? "good" : "warn"}
+            label="Trips selected"
+            value={tripsSelected}
+            tone={tripsSelected ? "good" : "warn"}
           />
           <Row label="Held for later" value={heldCount} tone={heldCount ? "warn" : undefined} />
         </Section>
@@ -232,18 +234,16 @@ function AssistantBody({
           <Section title="Overview">
             <Row label="Total invoices" value={invoiceCount} />
             <Row label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />
-            <Row label="Active trucks" value={activeCount} />
-            <Row label="Fleet capacity" value={`${cap} kg`} />
+            <Row label="Trips selected" value={tripsSelected} />
             <Row label="Held for later" value={heldCount} tone={heldCount ? "warn" : undefined} />
           </Section>
           <Separator className="my-3 bg-border/60" />
-          <Section title="Import health">
+          <Section title="Entry health">
             <Row label="Known customers" value={known} />
             <Row label="New customers" value={newly} tone={newly ? "warn" : undefined} />
             <Row label="Duplicate docs" value={duplicates} tone={duplicates ? "crit" : undefined} />
             <Row label="Missing weights" value={missingWeights} tone={missingWeights ? "warn" : undefined} />
             <Row label="Missing towns" value={missingTowns} tone={missingTowns ? "warn" : undefined} />
-            <Row label="Remaining capacity" value={`${remaining.toFixed(0)} kg`} />
           </Section>
         </>
       )}
@@ -255,6 +255,11 @@ function AssistantBody({
             <Row label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />
             <Row label="Active trucks" value={activeCount} />
             <Row label="Fleet capacity" value={`${cap} kg`} />
+            <Row
+              label="Trucks with trip"
+              value={`${tripsAssigned}/${activeCount || 0}`}
+              tone={activeCount > 0 && tripsAssigned === activeCount ? "good" : "warn"}
+            />
           </Section>
           <Separator className="my-3 bg-border/60" />
           <Section title="Allocation">

@@ -1,23 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+"use client";
+
+import { useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
-  Download,
-  FileSpreadsheet,
   Inbox,
   Pause,
   Trash2,
   TriangleAlert,
-  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
-import { parseExcelFile } from "@/lib/parse";
-import { downloadInvoiceTemplate } from "@/lib/excelTemplates";
 import { findCustomer } from "@/lib/customers";
 import { loadingNumberFor } from "@/lib/loadingOrder";
 import { townsForPlan } from "@/lib/trips";
+import type { CustomerMemory, HeldInvoice, Invoice } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -31,13 +29,23 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { ScreenHeader } from "./ui/ScreenHeader";
 import { CollapsibleSection } from "./ui/CollapsibleSection";
 import { EmptyState } from "./ui/EmptyState";
 import { StatTile } from "./ui/StatTile";
 import { FormField } from "./ui/FormField";
 import { TownCombobox } from "./TownCombobox";
-import type { HeldInvoice, Invoice } from "@/lib/types";
+import { CustomerCombobox } from "./CustomerCombobox";
 import { cn } from "@/lib/utils";
 
 export function ImportScreen() {
@@ -47,7 +55,6 @@ export function ImportScreen() {
   const areaHistory = useStore((s) => s.areaHistory);
   const heldInvoices = useStore((s) => s.heldInvoices);
   const addInvoices = useStore((s) => s.addInvoices);
-  const addAdhoc = useStore((s) => s.addAdhoc);
   const updateInvoice = useStore((s) => s.updateInvoice);
   const removeInvoice = useStore((s) => s.removeInvoice);
   const confirmImport = useStore((s) => s.confirmImport);
@@ -59,13 +66,26 @@ export function ImportScreen() {
   const setHeldCollection = useStore((s) => s.setHeldCollection);
   const setStep = useStore((s) => s.setStep);
 
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [fileName, setFileName] = useState("");
-  const [message, setMessage] = useState("");
-  const [parsing, setParsing] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
+  const docRef = useRef<HTMLInputElement>(null);
+  const [doc, setDoc] = useState("");
+  const [customerName, setCustomerName] = useState("");
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerMemory | null>(null);
+  const [area, setArea] = useState("");
+  const [weight, setWeight] = useState("");
+  const [pendingHold, setPendingHold] = useState<{
+    doc: string;
+    customer: string;
+    weight: number;
+    area: string;
+    collection: boolean;
+  } | null>(null);
 
   const areas = townsForPlan(plan, trips);
+  const townOptions = useMemo(() => {
+    const set = new Set([...areas, ...areaHistory]);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [areas, areaHistory]);
+
   const heldTownOptions = useMemo(() => {
     const set = new Set(areaHistory);
     for (const h of heldInvoices) if (h.area) set.add(h.area);
@@ -83,14 +103,22 @@ export function ImportScreen() {
   }, [heldInvoices, areas]);
 
   const invoices = plan.invoices;
-  const systemInvoices = invoices.filter((i) => i.source === "SYSTEM");
-  const adhocInvoices = invoices.filter((i) => i.source === "ADHOC");
+
+  const isCollectionCustomer = (name: string) => !!findCustomer(customers, name)?.collection;
+
+  const deliveryInvoices = invoices.filter(
+    (i) => !i.collection && !isCollectionCustomer(i.customer),
+  );
+  const collectionInvoices = invoices.filter(
+    (i) => i.collection || isCollectionCustomer(i.customer),
+  );
 
   const docCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const i of invoices) m.set(i.doc, (m.get(i.doc) ?? 0) + 1);
+    for (const h of heldInvoices) m.set(h.doc, (m.get(h.doc) ?? 0) + 1);
     return m;
-  }, [invoices]);
+  }, [invoices, heldInvoices]);
 
   const missingWeights = invoices.filter((i) => !i.weight || i.weight <= 0).length;
   const missingAreas = invoices.filter((i) => !i.area).length;
@@ -100,85 +128,99 @@ export function ImportScreen() {
   const canConfirm = invoices.length > 0 && missingWeights === 0 && missingAreas === 0;
   const progressPct = invoices.length ? (entered / invoices.length) * 100 : 0;
 
-  async function handleExcelFile(file: File) {
-    const lower = file.name.toLowerCase();
-    if (!lower.endsWith(".xlsx") && !lower.endsWith(".xls") && !lower.endsWith(".csv")) {
-      setMessage("Please upload an Excel file (.xlsx or .xls).");
-      toast.error("Invalid file type");
+  function resetForm() {
+    setDoc("");
+    setCustomerName("");
+    setSelectedCustomer(null);
+    setArea("");
+    setWeight("");
+    requestAnimationFrame(() => docRef.current?.focus());
+  }
+
+  function applyCustomer(c: CustomerMemory | null) {
+    setSelectedCustomer(c);
+    if (c) {
+      setCustomerName(c.name);
+      if (c.defaultArea) setArea(c.defaultArea);
+    }
+  }
+
+  function submitEntry(opts?: { forceHold?: boolean }) {
+    const cleanDoc = doc.trim();
+    const cleanCustomer = (selectedCustomer?.name || customerName).trim();
+    const w = Number(weight);
+    const cleanArea = area.trim();
+
+    if (!cleanDoc) {
+      toast.error("Enter a doc number");
+      docRef.current?.focus();
+      return;
+    }
+    if (!cleanCustomer) {
+      toast.error("Select a customer");
+      return;
+    }
+    if (!cleanArea) {
+      toast.error("Select a town");
+      return;
+    }
+    if (!w || w <= 0) {
+      toast.error("Enter weight (kg)");
+      return;
+    }
+    if (docCounts.get(cleanDoc)) {
+      toast.error(`Doc ${cleanDoc} is already entered`);
       return;
     }
 
-    setParsing(true);
-    setFileName(file.name);
-    setMessage("");
-    try {
-      const rows = await parseExcelFile(file);
-      if (rows.length === 0) {
-        setMessage("No valid rows found. Sheet needs Customer Code, Customer Name, and Doc Number columns.");
-        toast.error("No valid rows found");
+    const known = selectedCustomer ?? findCustomer(customers, cleanCustomer);
+    const isCollection = !!known?.collection;
+    const onToday = areas.includes(cleanArea);
+
+    if (opts?.forceHold || (!onToday && !isCollection)) {
+      if (!opts?.forceHold && !onToday) {
+        setPendingHold({
+          doc: cleanDoc,
+          customer: cleanCustomer,
+          weight: w,
+          area: cleanArea,
+          collection: isCollection,
+        });
         return;
       }
-      const existingDocs = new Set([
-        ...systemInvoices.map((i) => i.doc),
-        ...heldInvoices.map((h) => h.doc),
-      ]);
-      const fresh = rows.filter((r) => !existingDocs.has(r.doc));
-      const todayTowns = new Set(townsForPlan(plan, trips));
-      const toPlan: {
-        doc: string;
-        customer: string;
-        weight: number;
-        area: string;
-        source: "SYSTEM";
-      }[] = [];
-      const toHold: {
-        doc: string;
-        customer: string;
-        weight: number;
-        area: string;
-        source: "SYSTEM";
-      }[] = [];
-
-      for (const r of fresh) {
-        const known =
-          (r.customerCode ? findCustomer(customers, r.customerCode) : undefined) ??
-          findCustomer(customers, r.customer);
-        const area = known?.defaultArea ?? "";
-        const customerName = known?.name || r.customer;
-        const row = {
-          doc: r.doc,
-          customer: customerName,
-          weight: 0,
-          area,
-          source: "SYSTEM" as const,
-        };
-        if (area && !todayTowns.has(area)) {
-          toHold.push(row);
-        } else {
-          toPlan.push(row);
-        }
-      }
-
-      if (toPlan.length) addInvoices(toPlan);
-      const heldCount = toHold.length
-        ? holdInvoices(toHold, "town_not_on_trips")
-        : 0;
-
-      const parts = [
-        `Parsed ${rows.length} row${rows.length === 1 ? "" : "s"} from ${file.name}`,
-        `Added ${toPlan.length}`,
-      ];
-      if (heldCount) parts.push(`Held ${heldCount} (town not on today’s trips)`);
-      const msg = parts.join(". ") + ".";
-      setMessage(msg);
-      toast.success(msg);
-    } catch {
-      setMessage("Could not read that Excel file. Check the format and try again.");
-      toast.error("Failed to read Excel file");
-    } finally {
-      setParsing(false);
-      if (fileRef.current) fileRef.current.value = "";
+      holdInvoices(
+        [
+          {
+            doc: cleanDoc,
+            customer: cleanCustomer,
+            weight: w,
+            area: cleanArea,
+            source: "ADHOC",
+          },
+        ],
+        isCollection ? "collection" : opts?.forceHold ? "manual" : "town_not_on_trips",
+      );
+      toast.success(
+        isCollection ? "Held as collection" : "Held for later",
+      );
+      resetForm();
+      return;
     }
+
+    addInvoices([
+      {
+        doc: cleanDoc,
+        customer: cleanCustomer,
+        weight: w,
+        area: cleanArea,
+        source: "ADHOC",
+        collection: isCollection,
+      },
+    ]);
+    toast.success(
+      isCollection ? `Added ${cleanDoc} (collection)` : `Added ${cleanDoc}`,
+    );
+    resetForm();
   }
 
   function handleConfirm() {
@@ -214,89 +256,90 @@ export function ImportScreen() {
     <div className="space-y-6">
       <section className="panel p-4 sm:p-5">
         <ScreenHeader
-          title="Excel Import"
-          description="Upload an .xlsx or .xls sheet with Customer Code, Customer Name, and Doc Number. Load # comes from Admin."
-          action={
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-full sm:w-auto"
-              onClick={() => {
-                downloadInvoiceTemplate();
-                toast.success("Invoice template downloaded");
-              }}
-            >
-              <Download className="size-4" />
-              Download template
-            </Button>
-          }
+          title="Enter Invoice"
+          description="Add invoices one by one. Customer and town come from Admin. Excel double-check is on the Lock step."
           className="mb-4"
         />
 
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void handleExcelFile(f);
-          }}
-        />
-
-        <button
-          type="button"
-          disabled={parsing}
-          onClick={() => fileRef.current?.click()}
-          onDragOver={(e) => {
+        <form
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
+          onSubmit={(e) => {
             e.preventDefault();
-            setDragOver(true);
+            submitEntry();
           }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            const f = e.dataTransfer.files?.[0];
-            if (f) void handleExcelFile(f);
-          }}
-          className={cn(
-            "flex w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-4 py-10 text-center transition-colors",
-            dragOver
-              ? "border-primary bg-primary/5"
-              : "border-border bg-panel-2/50 hover:border-primary/50 hover:bg-panel-2",
-            parsing && "opacity-60",
-          )}
         >
-          <div className="grid size-12 place-items-center rounded-xl bg-primary/10 text-primary">
-            {parsing ? (
-              <Upload className="size-6 animate-pulse" />
-            ) : (
-              <FileSpreadsheet className="size-6" />
+          <FormField label="Doc number">
+            <Input
+              ref={docRef}
+              value={doc}
+              onChange={(e) => setDoc(e.target.value)}
+              placeholder="Doc #"
+              className="metric-mono h-11"
+              autoComplete="off"
+              autoFocus
+            />
+          </FormField>
+          <FormField label="Customer" className="sm:col-span-1 lg:col-span-2">
+            <CustomerCombobox
+              value={customerName}
+              customers={customers}
+              onChange={applyCustomer}
+              buttonClassName="h-11 w-full"
+            />
+          </FormField>
+          <FormField label="Town">
+            <TownCombobox
+              value={area}
+              options={townOptions}
+              allowEmpty
+              emptyOptionLabel="Clear town"
+              placeholder="Town…"
+              searchPlaceholder="Search towns…"
+              onChange={setArea}
+              buttonClassName="h-11 w-full"
+            />
+          </FormField>
+          <FormField label="Weight (kg)">
+            <Input
+              type="number"
+              min={0}
+              inputMode="decimal"
+              value={weight}
+              onChange={(e) => setWeight(e.target.value)}
+              placeholder="0"
+              className="metric-mono h-11 text-lg"
+            />
+          </FormField>
+          <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-5">
+            <Button type="submit" className="min-w-[8rem]">
+              Add invoice
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => submitEntry({ forceHold: true })}
+            >
+              <Pause className="size-4" />
+              Hold for later
+            </Button>
+            {selectedCustomer?.collection && (
+              <Badge variant="secondary" className="h-9 items-center">
+                Collection customer
+              </Badge>
+            )}
+            {area && !areas.includes(area) && (
+              <Badge variant="warn" className="h-9 items-center">
+                Town not on today’s trips
+              </Badge>
             )}
           </div>
-          <div>
-            <p className="text-sm font-medium text-foreground">
-              {parsing ? "Reading workbook…" : "Tap to choose Excel file"}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              .xlsx / .xls — Customer Code, Customer Name, Doc Number
-            </p>
-          </div>
-          {fileName && !parsing && (
-            <Badge variant="outline" className="metric-mono font-normal">
-              {fileName}
-            </Badge>
-          )}
-        </button>
-
-        {message && <p className="mt-3 text-sm text-muted-foreground">{message}</p>}
+        </form>
       </section>
 
       <CollapsibleSection
         title="Held for later"
-        description="Waiting for a matching trip day — or mark as Collection / pick as Exception if delivering today."
-        defaultOpen={false}
+        description="Waiting for a matching trip day — or pick as exception if delivering today."
+        defaultOpen={heldInvoices.length > 0}
         action={
           <Badge variant="outline" className="gap-1">
             <Inbox className="size-3.5" />
@@ -307,7 +350,7 @@ export function ImportScreen() {
         {sortedHeld.length === 0 ? (
           <EmptyState
             title="No held invoices"
-            description="Excel rows whose town isn’t on today’s trips land here. You can also Hold from Review."
+            description="Use Hold for later when a town isn’t on today’s trips."
           />
         ) : (
           <>
@@ -365,86 +408,103 @@ export function ImportScreen() {
         )}
       </CollapsibleSection>
 
+      {collectionInvoices.length > 0 && (
+        <section className="panel p-4 sm:p-5">
+          <ScreenHeader
+            title="Collections"
+            description="Choose whether the customer collects or the invoice loads on a truck."
+            className="mb-4"
+          />
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-panel-2 hover:bg-panel-2">
+                  <TableHead>Doc</TableHead>
+                  <TableHead>Customer</TableHead>
+                  <TableHead>Town</TableHead>
+                  <TableHead>Weight</TableHead>
+                  <TableHead>Load #</TableHead>
+                  <TableHead>Handling</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {collectionInvoices.map((i) => (
+                  <TableRow key={i.id}>
+                    <TableCell className="metric-mono">{i.doc}</TableCell>
+                    <TableCell>{i.customer}</TableCell>
+                    <TableCell>{i.area || "—"}</TableCell>
+                    <TableCell className="metric-mono">{i.weight || "—"}</TableCell>
+                    <TableCell className="metric-mono text-muted-foreground">
+                      {(i.area && loadingNumberFor(customers, i.customer, i.area)) || "—"}
+                    </TableCell>
+                    <TableCell>
+                      <select
+                        className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                        value={i.collection ? "collects" : "truck"}
+                        onChange={(e) =>
+                          updateInvoice(i.id, {
+                            collection: e.target.value === "collects",
+                            truckId: e.target.value === "collects" ? null : i.truckId,
+                          })
+                        }
+                      >
+                        <option value="collects">Customer collects</option>
+                        <option value="truck">Load on truck</option>
+                      </select>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleHold(i.id)}
+                          disabled={!i.doc}
+                        >
+                          <Pause className="size-3.5" />
+                          Hold
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => removeInvoice(i.id)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      )}
+
       <section className="panel p-4 sm:p-5">
         <ScreenHeader
-          title="Today’s adhoc"
-          description="Manual one-off deliveries for this plan only."
-          action={
-            <Button variant="secondary" size="sm" onClick={addAdhoc} className="w-full sm:w-auto">
-              Add Row
-            </Button>
-          }
+          title="Today’s invoices"
+          description="Deliveries for today’s selected trips."
           className="mb-4"
         />
-        {adhocInvoices.length === 0 ? (
-          <EmptyState title="No adhoc invoices" description="Use Add Row for manual entries on today’s plan." />
+        {deliveryInvoices.length === 0 ? (
+          <EmptyState
+            title="No invoices yet"
+            description="Enter doc number, customer, town, and weight above."
+          />
         ) : (
           <>
             <div className="space-y-3 md:hidden">
-              {adhocInvoices.map((i) => (
-                <AdhocCard
-                  key={i.id}
-                  inv={i}
-                  areas={areas}
-                  loadNumber={
-                    (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
-                  }
-                  onChange={(patch) => updateInvoice(i.id, patch)}
-                  onRemove={() => removeInvoice(i.id)}
-                />
-              ))}
-            </div>
-            <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
-              <table className="w-full min-w-[720px] border-collapse text-sm">
-                <thead className="bg-panel-2">
-                  <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
-                    <th className="w-[9rem] px-3 py-2.5 font-medium">Doc</th>
-                    <th className="px-3 py-2.5 font-medium">Customer</th>
-                    <th className="w-[7rem] px-3 py-2.5 font-medium">Weight</th>
-                    <th className="w-[11rem] px-3 py-2.5 font-medium">Area</th>
-                    <th className="w-[4.5rem] px-3 py-2.5 font-medium">Load #</th>
-                    <th className="w-[3rem] px-3 py-2.5 font-medium" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {adhocInvoices.map((i) => (
-                    <AdhocRow
-                      key={i.id}
-                      inv={i}
-                      areas={areas}
-                      loadNumber={
-                        (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
-                      }
-                      onChange={(patch) => updateInvoice(i.id, patch)}
-                      onRemove={() => removeInvoice(i.id)}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </section>
-
-      {invoices.length > 0 && (
-        <section className="panel p-4 sm:p-5">
-          <ScreenHeader
-            title="Review — Enter Weights"
-            description="All weights and towns must be complete before confirming."
-            className="mb-4"
-          />
-          <div className="space-y-3 md:hidden">
-            {invoices.map((i, idx) => {
-              const knownCust = findCustomer(customers, i.customer);
-              const known = i.source === "SYSTEM" && !!knownCust;
-              const dup = (docCounts.get(i.doc) ?? 0) > 1;
-              return (
+              {deliveryInvoices.map((i, idx) => (
                 <InvoiceCard
                   key={i.id}
                   inv={i}
-                  areas={areas}
-                  known={known}
-                  duplicate={dup}
+                  areas={townOptions}
+                  known={!!findCustomer(customers, i.customer)}
+                  duplicate={(docCounts.get(i.doc) ?? 0) > 1}
                   index={idx}
                   loadNumber={
                     (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
@@ -453,34 +513,28 @@ export function ImportScreen() {
                   onRemove={() => removeInvoice(i.id)}
                   onHold={() => handleHold(i.id)}
                 />
-              );
-            })}
-          </div>
-          <div className="hidden max-h-[520px] overflow-auto rounded-xl border border-border md:block">
-            <Table>
-              <TableHeader className="sticky top-0 z-10 bg-panel-2">
-                <TableRow className="hover:bg-panel-2">
-                  <TableHead className="w-16">Load #</TableHead>
-                  <TableHead className="w-28">Doc</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead className="w-28">Weight (kg)</TableHead>
-                  <TableHead className="w-40">Area</TableHead>
-                  <TableHead className="w-40">Status</TableHead>
-                  <TableHead className="w-24" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invoices.map((i, idx) => {
-                  const knownCust = findCustomer(customers, i.customer);
-                  const known = i.source === "SYSTEM" && !!knownCust;
-                  const dup = (docCounts.get(i.doc) ?? 0) > 1;
-                  return (
+              ))}
+            </div>
+            <div className="hidden max-h-[520px] overflow-auto rounded-xl border border-border md:block">
+              <Table>
+                <TableHeader className="sticky top-0 z-10 bg-panel-2">
+                  <TableRow className="hover:bg-panel-2">
+                    <TableHead className="w-16">Load #</TableHead>
+                    <TableHead className="w-28">Doc</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead className="w-28">Weight (kg)</TableHead>
+                    <TableHead className="w-40">Town</TableHead>
+                    <TableHead className="w-24" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {deliveryInvoices.map((i, idx) => (
                     <InvoiceRow
                       key={i.id}
                       inv={i}
-                      areas={areas}
-                      known={known}
-                      duplicate={dup}
+                      areas={townOptions}
+                      known={!!findCustomer(customers, i.customer)}
+                      duplicate={(docCounts.get(i.doc) ?? 0) > 1}
                       index={idx}
                       loadNumber={
                         (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
@@ -489,17 +543,19 @@ export function ImportScreen() {
                       onRemove={() => removeInvoice(i.id)}
                       onHold={() => handleHold(i.id)}
                     />
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        </section>
-      )}
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </>
+        )}
+      </section>
 
       <div className="grid gap-4 md:grid-cols-3">
         <div className="panel p-4">
-          <div className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">Validation</div>
+          <div className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
+            Validation
+          </div>
           <div className="space-y-2 text-sm">
             {canConfirm ? (
               <div className="flex items-center gap-2 text-good">
@@ -507,13 +563,19 @@ export function ImportScreen() {
                 Complete
               </div>
             ) : (
-              <div className="text-muted-foreground">Incomplete</div>
+              <div className="text-muted-foreground">
+                {invoices.length === 0 ? "No invoices entered" : "Incomplete"}
+              </div>
             )}
-            <div className={`flex items-center gap-2 ${missingWeights ? "text-warn" : "text-muted-foreground"}`}>
+            <div
+              className={`flex items-center gap-2 ${missingWeights ? "text-warn" : "text-muted-foreground"}`}
+            >
               <TriangleAlert className="size-3.5" />
               Missing weights: {missingWeights}
             </div>
-            <div className={`flex items-center gap-2 ${missingAreas ? "text-warn" : "text-muted-foreground"}`}>
+            <div
+              className={`flex items-center gap-2 ${missingAreas ? "text-warn" : "text-muted-foreground"}`}
+            >
               <TriangleAlert className="size-3.5" />
               Missing towns: {missingAreas}
             </div>
@@ -533,7 +595,7 @@ export function ImportScreen() {
           </div>
           <div className="space-y-2">
             <Button disabled={!canConfirm} className="w-full" size="lg" onClick={handleConfirm}>
-              Confirm and Save
+              Continue to Trucks
               <ArrowRight className="size-4" />
             </Button>
             <Button variant="outline" className="w-full" onClick={() => setStep("setup")}>
@@ -543,227 +605,43 @@ export function ImportScreen() {
           </div>
         </div>
       </div>
+
+      <AlertDialog open={!!pendingHold} onOpenChange={(o) => !o && setPendingHold(null)}>
+        <AlertDialogContent className="panel border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Town not on today’s trips</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingHold?.area} isn’t on a selected trip. Hold this invoice for later?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!pendingHold) return;
+                holdInvoices(
+                  [
+                    {
+                      doc: pendingHold.doc,
+                      customer: pendingHold.customer,
+                      weight: pendingHold.weight,
+                      area: pendingHold.area,
+                      source: "ADHOC",
+                    },
+                  ],
+                  pendingHold.collection ? "collection" : "town_not_on_trips",
+                );
+                toast.success("Held for later");
+                setPendingHold(null);
+                resetForm();
+              }}
+            >
+              Hold for later
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
-  );
-}
-
-function AdhocCard({
-  inv,
-  areas,
-  loadNumber,
-  onChange,
-  onRemove,
-}: {
-  inv: Invoice;
-  areas: string[];
-  loadNumber: number;
-  onChange: (p: Partial<Invoice>) => void;
-  onRemove: () => void;
-}) {
-  const customers = useStore((s) => s.customers);
-  const [docDraft, setDocDraft] = useState(inv.doc);
-  const [customerDraft, setCustomerDraft] = useState(inv.customer);
-
-  useEffect(() => {
-    setDocDraft(inv.doc);
-  }, [inv.doc]);
-  useEffect(() => {
-    setCustomerDraft(inv.customer);
-  }, [inv.customer]);
-
-  const badWeight = !inv.weight || inv.weight <= 0;
-  const badArea = !inv.area;
-
-  function commitCustomer() {
-    const name = customerDraft.trim();
-    if (name === inv.customer) return;
-    const known = findCustomer(customers, name);
-    onChange({
-      customer: name,
-      ...(known?.defaultArea && areas.includes(known.defaultArea)
-        ? { area: known.defaultArea }
-        : {}),
-    });
-  }
-
-  return (
-    <div className="space-y-3 rounded-xl border border-border bg-panel-2/40 p-4">
-      <div className="grid grid-cols-2 gap-3">
-        <FormField label="Doc">
-          <Input
-            value={docDraft}
-            onChange={(e) => setDocDraft(e.target.value)}
-            onBlur={() => {
-              if (docDraft !== inv.doc) onChange({ doc: docDraft });
-            }}
-            placeholder="Doc #"
-            className="metric-mono h-11"
-            autoComplete="off"
-          />
-        </FormField>
-        <FormField label="Load #">
-          <div className="metric-mono flex h-11 items-center text-muted-foreground">
-            {loadNumber > 0 ? loadNumber : "—"}
-          </div>
-        </FormField>
-      </div>
-      <FormField label="Customer">
-        <Input
-          value={customerDraft}
-          onChange={(e) => setCustomerDraft(e.target.value)}
-          onBlur={commitCustomer}
-          placeholder="Customer"
-          className="h-11"
-          autoComplete="off"
-        />
-      </FormField>
-      <FormField label="Weight (kg)">
-        <Input
-          type="number"
-          min={0}
-          inputMode="decimal"
-          value={inv.weight || ""}
-          onChange={(e) => onChange({ weight: Number(e.target.value) })}
-          className={cn("weight-input metric-mono h-11 text-lg", badWeight && "border-crit")}
-          placeholder="0"
-        />
-      </FormField>
-      <FormField label="Town">
-        <TownCombobox
-          value={inv.area}
-          options={areas}
-          allowEmpty
-          emptyOptionLabel="Clear town"
-          placeholder="Select town…"
-          searchPlaceholder="Search towns…"
-          onChange={(town) => onChange({ area: town })}
-          buttonClassName={cn("h-11 w-full", badArea && "border-warn")}
-        />
-      </FormField>
-      <Button
-        type="button"
-        variant="outline"
-        className="w-full text-muted-foreground hover:text-destructive"
-        onClick={onRemove}
-      >
-        <Trash2 className="size-4" />
-        Remove
-      </Button>
-    </div>
-  );
-}
-
-function AdhocRow({
-  inv,
-  areas,
-  loadNumber,
-  onChange,
-  onRemove,
-}: {
-  inv: Invoice;
-  areas: string[];
-  loadNumber: number;
-  onChange: (p: Partial<Invoice>) => void;
-  onRemove: () => void;
-}) {
-  const customers = useStore((s) => s.customers);
-  const [docDraft, setDocDraft] = useState(inv.doc);
-  const [customerDraft, setCustomerDraft] = useState(inv.customer);
-
-  useEffect(() => {
-    setDocDraft(inv.doc);
-  }, [inv.doc]);
-  useEffect(() => {
-    setCustomerDraft(inv.customer);
-  }, [inv.customer]);
-
-  const badWeight = !inv.weight || inv.weight <= 0;
-  const badArea = !inv.area;
-
-  function commitCustomer() {
-    const name = customerDraft.trim();
-    if (name === inv.customer) return;
-    const known = findCustomer(customers, name);
-    onChange({
-      customer: name,
-      ...(known?.defaultArea && areas.includes(known.defaultArea)
-        ? { area: known.defaultArea }
-        : {}),
-    });
-  }
-
-  return (
-    <tr className="border-b border-border last:border-0">
-      <td className="px-3 py-2 align-middle">
-        <Input
-          value={docDraft}
-          onChange={(e) => setDocDraft(e.target.value)}
-          onBlur={() => {
-            if (docDraft !== inv.doc) onChange({ doc: docDraft });
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-          }}
-          placeholder="Doc #"
-          className="metric-mono h-9 min-w-[7rem] text-foreground"
-          autoComplete="off"
-        />
-      </td>
-      <td className="px-3 py-2 align-middle">
-        <Input
-          value={customerDraft}
-          onChange={(e) => setCustomerDraft(e.target.value)}
-          onBlur={commitCustomer}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-          }}
-          placeholder="Customer"
-          className="h-9 min-w-[10rem] text-foreground"
-          autoComplete="off"
-        />
-      </td>
-      <td className="px-3 py-2 align-middle">
-        <Input
-          type="number"
-          min={0}
-          value={inv.weight || ""}
-          onChange={(e) => onChange({ weight: Number(e.target.value) })}
-          className={`weight-input metric-mono h-9 w-full min-w-[5.5rem] text-foreground ${
-            badWeight ? "border-crit" : ""
-          }`}
-          placeholder="0"
-        />
-      </td>
-      <td className="px-3 py-2 align-middle">
-        <TownCombobox
-          value={inv.area}
-          options={areas}
-          allowEmpty
-          emptyOptionLabel="Clear town"
-          placeholder="Select town…"
-          searchPlaceholder="Search towns…"
-          onChange={(town) => onChange({ area: town })}
-          buttonClassName={`h-9 w-full min-w-[9rem] ${badArea ? "border-warn" : ""}`}
-        />
-      </td>
-      <td className="px-3 py-2 align-middle">
-        <span className="metric-mono text-muted-foreground">
-          {loadNumber > 0 ? loadNumber : "—"}
-        </span>
-      </td>
-      <td className="px-3 py-2 align-middle">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-8 text-muted-foreground hover:text-destructive"
-          onClick={onRemove}
-          aria-label="Remove"
-        >
-          <Trash2 className="size-4" />
-        </Button>
-      </td>
-    </tr>
   );
 }
 
@@ -790,22 +668,12 @@ function InvoiceCard({
 }) {
   const badWeight = !inv.weight || inv.weight <= 0;
   const badArea = !inv.area;
-  const rowStyle = known
-    ? { background: "color-mix(in oklab, var(--good) 8%, transparent)" }
-    : duplicate
-      ? { background: "color-mix(in oklab, var(--crit) 10%, transparent)" }
-      : { background: "color-mix(in oklab, var(--warn) 6%, transparent)" };
 
   return (
     <div
-      style={
-        {
-          ...rowStyle,
-          ...(index !== undefined ? { "--index": index } : {}),
-        } as React.CSSProperties
-      }
+      style={index !== undefined ? ({ "--index": index } as React.CSSProperties) : undefined}
       className={cn(
-        "space-y-3 rounded-xl border border-border p-4",
+        "space-y-3 rounded-xl border border-border bg-panel-2/40 p-4",
         index !== undefined && "stagger-item",
       )}
     >
@@ -816,7 +684,6 @@ function InvoiceCard({
         </div>
         <div className="flex flex-wrap items-center gap-1">
           {known ? <Badge variant="good">Known</Badge> : <Badge variant="warn">New</Badge>}
-          {inv.source === "ADHOC" && <Badge variant="outline">Adhoc</Badge>}
           {duplicate && <Badge variant="crit">Duplicate</Badge>}
         </div>
       </div>
@@ -895,33 +762,10 @@ function InvoiceRow({
 }) {
   const badWeight = !inv.weight || inv.weight <= 0;
   const badArea = !inv.area;
-  const rowStyle = known
-    ? { background: "color-mix(in oklab, var(--good) 8%, transparent)" }
-    : duplicate
-      ? { background: "color-mix(in oklab, var(--crit) 10%, transparent)" }
-      : { background: "color-mix(in oklab, var(--warn) 6%, transparent)" };
-
-  function onKey(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      const inputs = Array.from(
-        (e.currentTarget.closest("tbody") as HTMLElement).querySelectorAll<HTMLInputElement>(
-          "input.weight-input",
-        ),
-      );
-      const idx = inputs.indexOf(e.target as HTMLInputElement);
-      inputs[idx + 1]?.focus();
-    }
-  }
 
   return (
     <TableRow
-      style={
-        {
-          ...rowStyle,
-          ...(index !== undefined ? { "--index": index } : {}),
-        } as React.CSSProperties
-      }
+      style={index !== undefined ? ({ "--index": index } as React.CSSProperties) : undefined}
       className={index !== undefined ? "stagger-item" : undefined}
     >
       <TableCell className="metric-mono text-muted-foreground">
@@ -931,6 +775,7 @@ function InvoiceRow({
       <TableCell>
         <span className="flex flex-wrap items-center gap-2">
           {inv.customer}
+          {known ? null : <Badge variant="warn">New</Badge>}
           {duplicate && <Badge variant="crit">Duplicate</Badge>}
         </span>
       </TableCell>
@@ -940,7 +785,6 @@ function InvoiceRow({
           min={0}
           value={inv.weight || ""}
           onChange={(e) => onChange({ weight: Number(e.target.value) })}
-          onKeyDown={onKey}
           className={`weight-input metric-mono h-8 w-24 text-foreground ${badWeight ? "border-crit" : ""}`}
           placeholder="0"
         />
@@ -956,14 +800,6 @@ function InvoiceRow({
           onChange={(town) => onChange({ area: town })}
           buttonClassName={`h-9 w-full min-w-[9rem] ${badArea ? "border-warn" : ""}`}
         />
-      </TableCell>
-      <TableCell>
-        {known ? <Badge variant="good">Known</Badge> : <Badge variant="warn">New</Badge>}
-        {inv.source === "ADHOC" && (
-          <Badge variant="outline" className="ml-1">
-            Adhoc
-          </Badge>
-        )}
       </TableCell>
       <TableCell>
         <div className="flex items-center justify-end gap-1">

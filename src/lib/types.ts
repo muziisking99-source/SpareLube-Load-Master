@@ -13,6 +13,8 @@ export type CustomerMemory = {
   /** 0 = unset; otherwise 1..n within defaultArea */
   loadingNumber: number;
   firstSeen: string;
+  /** Customer typically collects — invoices default to collection (customer collects) */
+  collection?: boolean;
 };
 
 export type InvoiceSource = "SYSTEM" | "ADHOC";
@@ -69,8 +71,11 @@ export type TruckDay = {
 
 export type Plan = {
   date: string; // YYYY-MM-DD (tomorrow by default)
+  /** Towns derived from tripIds (or legacy truck assignments) */
   areas: string[];
-  truckDay: TruckDay[]; // per truck today's trip
+  /** Trips selected for the day in Step 1 (before truck pairing) */
+  tripIds: string[];
+  truckDay: TruckDay[]; // per truck today's trip (assigned in Step 3)
   invoices: Invoice[];
   locked: boolean;
   createdAt: string;
@@ -111,6 +116,7 @@ export function normalizeCustomer(raw: Partial<CustomerMemory> & { name: string 
     defaultArea: raw.defaultArea ?? "",
     loadingNumber: typeof raw.loadingNumber === "number" ? raw.loadingNumber : 0,
     firstSeen: raw.firstSeen ?? new Date().toISOString(),
+    collection: !!raw.collection,
   };
 }
 

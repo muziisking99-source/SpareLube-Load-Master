@@ -180,6 +180,7 @@ function AdminConsole({
   const importCustomers = useStore((s) => s.importCustomers);
   const setCustomerArea = useStore((s) => s.setCustomerArea);
   const setCustomerLoadingNumber = useStore((s) => s.setCustomerLoadingNumber);
+  const setCustomerCollection = useStore((s) => s.setCustomerCollection);
   const ensureArea = useStore((s) => s.ensureArea);
   const importAreas = useStore((s) => s.importAreas);
   const deleteAreaCatalog = useStore((s) => s.deleteAreaCatalog);
@@ -564,6 +565,14 @@ function AdminConsole({
                       setCustomerLoadingNumber(name, area, n);
                       toast.success(
                         n > 0 ? `${name} load #${n} in ${area}` : `${name} load # cleared`,
+                      );
+                    }}
+                    onSetCollection={(name, collection) => {
+                      setCustomerCollection(name, collection);
+                      toast.success(
+                        collection
+                          ? `${name} marked as collection`
+                          : `${name} collection cleared`,
                       );
                     }}
                     onDelete={(name) => {

@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/table";
 import { EmptyState } from "./ui/EmptyState";
 import { FormField } from "./ui/FormField";
+import { ScreenHeader } from "./ui/ScreenHeader";
 import { cn } from "@/lib/utils";
 
 export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
@@ -51,12 +52,19 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const undo = useStore((s) => s.undo);
   const undoStack = useStore((s) => s.undoStack);
   const setStep = useStore((s) => s.setStep);
+  const updateTruck = useStore((s) => s.updateTruck);
+  const setTruckDayTrip = useStore((s) => s.setTruckDayTrip);
+  const ensureTruckDay = useStore((s) => s.ensureTruckDay);
 
   const [selected, setSelected] = useState<string[]>([]);
   const [moveTarget, setMoveTarget] = useState<{
     inv: Invoice | null;
     bulk?: boolean;
   } | null>(null);
+
+  useEffect(() => {
+    if (mode === "allocate") ensureTruckDay();
+  }, [mode, ensureTruckDay, trucks.length]);
 
   const activeTrucks = trucks.filter((t) => t.active);
   const dayTowns = new Map(
@@ -69,8 +77,53 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
     }),
   );
   const inv = plan.invoices;
-  const allocated = inv.filter((i) => i.truckId);
-  const unallocated = inv.filter((i) => !i.truckId);
+  const allocatable = inv.filter((i) => !i.collection);
+  const allocated = allocatable.filter((i) => i.truckId);
+  const unallocated = allocatable.filter((i) => !i.truckId);
+  const collections = inv.filter((i) => i.collection);
+
+  const planTripIds = plan.tripIds ?? [];
+  const planTrips = useMemo(
+    () =>
+      planTripIds
+        .map((id) => tripById(trips, id))
+        .filter((t): t is NonNullable<typeof t> => !!t),
+    [planTripIds, trips],
+  );
+
+  const weightByTown = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const i of allocatable) {
+      if (!i.area) continue;
+      m.set(i.area, (m.get(i.area) ?? 0) + (i.weight || 0));
+    }
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [allocatable]);
+
+  const weightByTrip = useMemo(() => {
+    return planTrips.map((trip) => {
+      const townSet = new Set(trip.towns);
+      const weight = allocatable
+        .filter((i) => i.area && townSet.has(i.area))
+        .reduce((s, i) => s + (i.weight || 0), 0);
+      const truckIds = plan.truckDay
+        .filter((td) => td.tripId === trip.id)
+        .map((td) => td.truckId);
+      const truckCap = trucks
+        .filter((t) => t.active && truckIds.includes(t.id))
+        .reduce((s, t) => s + t.maxWeight, 0);
+      return { trip, weight, truckCap, truckCount: truckIds.filter((id) => trucks.find((t) => t.id === id)?.active).length };
+    });
+  }, [planTrips, allocatable, plan.truckDay, trucks]);
+
+  const tripsMissingTrucks = weightByTrip.filter((r) => r.truckCount === 0);
+  const canRunAllocation =
+    planTrips.length > 0 &&
+    tripsMissingTrucks.length === 0 &&
+    activeTrucks.some((t) => {
+      const td = plan.truckDay.find((d) => d.truckId === t.id);
+      return !!td?.tripId;
+    });
 
   function toggleSelect(id: string) {
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -101,8 +154,166 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
     />
   ) : null;
 
+  const truckDayById = new Map(plan.truckDay.map((td) => [td.truckId, td]));
+
   return (
     <>
+      {mode === "allocate" && (
+        <div className="mb-4 space-y-4">
+          <section className="panel p-4 sm:p-5">
+            <ScreenHeader
+              title="Weight by area"
+              description="Review how much weight each town and trip is carrying before choosing trucks."
+              className="mb-4"
+            />
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="overflow-hidden rounded-xl border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-panel-2 hover:bg-panel-2">
+                      <TableHead>Town</TableHead>
+                      <TableHead className="text-right">Weight</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {weightByTown.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={2} className="text-muted-foreground">
+                          No invoice weights yet
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      weightByTown.map(([town, w]) => (
+                        <TableRow key={town}>
+                          <TableCell>{town}</TableCell>
+                          <TableCell className="metric-mono text-right">
+                            {w.toFixed(0)} kg
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="overflow-hidden rounded-xl border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-panel-2 hover:bg-panel-2">
+                      <TableHead>Trip</TableHead>
+                      <TableHead className="text-right">Weight</TableHead>
+                      <TableHead className="text-right">Truck cap</TableHead>
+                      <TableHead>Trucks</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {weightByTrip.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-muted-foreground">
+                          No trips selected in Setup
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      weightByTrip.map(({ trip, weight, truckCap, truckCount }) => (
+                        <TableRow key={trip.id}>
+                          <TableCell className="font-medium">{trip.name}</TableCell>
+                          <TableCell className="metric-mono text-right">
+                            {weight.toFixed(0)} kg
+                          </TableCell>
+                          <TableCell className="metric-mono text-right">
+                            {truckCap > 0 ? `${truckCap.toFixed(0)} kg` : "—"}
+                          </TableCell>
+                          <TableCell>
+                            {truckCount === 0 ? (
+                              <Badge variant="warn">Needs truck</Badge>
+                            ) : (
+                              <Badge variant="good">{truckCount}</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+            {collections.length > 0 && (
+              <p className="mt-3 text-sm text-muted-foreground">
+                {collections.length} collection invoice
+                {collections.length === 1 ? "" : "s"} excluded from truck allocation
+                (customer collects).
+              </p>
+            )}
+          </section>
+
+          <section className="panel p-4 sm:p-5">
+            <ScreenHeader
+              title="Assign trucks to trips"
+              description="Activate trucks for today and pair each one to a selected trip."
+              className="mb-4"
+            />
+            {trucks.length === 0 ? (
+              <EmptyState
+                title="No trucks"
+                description="Add trucks in Admin → Trucks, then return here."
+              />
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-border">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-panel-2 hover:bg-panel-2">
+                      <TableHead className="w-16">Active</TableHead>
+                      <TableHead>Truck</TableHead>
+                      <TableHead className="w-28">Max kg</TableHead>
+                      <TableHead>Today&apos;s trip</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {trucks.map((t) => {
+                      const td = truckDayById.get(t.id);
+                      return (
+                        <TableRow key={t.id} className={cn(!t.active && "opacity-50")}>
+                          <TableCell>
+                            <Checkbox
+                              checked={t.active}
+                              onCheckedChange={(v) => updateTruck(t.id, { active: !!v })}
+                            />
+                          </TableCell>
+                          <TableCell className="font-medium">{t.name}</TableCell>
+                          <TableCell className="metric-mono">{t.maxWeight}</TableCell>
+                          <TableCell>
+                            <select
+                              disabled={!t.active || planTrips.length === 0}
+                              className="h-9 w-full max-w-xs rounded-md border border-input bg-background px-2 text-sm"
+                              value={td?.tripId ?? ""}
+                              onChange={(e) =>
+                                setTruckDayTrip(t.id, e.target.value || null)
+                              }
+                            >
+                              <option value="">Unassigned</option>
+                              {planTrips.map((tr) => (
+                                <option key={tr.id} value={tr.id}>
+                                  {tr.name}
+                                </option>
+                              ))}
+                            </select>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            {tripsMissingTrucks.length > 0 && (
+              <p className="mt-3 text-sm text-warn">
+                Assign at least one active truck to:{" "}
+                {tripsMissingTrucks.map((r) => r.trip.name).join(", ")}
+              </p>
+            )}
+          </section>
+        </div>
+      )}
+
       <TruckWorkbench
         mode={mode}
         planInvoices={inv}
@@ -114,7 +325,12 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
         undoStack={undoStack}
         unallocated={unallocated}
         allocatedCount={allocated.length}
+        canRunAllocation={canRunAllocation}
         onRunAllocation={() => {
+          if (!canRunAllocation) {
+            toast.error("Assign an active truck to every selected trip first");
+            return;
+          }
           runAllocation();
           toast.success("Allocation complete");
         }}
@@ -149,6 +365,7 @@ function TruckWorkbench({
   undoStack,
   unallocated,
   allocatedCount,
+  canRunAllocation = true,
   onRunAllocation,
   onReview,
   onUndo,
@@ -170,6 +387,7 @@ function TruckWorkbench({
   undoStack: { label: string }[];
   unallocated: Invoice[];
   allocatedCount: number;
+  canRunAllocation?: boolean;
   onRunAllocation: () => void;
   onReview: () => void;
   onUndo: () => void;
@@ -346,7 +564,11 @@ function TruckWorkbench({
           </>
         ) : (
           <>
-            <Button className="w-full sm:w-auto" onClick={onRunAllocation}>
+            <Button
+              className="w-full sm:w-auto"
+              onClick={onRunAllocation}
+              disabled={!canRunAllocation}
+            >
               <Play className="size-4" />
               <span className="sm:hidden">Run Allocation</span>
               <span className="hidden sm:inline">Run Allocation (Even Balance)</span>
