@@ -491,6 +491,18 @@ function AdminConsole({
             <Download className="size-4" />
             <span className="hidden sm:inline">Export JSON</span>
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0 size-9 px-0 sm:size-auto sm:px-3"
+            onClick={signOutAdmin}
+            aria-label="Lock admin"
+            title="Lock admin"
+          >
+            <Lock className="size-4" />
+            <span className="hidden sm:inline">Lock</span>
+          </Button>
+
         </div>
       </header>
 
