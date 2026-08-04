@@ -68,8 +68,6 @@ export const Route = createFileRoute("/admin")({
 
 
 function AdminPage() {
-  const router = useRouter();
-  const lock = useServerFn(lockAdmin);
   const hydrated = useStore((s) => s.hydrated);
 
   const hydrate = useStore((s) => s.hydrate);
@@ -176,6 +174,8 @@ function AdminConsole({
   onSetPin: (p: string) => void;
   currentPin: string;
 }) {
+  const router = useRouter();
+  const lock = useServerFn(lockAdmin);
   const customers = useStore((s) => s.customers);
   const areaHistory = useStore((s) => s.areaHistory);
   const plans = useStore((s) => s.plans);
