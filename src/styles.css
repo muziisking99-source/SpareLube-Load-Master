@@ -256,6 +256,12 @@
 .print-root .load-sheet {
   padding: 28px 32px;
 }
+.print-root .load-sheet-logo {
+  height: 52px;
+  width: auto;
+  object-fit: contain;
+}
+
 .print-root table {
   border-collapse: collapse;
   width: 100%;
@@ -289,5 +295,12 @@
   .print-root .load-sheet:last-child {
     break-after: auto;
     page-break-after: auto;
+  }
+}
+
+@media print {
+  .print-root .load-sheet-logo {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }
