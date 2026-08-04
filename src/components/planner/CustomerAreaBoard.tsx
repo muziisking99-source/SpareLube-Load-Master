@@ -28,9 +28,11 @@ function CustomerLabel({ c }: { c: CustomerMemory }) {
 export function CustomerAreaBoard({
   areas,
   unassigned,
+  collections = [],
   customersByArea,
   areaOptions,
   hideEmptyUnassigned = false,
+  hideEmptyCollections = false,
   onSetArea,
   onSetLoadingNumber,
   onSetCollection,
@@ -38,16 +40,18 @@ export function CustomerAreaBoard({
 }: {
   areas: string[];
   unassigned: CustomerMemory[];
+  collections?: CustomerMemory[];
   customersByArea: Record<string, CustomerMemory[]>;
   areaOptions: string[];
   hideEmptyUnassigned?: boolean;
+  hideEmptyCollections?: boolean;
   onSetArea: (key: string, area: string) => void;
   onSetLoadingNumber: (key: string, area: string, n: number) => void;
   onSetCollection?: (key: string, collection: boolean) => void;
   onDelete: (key: string) => void;
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>(() => {
-    const init: Record<string, boolean> = { unassigned: true };
+    const init: Record<string, boolean> = { unassigned: true, collections: true };
     for (const a of areas) init[a] = true;
     return init;
   });
@@ -84,6 +88,64 @@ export function CustomerAreaBoard({
 
   return (
     <div className="space-y-3">
+      {!(hideEmptyCollections && collections.length === 0) && (
+        <AreaSection
+          title="Collections"
+          count={collections.length}
+          open={open.collections !== false}
+          onToggle={() => toggle("collections")}
+          badge="No town required"
+        >
+          {collections.length === 0 ? (
+            <p className="px-3 py-4 text-sm text-muted-foreground">
+              No collection customers without a town.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {collections.map((c) => {
+                const key = customerKey(c);
+                return (
+                  <li key={key} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                    <CustomerLabel c={c} />
+                    <Badge variant="secondary" className="shrink-0 text-[10px]">
+                      Collection
+                    </Badge>
+                    <TownCombobox
+                      value=""
+                      options={areaOptions}
+                      placeholder="Optional town…"
+                      searchPlaceholder="Search towns…"
+                      onChange={(town) => {
+                        if (town) assignTown(key, town);
+                      }}
+                      buttonClassName="h-8 max-w-[11rem] border-input bg-panel-2 px-2 text-xs"
+                    />
+                    {onSetCollection && (
+                      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Checkbox
+                          checked={!!c.collection}
+                          onCheckedChange={(v) => onSetCollection(key, !!v)}
+                          className="size-3.5"
+                        />
+                        Collection
+                      </label>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground hover:text-destructive"
+                      onClick={() => onDelete(key)}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </AreaSection>
+      )}
+
       {!(hideEmptyUnassigned && unassigned.length === 0) && (
         <AreaSection
           title="Unassigned"

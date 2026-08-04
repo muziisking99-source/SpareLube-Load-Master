@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
-type TownFilterMode = "all" | "unassigned" | string;
+type TownFilterMode = "all" | "unassigned" | "collection" | string;
 
 export function TownFilterBar({
   value,
@@ -9,6 +9,7 @@ export function TownFilterBar({
   towns,
   counts,
   unassignedCount,
+  collectionCount,
   showUnassigned = true,
   className,
 }: {
@@ -17,13 +18,14 @@ export function TownFilterBar({
   towns: string[];
   counts: Record<string, number>;
   unassignedCount?: number;
+  collectionCount?: number;
   showUnassigned?: boolean;
   className?: string;
 }) {
   const withCustomers = towns.filter((t) => (counts[t] ?? 0) > 0);
   const emptyTowns = towns.filter((t) => (counts[t] ?? 0) === 0);
   const selectValue =
-    value !== "all" && value !== "unassigned" ? value : "";
+    value !== "all" && value !== "unassigned" && value !== "collection" ? value : "";
 
   return (
     <div
@@ -62,6 +64,21 @@ export function TownFilterBar({
             </span>
           </Button>
         )}
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className={cn(
+            "h-8 px-3",
+            value === "collection" && "bg-background text-foreground shadow-sm",
+          )}
+          onClick={() => onChange("collection")}
+        >
+          Collections
+          <span className="ml-1.5 metric-mono text-muted-foreground">
+            {collectionCount ?? 0}
+          </span>
+        </Button>
       </div>
 
       <label className="flex min-w-[12rem] flex-1 items-center gap-2 sm:max-w-xs">

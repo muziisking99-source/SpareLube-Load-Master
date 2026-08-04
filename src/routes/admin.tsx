@@ -228,7 +228,16 @@ function AdminConsole({
   const unassigned = useMemo(
     () =>
       Object.values(customers)
-        .filter((c) => !c.defaultArea)
+        .filter((c) => !c.defaultArea && !c.collection)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [customers],
+  );
+
+  /** Collection customers without a town — not “unassigned”, they belong in Collections. */
+  const collectionCustomers = useMemo(
+    () =>
+      Object.values(customers)
+        .filter((c) => !!c.collection && !c.defaultArea)
         .sort((a, b) => a.name.localeCompare(b.name)),
     [customers],
   );
@@ -251,15 +260,21 @@ function AdminConsole({
 
   const visibleAreas = useMemo(() => {
     if (areaFilter === "all") return areaOptions;
-    if (areaFilter === "unassigned") return [];
+    if (areaFilter === "unassigned" || areaFilter === "collection") return [];
     return areaOptions.filter((a) => a === areaFilter);
   }, [areaFilter, areaOptions]);
 
   const showUnassigned = areaFilter === "all" || areaFilter === "unassigned";
+  const showCollections = areaFilter === "all" || areaFilter === "collection";
 
   const filteredUnassigned = useMemo(
     () => unassigned.filter((c) => customerMatchesQuery(c, customerSearch)),
     [unassigned, customerSearch],
+  );
+
+  const filteredCollections = useMemo(
+    () => collectionCustomers.filter((c) => customerMatchesQuery(c, customerSearch)),
+    [collectionCustomers, customerSearch],
   );
 
   const filteredCustomersByArea = useMemo(() => {
@@ -294,7 +309,7 @@ function AdminConsole({
 
   const loadingBoardAreas = useMemo(() => {
     const base =
-      areaFilter !== "all" && areaFilter !== "unassigned"
+      areaFilter !== "all" && areaFilter !== "unassigned" && areaFilter !== "collection"
         ? areaOptions.filter((a) => a === areaFilter)
         : areaOptions.filter((a) => (customersByArea[a]?.length ?? 0) > 0);
     if (!loadingSearch.trim()) return base;
@@ -340,6 +355,7 @@ function AdminConsole({
     if (customerSearch.trim()) {
       const any =
         (showUnassigned && filteredUnassigned.length > 0) ||
+        (showCollections && filteredCollections.length > 0) ||
         customerBoardAreas.some((a) => (filteredCustomersByArea[a]?.length ?? 0) > 0);
       if (!any) {
         return {
@@ -351,10 +367,16 @@ function AdminConsole({
     if (areaFilter === "unassigned" && unassigned.length === 0) {
       return {
         title: "No unassigned customers",
-        description: "Every customer has a town. Switch to All or pick a town.",
+        description: "Every customer has a town or is marked collection. Switch to All or pick a town.",
       };
     }
-    if (areaFilter !== "all" && areaFilter !== "unassigned") {
+    if (areaFilter === "collection" && collectionCustomers.length === 0) {
+      return {
+        title: "No collection customers",
+        description: "Mark customers as Collection to list them here (no town required).",
+      };
+    }
+    if (areaFilter !== "all" && areaFilter !== "unassigned" && areaFilter !== "collection") {
       const list = customersByArea[areaFilter] ?? [];
       if (list.length === 0) {
         return {
@@ -374,11 +396,14 @@ function AdminConsole({
     customers,
     areaFilter,
     unassigned.length,
+    collectionCustomers.length,
     customersByArea,
     areaOptions.length,
     customerSearch,
     showUnassigned,
+    showCollections,
     filteredUnassigned.length,
+    filteredCollections.length,
     customerBoardAreas,
     filteredCustomersByArea,
   ]);
@@ -540,6 +565,7 @@ function AdminConsole({
                   towns={areaOptions}
                   counts={townCounts}
                   unassignedCount={unassigned.length}
+                  collectionCount={collectionCustomers.length}
                 />
 
                 <AdminSearchInput
@@ -554,9 +580,11 @@ function AdminConsole({
                   <CustomerAreaBoard
                     areas={customerBoardAreas}
                     unassigned={showUnassigned ? filteredUnassigned : []}
+                    collections={showCollections ? filteredCollections : []}
                     customersByArea={filteredCustomersByArea}
                     areaOptions={areaOptions}
                     hideEmptyUnassigned={!!customerSearch.trim()}
+                    hideEmptyCollections={!!customerSearch.trim()}
                     onSetArea={(name, area) => {
                       setCustomerArea(name, area);
                       toast.success(area ? `${name} → ${area}` : `${name} unassigned`);
@@ -746,7 +774,11 @@ function AdminConsole({
               ) : (
                 <>
                   <TownFilterBar
-                    value={areaFilter === "unassigned" ? "all" : areaFilter}
+                    value={
+                      areaFilter === "unassigned" || areaFilter === "collection"
+                        ? "all"
+                        : areaFilter
+                    }
                     onChange={setAreaFilter}
                     towns={areaOptions.filter((a) => (customersByArea[a]?.length ?? 0) > 0)}
                     counts={townCounts}
