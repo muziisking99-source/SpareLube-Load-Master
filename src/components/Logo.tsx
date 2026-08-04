@@ -1,8 +1,6 @@
-import lightLogo from "@/assets/sparelube-logo.png.asset.json";
-import darkLogo from "@/assets/sparelube-logo-dark.png.asset.json";
 import { cn } from "@/lib/utils";
 
-/** SpareLube logo. Swaps to a light-ink variant in dark mode. */
+/** SpareLube logo. Uses static /public SVGs so it works on Vercel (not Lovable __l5e URLs). */
 export function Logo({
   className,
   variant = "auto",
@@ -12,18 +10,22 @@ export function Logo({
 }) {
   if (variant === "light") {
     return (
-      <img src={lightLogo.url} alt="SpareLube — Auto Lubricant Distributors" className={className} />
+      <img
+        src="/sparelube-logo.svg"
+        alt="SpareLube — Auto Lubricant Distributors"
+        className={className}
+      />
     );
   }
   return (
     <>
       <img
-        src={lightLogo.url}
+        src="/sparelube-logo.svg"
         alt="SpareLube — Auto Lubricant Distributors"
         className={cn("dark:hidden", className)}
       />
       <img
-        src={darkLogo.url}
+        src="/sparelube-logo-dark.svg"
         alt=""
         aria-hidden="true"
         className={cn("hidden dark:block", className)}

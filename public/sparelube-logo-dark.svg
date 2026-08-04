@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 120" fill="none" role="img" aria-label="SpareLube">
+  <!-- oil drop -->
+  <path d="M58 18C58 18 28 58 28 78c0 18 13.5 30 30 30s30-12 30-30C88 58 58 18 58 18Z" fill="#FF3B30"/>
+  <path d="M48 55c6-10 14-20 14-20s4 5 8 12c-6 2-14 6-22 8Z" fill="#FF8A80" opacity=".9"/>
+  <!-- orbital arcs -->
+  <path d="M18 72c8-28 36-48 64-42" stroke="#D1D5DB" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M34 98c22 16 54 12 72-10" stroke="#FF3B30" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <!-- wordmark -->
+  <text x="120" y="58" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="36" font-weight="900" letter-spacing="1" fill="#F9FAFB">SPARE</text>
+  <text x="268" y="58" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="36" font-weight="900" letter-spacing="1" fill="#FF3B30">LUBE</text>
+  <text x="120" y="88" font-family="Arial, Helvetica, sans-serif" font-size="14" letter-spacing="2.5" fill="#9CA3AF">AUTO LUBRICANT DISTRIBUTORS</text>
+</svg>
