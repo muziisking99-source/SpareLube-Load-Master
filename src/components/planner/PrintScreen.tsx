@@ -4,7 +4,9 @@ import { useStore } from "@/lib/store";
 import { compareByLoadingNumber, loadingNumberFor } from "@/lib/loadingOrder";
 import { tripById } from "@/lib/trips";
 import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/Logo";
 import { ScreenHeader } from "./ui/ScreenHeader";
+
 import type { Invoice } from "@/lib/types";
 
 /** One stop on a truck sheet: same customer combined (count + total weight). */
@@ -275,7 +277,7 @@ export function PrintScreen() {
                 <div
                   style={{
                     display: "flex",
-                    alignItems: "baseline",
+                    alignItems: "center",
                     justifyContent: "space-between",
                     gap: 16,
                     borderBottom: "2px solid #111",
@@ -283,11 +285,17 @@ export function PrintScreen() {
                     marginBottom: 18,
                   }}
                 >
-                  <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, letterSpacing: "-0.02em" }}>
-                    Truck Load Sheet
-                  </h1>
-                  <div style={{ fontSize: 12, color: "#444" }}>SpareLube Load Master</div>
+                  <div>
+                    <h1
+                      style={{ fontSize: 20, fontWeight: 700, margin: 0, letterSpacing: "-0.02em" }}
+                    >
+                      Truck Load Sheet
+                    </h1>
+                    <div style={{ fontSize: 12, color: "#444" }}>SpareLube Load Master</div>
+                  </div>
+                  <Logo variant="light" className="load-sheet-logo" />
                 </div>
+
 
                 <div
                   style={{
