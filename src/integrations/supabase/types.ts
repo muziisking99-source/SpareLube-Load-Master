@@ -146,6 +146,30 @@ export type Database = {
         }
         Relationships: []
       }
+      trips: {
+        Row: {
+          id: string
+          name: string
+          stop_order: Json
+          towns: Json
+          updated_at: string
+        }
+        Insert: {
+          id: string
+          name: string
+          stop_order?: Json
+          towns?: Json
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          name?: string
+          stop_order?: Json
+          towns?: Json
+          updated_at?: string
+        }
+        Relationships: []
+      }
       trucks: {
         Row: {
           active: boolean
