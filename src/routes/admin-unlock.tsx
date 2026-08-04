@@ -2,6 +2,7 @@ import { createFileRoute, useRouter, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 import { ArrowLeft, Loader2, ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormField } from "@/components/planner/ui/FormField";
@@ -29,6 +30,19 @@ export const Route = createFileRoute("/admin-unlock")({
   component: AdminUnlockPage,
 });
 
+function unlockErrorMessage(error: string | undefined): string {
+  switch (error) {
+    case "not_configured":
+      return "Admin password is not configured on the server. Set ADMIN_PASSWORD (and ADMIN_SESSION_SECRET, 32+ chars) in environment variables.";
+    case "session_secret":
+      return "Admin session secret is missing or invalid. Set ADMIN_SESSION_SECRET to a random string of at least 32 characters.";
+    case "incorrect":
+      return "Incorrect password";
+    default:
+      return "Could not verify password. Try again.";
+  }
+}
+
 function AdminUnlockPage() {
   const router = useRouter();
   const unlock = useServerFn(unlockAdmin);
@@ -44,13 +58,20 @@ function AdminUnlockPage() {
     try {
       const res = await unlock({ data: { password } });
       if (res.ok) {
+        toast.success("Admin unlocked");
+        await router.invalidate();
         await router.navigate({ to: "/admin", replace: true });
       } else {
-        setError("Incorrect password");
+        const msg = unlockErrorMessage(res.error);
+        setError(msg);
+        toast.error(msg);
         setPassword("");
       }
-    } catch {
-      setError("Could not verify password. Try again.");
+    } catch (err) {
+      console.error(err);
+      const msg = "Could not verify password. Try again.";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setBusy(false);
     }

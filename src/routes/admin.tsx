@@ -24,7 +24,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { FormField } from "@/components/planner/ui/FormField";
 import { EmptyState } from "@/components/planner/ui/EmptyState";
 import { CustomerAreaBoard } from "@/components/planner/CustomerAreaBoard";
 import { LoadingNumbersBoard } from "@/components/planner/LoadingNumbersBoard";
@@ -73,9 +72,6 @@ function AdminPage() {
   const hydrate = useStore((s) => s.hydrate);
   const adminPin = useStore((s) => s.adminPin);
   const setPin = useStore((s) => s.setPin);
-  const [unlocked, setUnlocked] = useState(false);
-  const [pin, setPinInput] = useState("");
-  const [pinError, setPinError] = useState("");
 
   useEffect(() => {
     void hydrate();
@@ -114,56 +110,7 @@ function AdminPage() {
     );
   }
 
-  if (adminPin && !unlocked) {
-    return (
-      <div className="grid min-h-[100dvh] place-items-center p-4">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (pin === adminPin) {
-              setUnlocked(true);
-              setPinError("");
-            } else {
-              setPinError("Incorrect PIN");
-              toast.error("Incorrect PIN");
-            }
-          }}
-          className="panel w-full max-w-sm space-y-4 p-6"
-        >
-          <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-lg bg-primary text-primary-foreground">
-              <Lock className="size-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">Admin PIN</h1>
-              <p className="text-sm text-muted-foreground">Enter PIN to access the console</p>
-            </div>
-          </div>
-          <FormField label="PIN" error={pinError}>
-            <Input
-              type="password"
-              value={pin}
-              onChange={(e) => {
-                setPinInput(e.target.value);
-                setPinError("");
-              }}
-              autoFocus
-            />
-          </FormField>
-          <Button type="submit" className="w-full">
-            Unlock
-          </Button>
-          <Link
-            to="/"
-            className="block text-center text-xs text-muted-foreground hover:text-foreground"
-          >
-            Back to planner
-          </Link>
-        </form>
-      </div>
-    );
-  }
-
+  // Server session gate (/admin-unlock) already verified access — no second PIN screen.
   return <AdminConsole onSetPin={setPin} currentPin={adminPin} />;
 }
 
@@ -1043,9 +990,13 @@ function AdminConsole({
           <TabsContent value="settings">
             <div className="panel max-w-md space-y-4 p-4">
               <div>
-                <h3 className="font-semibold tracking-tight">Admin PIN</h3>
+                <h3 className="font-semibold tracking-tight">Manifest unlock PIN</h3>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {currentPin ? "PIN is set and required for admin access." : "No PIN set — admin is open."}
+                  Used to unlock locked daily plans on the Lock screen. Admin console access is
+                  controlled by the server <span className="metric-mono">ADMIN_PASSWORD</span>.
+                  {currentPin
+                    ? " A PIN is currently set."
+                    : " No PIN set — locked plans can be unlocked without a PIN."}
                 </p>
               </div>
               <form
