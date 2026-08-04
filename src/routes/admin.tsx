@@ -68,7 +68,10 @@ export const Route = createFileRoute("/admin")({
 
 
 function AdminPage() {
+  const router = useRouter();
+  const lock = useServerFn(lockAdmin);
   const hydrated = useStore((s) => s.hydrated);
+
   const hydrate = useStore((s) => s.hydrate);
   const adminPin = useStore((s) => s.adminPin);
   const setPin = useStore((s) => s.setPin);
