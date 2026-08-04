@@ -1,4 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useRouter } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { getAdminGateStatus, lockAdmin } from "@/lib/adminGate.functions";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Download, FileSpreadsheet, Lock, Upload } from "lucide-react";
 import { toast } from "sonner";
@@ -49,6 +52,10 @@ import { isWarehouseDirty } from "@/lib/cloudSync";
 import type { CustomerMemory } from "@/lib/types";
 
 export const Route = createFileRoute("/admin")({
+  beforeLoad: async () => {
+    const { unlocked } = await getAdminGateStatus();
+    if (!unlocked) throw redirect({ to: "/admin-unlock" });
+  },
   head: () => ({
     meta: [
       { title: "Admin — Load Planner" },
@@ -59,8 +66,10 @@ export const Route = createFileRoute("/admin")({
   component: AdminPage,
 });
 
+
 function AdminPage() {
   const hydrated = useStore((s) => s.hydrated);
+
   const hydrate = useStore((s) => s.hydrate);
   const adminPin = useStore((s) => s.adminPin);
   const setPin = useStore((s) => s.setPin);
@@ -165,6 +174,8 @@ function AdminConsole({
   onSetPin: (p: string) => void;
   currentPin: string;
 }) {
+  const router = useRouter();
+  const lock = useServerFn(lockAdmin);
   const customers = useStore((s) => s.customers);
   const areaHistory = useStore((s) => s.areaHistory);
   const plans = useStore((s) => s.plans);
@@ -464,7 +475,13 @@ function AdminConsole({
     toast.success("Export downloaded");
   }
 
+  async function signOutAdmin() {
+    await lock({});
+    await router.navigate({ to: "/admin-unlock", replace: true });
+  }
+
   return (
+
     <div className="min-h-[100dvh]">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-3 sm:gap-4 sm:px-4">
@@ -483,6 +500,18 @@ function AdminConsole({
             <Download className="size-4" />
             <span className="hidden sm:inline">Export JSON</span>
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="shrink-0 size-9 px-0 sm:size-auto sm:px-3"
+            onClick={signOutAdmin}
+            aria-label="Lock admin"
+            title="Lock admin"
+          >
+            <Lock className="size-4" />
+            <span className="hidden sm:inline">Lock</span>
+          </Button>
+
         </div>
       </header>
 
