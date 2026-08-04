@@ -49,6 +49,10 @@ import { isWarehouseDirty } from "@/lib/cloudSync";
 import type { CustomerMemory } from "@/lib/types";
 
 export const Route = createFileRoute("/admin")({
+  beforeLoad: async () => {
+    const { unlocked } = await getAdminGateStatus();
+    if (!unlocked) throw redirect({ to: "/admin-unlock" });
+  },
   head: () => ({
     meta: [
       { title: "Admin — Load Planner" },
@@ -58,6 +62,7 @@ export const Route = createFileRoute("/admin")({
   }),
   component: AdminPage,
 });
+
 
 function AdminPage() {
   const hydrated = useStore((s) => s.hydrated);
