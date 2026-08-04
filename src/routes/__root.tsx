@@ -78,23 +78,26 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
-      { title: "Load Planner" },
+      { title: "Load Planner — Daily Delivery Planning" },
       {
         name: "description",
         content:
-          "Warehouse-focused offline planner for daily delivery loads: import invoices, assign areas, auto-allocate trucks, and print load sheets.",
+          "Fast, keyboard-first offline planner for daily truck loads. Import invoices, assign areas, auto-allocate and print load sheets.",
       },
-      { property: "og:title", content: "Load Planner" },
+      { property: "og:title", content: "Load Planner — Daily Delivery Planning" },
       {
         property: "og:description",
-        content: "Warehouse-focused offline planner for daily delivery loads.",
+        content: "Fast, keyboard-first offline planner for daily truck loads. Import invoices, assign areas, auto-allocate and print load sheets.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
+      { name: "twitter:title", content: "Load Planner — Daily Delivery Planning" },
+      { name: "twitter:description", content: "Fast, keyboard-first offline planner for daily truck loads. Import invoices, assign areas, auto-allocate and print load sheets." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/ebdb8f77-8016-4591-b50b-a17017614fe5/id-preview-3dc6d386--cae384ba-e0a2-49d8-a122-7508f24b549e.lovable.app-1785849776735.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/ebdb8f77-8016-4591-b50b-a17017614fe5/id-preview-3dc6d386--cae384ba-e0a2-49d8-a122-7508f24b549e.lovable.app-1785849776735.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
-      { rel: "icon", href: "/favicon.png", type: "image/png" },
     ],
   }),
 

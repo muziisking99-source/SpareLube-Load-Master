@@ -10,8 +10,8 @@ export const Route = createFileRoute("/")({
         content:
           "Fast, keyboard-first offline planner for daily truck loads. Import invoices, assign areas, auto-allocate and print load sheets.",
       },
-      { property: "og:title", content: "Load Planner" },
-      { property: "og:description", content: "Warehouse-focused daily delivery planner." },
+      { property: "og:title", content: "Load Planner — Daily Delivery Planning" },
+      { property: "og:description", content: "Fast, keyboard-first offline planner for daily truck loads. Import invoices, assign areas, auto-allocate and print load sheets." },
       { property: "og:type", content: "website" },
     ],
   }),
