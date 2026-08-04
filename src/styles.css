@@ -256,6 +256,12 @@
 .print-root .load-sheet {
   padding: 28px 32px;
 }
+.print-root .load-sheet-logo {
+  height: 52px;
+  width: auto;
+  object-fit: contain;
+}
+
 .print-root table {
   border-collapse: collapse;
   width: 100%;

@@ -392,10 +392,24 @@ export function PrintScreen() {
       {view === "master" && (
         <div className="print-root" style={{ display: "block" }}>
           <div style={{ padding: "24px" }}>
-            <h1 style={{ fontSize: 22, marginBottom: 6 }}>Master Reconciliation</h1>
-            <div style={{ fontSize: 13, marginBottom: 12 }}>
-              Date: <b>{plan.date}</b>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 16,
+                marginBottom: 12,
+              }}
+            >
+              <div>
+                <h1 style={{ fontSize: 22, margin: "0 0 6px" }}>Master Reconciliation</h1>
+                <div style={{ fontSize: 13 }}>
+                  Date: <b>{plan.date}</b>
+                </div>
+              </div>
+              <Logo variant="light" className="load-sheet-logo" />
             </div>
+
             <table>
               <thead>
                 <tr>
