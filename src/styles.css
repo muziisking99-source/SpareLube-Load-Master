@@ -297,3 +297,10 @@
     page-break-after: auto;
   }
 }
+
+@media print {
+  .print-root .load-sheet-logo {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
