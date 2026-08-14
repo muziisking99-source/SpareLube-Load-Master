@@ -17,7 +17,7 @@ import {
   setCustomerLoadingNumber as applyLoadingNumber,
   mergePartialTripReorder,
 } from "./loadingOrder";
-import { customerKey, findCustomerKey } from "./customers";
+import { customerKey, findCustomer, findCustomerKey } from "./customers";
 import { normalizeTrip, townsForTruckDay, townsFromTripIds, townsForPlan } from "./trips";
 import {
   hydrateWarehouse,
@@ -134,6 +134,13 @@ type State = {
   importCustomers: (
     rows: { code: string; name: string }[],
   ) => { added: number; skipped: number; updated: number };
+  /** Create a customer if missing; fill empty default town. Returns the record. */
+  ensureCustomer: (input: {
+    name: string;
+    code?: string;
+    defaultArea?: string;
+    collection?: boolean;
+  }) => CustomerMemory | null;
   setCustomerArea: (name: string, area: string) => void;
   setCustomerLoadingNumber: (name: string, area: string, n: number) => void;
   setCustomerCollection: (key: string, collection: boolean) => void;
@@ -921,6 +928,44 @@ export const useStore = create<State>((set, get) => {
         `Imported ${added} customers (${updated} updated, ${skipped} unchanged)`,
       );
       return { added, skipped, updated };
+    },
+    ensureCustomer: (input) => {
+      const name = input.name.trim();
+      const code = (input.code ?? "").trim();
+      if (!name) return null;
+      const area = (input.defaultArea ?? "").trim();
+      const s = get();
+      const existing = findCustomer(s.customers, code || name);
+      if (existing) {
+        const id = findCustomerKey(s.customers, code || name) ?? customerKey(existing);
+        if (area && !existing.defaultArea) {
+          get().setCustomerArea(id, area);
+        }
+        return findCustomer(get().customers, code || name) ?? existing;
+      }
+      const now = new Date().toISOString();
+      const key = code || name;
+      mutate((state) => {
+        let customers: Record<string, CustomerMemory> = {
+          ...state.customers,
+          [key]: {
+            code,
+            name,
+            defaultArea: "",
+            loadingNumber: 0,
+            firstSeen: now,
+            collection: !!input.collection,
+          },
+        };
+        let history = state.areaHistory;
+        if (area) {
+          customers = assignCustomerArea(customers, key, area);
+          if (!history.includes(area)) history = [...history, area];
+        }
+        return { customers, areaHistory: history };
+      });
+      log("customers.add", `Added ${name}`);
+      return get().customers[key] ?? null;
     },
     setCustomerArea: (key, area) => {
       mutate((s) => {

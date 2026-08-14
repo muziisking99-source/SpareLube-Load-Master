@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronsUpDown, Plus } from "lucide-react";
 import type { CustomerMemory } from "@/lib/types";
 import { customerKey } from "@/lib/customers";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ export function CustomerCombobox({
   searchPlaceholder = "Search customers…",
   emptyLabel = "No customer found.",
   disabled = false,
+  allowCreate = false,
   className,
   buttonClassName,
 }: {
@@ -34,10 +35,12 @@ export function CustomerCombobox({
   searchPlaceholder?: string;
   emptyLabel?: string;
   disabled?: boolean;
+  allowCreate?: boolean;
   className?: string;
   buttonClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
 
   const list = useMemo(
     () =>
@@ -58,21 +61,58 @@ export function CustomerCombobox({
     );
   }, [list, value]);
 
+  const trimmedQuery = query.trim();
+  const q = trimmedQuery.toLowerCase();
+  const filtered = q
+    ? list.filter((c) =>
+        `${c.code} ${c.name} ${customerKey(c)}`.toLowerCase().includes(q),
+      )
+    : list;
+  const canCreate =
+    allowCreate &&
+    trimmedQuery.length > 0 &&
+    !list.some(
+      (c) =>
+        c.name.toLowerCase() === q ||
+        c.code.toLowerCase() === q,
+    );
+
   const label = selected
     ? selected.code
       ? `${selected.code} · ${selected.name}`
       : selected.name
     : value || placeholder;
 
+  function createFromQuery() {
+    const name = trimmedQuery;
+    if (!name) return;
+    onChange({
+      code: "",
+      name,
+      defaultArea: "",
+      loadingNumber: 0,
+      firstSeen: new Date().toISOString(),
+      collection: false,
+    });
+    setOpen(false);
+    setQuery("");
+  }
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setQuery("");
+      }}
+    >
       <PopoverTrigger asChild>
         <Button
           type="button"
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          disabled={disabled || list.length === 0}
+          disabled={disabled || (list.length === 0 && !allowCreate)}
           className={cn(
             "h-8 justify-between gap-2 font-normal",
             !selected && !value && "text-muted-foreground",
@@ -87,15 +127,37 @@ export function CustomerCombobox({
         className={cn("w-[var(--radix-popover-trigger-width)] min-w-[16rem] p-0", className)}
         align="start"
       >
-        <Command>
-          <CommandInput placeholder={searchPlaceholder} />
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder={searchPlaceholder}
+            value={query}
+            onValueChange={setQuery}
+          />
           <CommandList>
-            <CommandEmpty>{emptyLabel}</CommandEmpty>
+            {filtered.length === 0 && !canCreate ? (
+              <CommandEmpty>
+                {allowCreate
+                  ? trimmedQuery
+                    ? "No matching customer."
+                    : "Type a name to add a customer."
+                  : emptyLabel}
+              </CommandEmpty>
+            ) : null}
+            {canCreate ? (
+              <CommandGroup>
+                <CommandItem value={`__create__ ${trimmedQuery}`} onSelect={createFromQuery}>
+                  <Plus className="size-4" />
+                  <span className="min-w-0 flex-1 truncate">
+                    Add “{trimmedQuery}”
+                  </span>
+                </CommandItem>
+              </CommandGroup>
+            ) : null}
+            {filtered.length > 0 ? (
             <CommandGroup>
-              {list.map((c) => {
+              {filtered.map((c) => {
                 const key = customerKey(c);
-                const isSelected =
-                  selected && customerKey(selected) === key;
+                const isSelected = selected && customerKey(selected) === key;
                 return (
                   <CommandItem
                     key={key}
@@ -103,6 +165,7 @@ export function CustomerCombobox({
                     onSelect={() => {
                       onChange(c);
                       setOpen(false);
+                      setQuery("");
                     }}
                   >
                     <Check
@@ -134,6 +197,7 @@ export function CustomerCombobox({
                 );
               })}
             </CommandGroup>
+            ) : null}
           </CommandList>
         </Command>
       </PopoverContent>

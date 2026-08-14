@@ -6,6 +6,7 @@ import {
   ArrowRight,
   CheckCircle2,
   Inbox,
+  Package,
   Pause,
   Trash2,
   TriangleAlert,
@@ -64,6 +65,7 @@ export function ImportScreen() {
   const updateHeld = useStore((s) => s.updateHeld);
   const removeHeld = useStore((s) => s.removeHeld);
   const setHeldCollection = useStore((s) => s.setHeldCollection);
+  const ensureCustomer = useStore((s) => s.ensureCustomer);
   const setStep = useStore((s) => s.setStep);
 
   const docRef = useRef<HTMLInputElement>(null);
@@ -138,6 +140,14 @@ export function ImportScreen() {
   }
 
   function applyCustomer(c: CustomerMemory | null) {
+    if (c && !findCustomer(customers, c.name)) {
+      c =
+        ensureCustomer({
+          name: c.name,
+          code: c.code,
+          defaultArea: area,
+        }) ?? c;
+    }
     setSelectedCustomer(c);
     if (c) {
       setCustomerName(c.name);
@@ -145,7 +155,7 @@ export function ImportScreen() {
     }
   }
 
-  function submitEntry(opts?: { forceHold?: boolean }) {
+  function submitEntry(opts?: { forceHold?: boolean; asCollection?: boolean }) {
     const cleanDoc = doc.trim();
     const cleanCustomer = (selectedCustomer?.name || customerName).trim();
     const w = Number(weight);
@@ -157,7 +167,7 @@ export function ImportScreen() {
       return;
     }
     if (!cleanCustomer) {
-      toast.error("Select a customer");
+      toast.error("Select or add a customer");
       return;
     }
     if (!cleanArea) {
@@ -173,8 +183,15 @@ export function ImportScreen() {
       return;
     }
 
-    const known = selectedCustomer ?? findCustomer(customers, cleanCustomer);
-    const isCollection = !!known?.collection;
+    const known =
+      ensureCustomer({
+        name: cleanCustomer,
+        code: selectedCustomer?.code,
+        defaultArea: cleanArea,
+      }) ??
+      selectedCustomer ??
+      findCustomer(customers, cleanCustomer);
+    const isCollection = !!opts?.asCollection || !!known?.collection;
     const onToday = areas.includes(cleanArea);
 
     if (opts?.forceHold || (!onToday && !isCollection)) {
@@ -236,6 +253,11 @@ export function ImportScreen() {
     }
   }
 
+  function handleCollect(invoiceId: string) {
+    updateInvoice(invoiceId, { collection: true, truckId: null });
+    toast.success("Marked as collection");
+  }
+
   function handlePick(id: string, opts?: { asException?: boolean; asCollection?: boolean }) {
     const result = pickHeld(id, opts);
     if (result === "ok") {
@@ -257,7 +279,7 @@ export function ImportScreen() {
       <section className="panel p-4 sm:p-5">
         <ScreenHeader
           title="Enter Invoice"
-          description="Add invoices one by one. Customer and town come from Admin. Excel double-check is on the Lock step."
+          description="Add invoices one by one. If the customer isn’t loaded yet, add them here. Collection works like Hold for later."
           className="mb-4"
         />
 
@@ -284,6 +306,9 @@ export function ImportScreen() {
               value={customerName}
               customers={customers}
               onChange={applyCustomer}
+              allowCreate
+              searchPlaceholder="Search or add customer…"
+              emptyLabel="Type a name to add a customer."
               buttonClassName="h-11 w-full"
             />
           </FormField>
@@ -321,6 +346,14 @@ export function ImportScreen() {
             >
               <Pause className="size-4" />
               Hold for later
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => submitEntry({ asCollection: true })}
+            >
+              <Package className="size-4" />
+              Collection
             </Button>
             {selectedCustomer?.collection && (
               <Badge variant="secondary" className="h-9 items-center">
@@ -412,7 +445,7 @@ export function ImportScreen() {
         <section className="panel p-4 sm:p-5">
           <ScreenHeader
             title="Collections"
-            description="Choose whether the customer collects or the invoice loads on a truck."
+            description="Customer collects, or load on a truck. Mark Collection when entering an invoice — same as Hold for later."
             className="mb-4"
           />
           <div className="overflow-x-auto rounded-xl border border-border">
@@ -493,7 +526,7 @@ export function ImportScreen() {
         {deliveryInvoices.length === 0 ? (
           <EmptyState
             title="No invoices yet"
-            description="Enter doc number, customer, town, and weight above."
+            description="Enter doc number, customer, town, and weight above. New customers can be added from the customer field."
           />
         ) : (
           <>
@@ -512,6 +545,7 @@ export function ImportScreen() {
                   onChange={(patch) => updateInvoice(i.id, patch)}
                   onRemove={() => removeInvoice(i.id)}
                   onHold={() => handleHold(i.id)}
+                  onCollect={() => handleCollect(i.id)}
                 />
               ))}
             </div>
@@ -524,7 +558,7 @@ export function ImportScreen() {
                     <TableHead>Customer</TableHead>
                     <TableHead className="w-28">Weight (kg)</TableHead>
                     <TableHead className="w-40">Town</TableHead>
-                    <TableHead className="w-24" />
+                    <TableHead className="w-40" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -542,6 +576,7 @@ export function ImportScreen() {
                       onChange={(patch) => updateInvoice(i.id, patch)}
                       onRemove={() => removeInvoice(i.id)}
                       onHold={() => handleHold(i.id)}
+                      onCollect={() => handleCollect(i.id)}
                     />
                   ))}
                 </TableBody>
@@ -655,6 +690,7 @@ function InvoiceCard({
   onChange,
   onRemove,
   onHold,
+  onCollect,
 }: {
   inv: Invoice;
   areas: string[];
@@ -665,6 +701,7 @@ function InvoiceCard({
   onChange: (p: Partial<Invoice>) => void;
   onRemove: () => void;
   onHold: () => void;
+  onCollect: () => void;
 }) {
   const badWeight = !inv.weight || inv.weight <= 0;
   const badArea = !inv.area;
@@ -727,8 +764,18 @@ function InvoiceCard({
         </Button>
         <Button
           type="button"
+          variant="secondary"
+          className="w-full"
+          onClick={onCollect}
+          disabled={!inv.doc}
+        >
+          <Package className="size-4" />
+          Collection
+        </Button>
+        <Button
+          type="button"
           variant="outline"
-          className="w-full text-muted-foreground hover:text-destructive"
+          className="col-span-2 w-full text-muted-foreground hover:text-destructive"
           onClick={onRemove}
         >
           <Trash2 className="size-4" />
@@ -749,6 +796,7 @@ function InvoiceRow({
   onChange,
   onRemove,
   onHold,
+  onCollect,
 }: {
   inv: Invoice;
   areas: string[];
@@ -759,6 +807,7 @@ function InvoiceRow({
   onChange: (p: Partial<Invoice>) => void;
   onRemove: () => void;
   onHold: () => void;
+  onCollect: () => void;
 }) {
   const badWeight = !inv.weight || inv.weight <= 0;
   const badArea = !inv.area;
@@ -814,6 +863,18 @@ function InvoiceRow({
           >
             <Pause className="size-3.5" />
             Hold
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2"
+            onClick={onCollect}
+            disabled={!inv.doc}
+            title="Mark as collection"
+          >
+            <Package className="size-3.5" />
+            Collection
           </Button>
           <Button
             type="button"
