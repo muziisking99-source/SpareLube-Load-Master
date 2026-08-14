@@ -1,35 +1,19 @@
 import { cn } from "@/lib/utils";
 
-/** SpareLube logo. Uses static /public SVGs so it works on Vercel (not Lovable __l5e URLs). */
+/** SpareLube logo. Official mark from /public, scaled to fit (not redrawn). */
 export function Logo({
   className,
-  variant = "auto",
 }: {
   className?: string;
   variant?: "auto" | "light";
 }) {
-  if (variant === "light") {
-    return (
-      <img
-        src="/sparelube-logo.svg"
-        alt="SpareLube — Auto Lubricant Distributors"
-        className={className}
-      />
-    );
-  }
   return (
-    <>
-      <img
-        src="/sparelube-logo.svg"
-        alt="SpareLube — Auto Lubricant Distributors"
-        className={cn("dark:hidden", className)}
-      />
-      <img
-        src="/sparelube-logo-dark.svg"
-        alt=""
-        aria-hidden="true"
-        className={cn("hidden dark:block", className)}
-      />
-    </>
+    <img
+      src="/sparelube-logo.png"
+      alt="SpareLube — Auto Lubricant Distributors"
+      width={1024}
+      height={730}
+      className={cn("object-contain", className)}
+    />
   );
 }
