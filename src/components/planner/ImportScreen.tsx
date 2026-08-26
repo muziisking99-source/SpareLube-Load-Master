@@ -5,9 +5,11 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  FileSpreadsheet,
   Inbox,
   Package,
   Pause,
+  Receipt,
   Trash2,
   TriangleAlert,
 } from "lucide-react";
@@ -15,6 +17,7 @@ import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { findCustomer } from "@/lib/customers";
 import { loadingNumberFor } from "@/lib/loadingOrder";
+import { parseExcelFile } from "@/lib/parse";
 import { townsForPlan } from "@/lib/trips";
 import type { CustomerMemory, HeldInvoice, Invoice } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -49,6 +52,11 @@ import { TownCombobox } from "./TownCombobox";
 import { CustomerCombobox } from "./CustomerCombobox";
 import { cn } from "@/lib/utils";
 
+/** Weight 0 = unset; negatives are valid for credit notes. */
+function weightUnset(w: number) {
+  return !Number.isFinite(w) || w === 0;
+}
+
 export function ImportScreen() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
   const customers = useStore((s) => s.customers);
@@ -66,20 +74,24 @@ export function ImportScreen() {
   const removeHeld = useStore((s) => s.removeHeld);
   const setHeldCollection = useStore((s) => s.setHeldCollection);
   const ensureCustomer = useStore((s) => s.ensureCustomer);
+  const importInvoiceRows = useStore((s) => s.importInvoiceRows);
   const setStep = useStore((s) => s.setStep);
 
   const docRef = useRef<HTMLInputElement>(null);
+  const excelRef = useRef<HTMLInputElement>(null);
   const [doc, setDoc] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerMemory | null>(null);
   const [area, setArea] = useState("");
   const [weight, setWeight] = useState("");
+  const [excelParsing, setExcelParsing] = useState(false);
   const [pendingHold, setPendingHold] = useState<{
     doc: string;
     customer: string;
     weight: number;
     area: string;
     collection: boolean;
+    creditNote: boolean;
   } | null>(null);
 
   const areas = townsForPlan(plan, trips);
@@ -108,11 +120,12 @@ export function ImportScreen() {
 
   const isCollectionCustomer = (name: string) => !!findCustomer(customers, name)?.collection;
 
-  const deliveryInvoices = invoices.filter(
-    (i) => !i.collection && !isCollectionCustomer(i.customer),
-  );
+  const creditInvoices = invoices.filter((i) => !!i.creditNote);
   const collectionInvoices = invoices.filter(
-    (i) => i.collection || isCollectionCustomer(i.customer),
+    (i) => !i.creditNote && (i.collection || isCollectionCustomer(i.customer)),
+  );
+  const deliveryInvoices = invoices.filter(
+    (i) => !i.creditNote && !i.collection && !isCollectionCustomer(i.customer),
   );
 
   const docCounts = useMemo(() => {
@@ -122,10 +135,10 @@ export function ImportScreen() {
     return m;
   }, [invoices, heldInvoices]);
 
-  const missingWeights = invoices.filter((i) => !i.weight || i.weight <= 0).length;
+  const missingWeights = invoices.filter((i) => weightUnset(i.weight)).length;
   const missingAreas = invoices.filter((i) => !i.area).length;
   const totalWeight = invoices.reduce((s, i) => s + (i.weight || 0), 0);
-  const entered = invoices.filter((i) => i.weight > 0).length;
+  const entered = invoices.filter((i) => !weightUnset(i.weight)).length;
   const avg = entered ? totalWeight / entered : 0;
   const canConfirm = invoices.length > 0 && missingWeights === 0 && missingAreas === 0;
   const progressPct = invoices.length ? (entered / invoices.length) * 100 : 0;
@@ -155,7 +168,11 @@ export function ImportScreen() {
     }
   }
 
-  function submitEntry(opts?: { forceHold?: boolean; asCollection?: boolean }) {
+  function submitEntry(opts?: {
+    forceHold?: boolean;
+    asCollection?: boolean;
+    asCreditNote?: boolean;
+  }) {
     const cleanDoc = doc.trim();
     const cleanCustomer = (selectedCustomer?.name || customerName).trim();
     const w = Number(weight);
@@ -174,8 +191,13 @@ export function ImportScreen() {
       toast.error("Select a town");
       return;
     }
-    if (!w || w <= 0) {
-      toast.error("Enter weight (kg)");
+    const asCredit = !!opts?.asCreditNote || w < 0;
+    if (!Number.isFinite(w) || w === 0) {
+      toast.error(asCredit ? "Enter credit weight (negative kg)" : "Enter weight (kg)");
+      return;
+    }
+    if (!asCredit && w < 0) {
+      toast.error("Use Credit note for negative weights");
       return;
     }
     if (docCounts.get(cleanDoc)) {
@@ -191,10 +213,10 @@ export function ImportScreen() {
       }) ??
       selectedCustomer ??
       findCustomer(customers, cleanCustomer);
-    const isCollection = !!opts?.asCollection || !!known?.collection;
+    const isCollection = !asCredit && (!!opts?.asCollection || !!known?.collection);
     const onToday = areas.includes(cleanArea);
 
-    if (opts?.forceHold || (!onToday && !isCollection)) {
+    if (opts?.forceHold || (!onToday && !isCollection && !asCredit)) {
       if (!opts?.forceHold && !onToday) {
         setPendingHold({
           doc: cleanDoc,
@@ -202,6 +224,7 @@ export function ImportScreen() {
           weight: w,
           area: cleanArea,
           collection: isCollection,
+          creditNote: asCredit,
         });
         return;
       }
@@ -215,10 +238,16 @@ export function ImportScreen() {
             source: "ADHOC",
           },
         ],
-        isCollection ? "collection" : opts?.forceHold ? "manual" : "town_not_on_trips",
+        asCredit
+          ? "credit_note"
+          : isCollection
+            ? "collection"
+            : opts?.forceHold
+              ? "manual"
+              : "town_not_on_trips",
       );
       toast.success(
-        isCollection ? "Held as collection" : "Held for later",
+        asCredit ? "Held as credit note" : isCollection ? "Held as collection" : "Held for later",
       );
       resetForm();
       return;
@@ -232,12 +261,48 @@ export function ImportScreen() {
         area: cleanArea,
         source: "ADHOC",
         collection: isCollection,
+        creditNote: asCredit,
       },
     ]);
     toast.success(
-      isCollection ? `Added ${cleanDoc} (collection)` : `Added ${cleanDoc}`,
+      asCredit
+        ? `Added ${cleanDoc} (credit note)`
+        : isCollection
+          ? `Added ${cleanDoc} (collection)`
+          : `Added ${cleanDoc}`,
     );
     resetForm();
+  }
+
+  async function handleExcelUpload(file: File) {
+    const lower = file.name.toLowerCase();
+    if (!lower.endsWith(".xlsx") && !lower.endsWith(".xls") && !lower.endsWith(".csv")) {
+      toast.error("Please upload an Excel file (.xlsx or .xls)");
+      return;
+    }
+    setExcelParsing(true);
+    try {
+      const rows = await parseExcelFile(file);
+      if (rows.length === 0) {
+        toast.error("No valid rows found in the Excel file");
+        return;
+      }
+      const { added, held, skipped } = importInvoiceRows(rows);
+      const parts: string[] = [];
+      if (added) parts.push(`${added} added`);
+      if (held) parts.push(`${held} held`);
+      if (skipped) parts.push(`${skipped} duplicate${skipped === 1 ? "" : "s"} skipped`);
+      if (!added && !held) {
+        toast.message(skipped ? `No new invoices — ${skipped} already entered` : "Nothing to import");
+      } else {
+        toast.success(parts.join(", "));
+      }
+    } catch {
+      toast.error("Could not read that Excel file");
+    } finally {
+      setExcelParsing(false);
+      if (excelRef.current) excelRef.current.value = "";
+    }
   }
 
   function handleConfirm() {
@@ -254,8 +319,13 @@ export function ImportScreen() {
   }
 
   function handleCollect(invoiceId: string) {
-    updateInvoice(invoiceId, { collection: true, truckId: null });
+    updateInvoice(invoiceId, { collection: true, creditNote: false, truckId: null });
     toast.success("Marked as collection");
+  }
+
+  function handleCredit(invoiceId: string) {
+    updateInvoice(invoiceId, { creditNote: true, collection: false, truckId: null });
+    toast.success("Marked as credit note");
   }
 
   function handlePick(id: string, opts?: { asException?: boolean; asCollection?: boolean }) {
@@ -279,9 +349,34 @@ export function ImportScreen() {
       <section className="panel p-4 sm:p-5">
         <ScreenHeader
           title="Enter Invoice"
-          description="Add invoices one by one. If the customer isn’t loaded yet, add them here. Collection works like Hold for later."
+          description="Add invoices one by one, or upload Excel (inv # + customer). Weights are entered manually. Re-upload hourly — duplicates are skipped."
           className="mb-4"
         />
+
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <input
+            ref={excelRef}
+            type="file"
+            accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleExcelUpload(f);
+            }}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={excelParsing}
+            onClick={() => excelRef.current?.click()}
+          >
+            <FileSpreadsheet className="size-4" />
+            {excelParsing ? "Importing…" : "Import Excel"}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Columns: invoice number, customer name. Weight stays blank until you fill it.
+          </span>
+        </div>
 
         <form
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
@@ -327,7 +422,6 @@ export function ImportScreen() {
           <FormField label="Weight (kg)">
             <Input
               type="number"
-              min={0}
               inputMode="decimal"
               value={weight}
               onChange={(e) => setWeight(e.target.value)}
@@ -354,6 +448,14 @@ export function ImportScreen() {
             >
               <Package className="size-4" />
               Collection
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => submitEntry({ asCreditNote: true })}
+            >
+              <Receipt className="size-4" />
+              Credit note
             </Button>
             {selectedCustomer?.collection && (
               <Badge variant="secondary" className="h-9 items-center">
@@ -517,16 +619,106 @@ export function ImportScreen() {
         </section>
       )}
 
+      {creditInvoices.length > 0 && (
+        <section className="panel p-4 sm:p-5">
+          <ScreenHeader
+            title="Credit notes"
+            description="Negative weights stay here until loaded on a truck. Unpicked credits remain in this section."
+            className="mb-4"
+          />
+          <div className="overflow-x-auto rounded-xl border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-panel-2 hover:bg-panel-2">
+                  <TableHead>Doc</TableHead>
+                  <TableHead>Customer</TableHead>
+                  <TableHead>Town</TableHead>
+                  <TableHead>Weight</TableHead>
+                  <TableHead>Load #</TableHead>
+                  <TableHead>Handling</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {creditInvoices.map((i) => (
+                  <TableRow key={i.id}>
+                    <TableCell className="metric-mono">{i.doc}</TableCell>
+                    <TableCell>{i.customer}</TableCell>
+                    <TableCell>{i.area || "—"}</TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        value={weightUnset(i.weight) ? "" : i.weight}
+                        onChange={(e) =>
+                          updateInvoice(i.id, { weight: Number(e.target.value) })
+                        }
+                        className={cn(
+                          "metric-mono h-9 w-24",
+                          weightUnset(i.weight) && "border-crit",
+                        )}
+                        placeholder="0"
+                      />
+                    </TableCell>
+                    <TableCell className="metric-mono text-muted-foreground">
+                      {(i.area && loadingNumberFor(customers, i.customer, i.area)) || "—"}
+                    </TableCell>
+                    <TableCell>
+                      <select
+                        className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                        value={i.creditNote ? "credit" : "truck"}
+                        onChange={(e) =>
+                          updateInvoice(i.id, {
+                            creditNote: e.target.value === "credit",
+                            truckId: e.target.value === "credit" ? null : i.truckId,
+                          })
+                        }
+                      >
+                        <option value="credit">Credit note</option>
+                        <option value="truck">Load on truck</option>
+                      </select>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleHold(i.id)}
+                          disabled={!i.doc}
+                        >
+                          <Pause className="size-3.5" />
+                          Hold
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:text-destructive"
+                          onClick={() => removeInvoice(i.id)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      )}
+
       <section className="panel p-4 sm:p-5">
         <ScreenHeader
           title="Today’s invoices"
-          description="Deliveries for today’s selected trips."
+          description="Deliveries for today’s selected trips. Set weights after Excel import."
           className="mb-4"
         />
         {deliveryInvoices.length === 0 ? (
           <EmptyState
             title="No invoices yet"
-            description="Enter doc number, customer, town, and weight above. New customers can be added from the customer field."
+            description="Enter doc number, customer, town, and weight above — or import Excel. New customers can be added from the customer field."
           />
         ) : (
           <>
@@ -546,6 +738,7 @@ export function ImportScreen() {
                   onRemove={() => removeInvoice(i.id)}
                   onHold={() => handleHold(i.id)}
                   onCollect={() => handleCollect(i.id)}
+                  onCredit={() => handleCredit(i.id)}
                 />
               ))}
             </div>
@@ -577,6 +770,7 @@ export function ImportScreen() {
                       onRemove={() => removeInvoice(i.id)}
                       onHold={() => handleHold(i.id)}
                       onCollect={() => handleCollect(i.id)}
+                      onCredit={() => handleCredit(i.id)}
                     />
                   ))}
                 </TableBody>
@@ -664,7 +858,11 @@ export function ImportScreen() {
                       source: "ADHOC",
                     },
                   ],
-                  pendingHold.collection ? "collection" : "town_not_on_trips",
+                  pendingHold.creditNote
+                    ? "credit_note"
+                    : pendingHold.collection
+                      ? "collection"
+                      : "town_not_on_trips",
                 );
                 toast.success("Held for later");
                 setPendingHold(null);
@@ -691,6 +889,7 @@ function InvoiceCard({
   onRemove,
   onHold,
   onCollect,
+  onCredit,
 }: {
   inv: Invoice;
   areas: string[];
@@ -702,8 +901,9 @@ function InvoiceCard({
   onRemove: () => void;
   onHold: () => void;
   onCollect: () => void;
+  onCredit: () => void;
 }) {
-  const badWeight = !inv.weight || inv.weight <= 0;
+  const badWeight = weightUnset(inv.weight);
   const badArea = !inv.area;
 
   return (
@@ -734,9 +934,8 @@ function InvoiceCard({
         <FormField label="Weight (kg)">
           <Input
             type="number"
-            min={0}
             inputMode="decimal"
-            value={inv.weight || ""}
+            value={weightUnset(inv.weight) ? "" : inv.weight}
             onChange={(e) => onChange({ weight: Number(e.target.value) })}
             className={cn("weight-input metric-mono h-11 text-lg", badWeight && "border-crit")}
             placeholder="0"
@@ -774,8 +973,18 @@ function InvoiceCard({
         </Button>
         <Button
           type="button"
+          variant="secondary"
+          className="w-full"
+          onClick={onCredit}
+          disabled={!inv.doc}
+        >
+          <Receipt className="size-4" />
+          Credit
+        </Button>
+        <Button
+          type="button"
           variant="outline"
-          className="col-span-2 w-full text-muted-foreground hover:text-destructive"
+          className="w-full text-muted-foreground hover:text-destructive"
           onClick={onRemove}
         >
           <Trash2 className="size-4" />
@@ -797,6 +1006,7 @@ function InvoiceRow({
   onRemove,
   onHold,
   onCollect,
+  onCredit,
 }: {
   inv: Invoice;
   areas: string[];
@@ -808,8 +1018,9 @@ function InvoiceRow({
   onRemove: () => void;
   onHold: () => void;
   onCollect: () => void;
+  onCredit: () => void;
 }) {
-  const badWeight = !inv.weight || inv.weight <= 0;
+  const badWeight = weightUnset(inv.weight);
   const badArea = !inv.area;
 
   return (
@@ -831,8 +1042,7 @@ function InvoiceRow({
       <TableCell>
         <Input
           type="number"
-          min={0}
-          value={inv.weight || ""}
+          value={weightUnset(inv.weight) ? "" : inv.weight}
           onChange={(e) => onChange({ weight: Number(e.target.value) })}
           className={`weight-input metric-mono h-8 w-24 text-foreground ${badWeight ? "border-crit" : ""}`}
           placeholder="0"
@@ -879,6 +1089,18 @@ function InvoiceRow({
           <Button
             type="button"
             variant="ghost"
+            size="sm"
+            className="h-8 px-2"
+            onClick={onCredit}
+            disabled={!inv.doc}
+            title="Mark as credit note"
+          >
+            <Receipt className="size-3.5" />
+            Credit
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
             size="icon"
             className="size-8 text-muted-foreground hover:text-destructive"
             onClick={onRemove}
@@ -893,10 +1115,13 @@ function InvoiceRow({
 }
 
 function canPickHeld(held: HeldInvoice, todayTowns: string[]) {
-  return !held.area || todayTowns.includes(held.area);
+  return !held.area || todayTowns.includes(held.area) || !!held.creditNote;
 }
 
 function heldTypeBadge(held: HeldInvoice) {
+  if (held.creditNote || held.reason === "credit_note") {
+    return <Badge variant="outline">Credit</Badge>;
+  }
   if (held.collection || held.reason === "collection") {
     return <Badge variant="secondary">Collection</Badge>;
   }
@@ -937,9 +1162,8 @@ function HeldCard({
       <FormField label="Weight (kg)">
         <Input
           type="number"
-          min={0}
           inputMode="decimal"
-          value={held.weight || ""}
+          value={weightUnset(held.weight) ? "" : held.weight}
           onChange={(e) => onChange({ weight: Number(e.target.value) })}
           className="metric-mono h-11"
           placeholder="0"
@@ -1019,8 +1243,7 @@ function HeldRow({
       <td className="px-3 py-2 align-middle">
         <Input
           type="number"
-          min={0}
-          value={held.weight || ""}
+          value={weightUnset(held.weight) ? "" : held.weight}
           onChange={(e) => onChange({ weight: Number(e.target.value) })}
           className="metric-mono h-9 w-full min-w-[5.5rem]"
           placeholder="0"

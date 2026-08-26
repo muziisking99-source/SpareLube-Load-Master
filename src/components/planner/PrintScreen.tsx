@@ -88,12 +88,14 @@ function LoadStopsTable({
   totalWeight,
   tripId,
   trips,
+  dayStopOrder,
 }: {
   stops: LoadStop[];
   customers: Record<string, import("@/lib/types").CustomerMemory>;
   totalWeight: number;
   tripId?: string | null;
   trips?: import("@/lib/types").Trip[];
+  dayStopOrder?: Record<string, Record<string, number>>;
 }) {
   return (
     <table style={{ marginTop: 4, width: "100%", borderCollapse: "collapse" }}>
@@ -107,7 +109,14 @@ function LoadStopsTable({
       </thead>
       <tbody>
         {stops.map((stop) => {
-          const loadNo = loadingNumberFor(customers, stop.customer, stop.area, tripId, trips);
+          const loadNo = loadingNumberFor(
+            customers,
+            stop.customer,
+            stop.area,
+            tripId,
+            trips,
+            dayStopOrder,
+          );
           return (
             <tr key={stop.key}>
               <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
@@ -199,7 +208,7 @@ export function PrintScreen() {
   /** Truck sheets: load # lowest → highest; invoices without a load # last. */
   function sortInvoices(list: typeof plan.invoices, tripId?: string | null) {
     return [...list].sort((a, b) =>
-      compareByLoadingNumber(customers, a, b, tripId, trips),
+      compareByLoadingNumber(customers, a, b, tripId, trips, plan.dayStopOrder),
     );
   }
 
@@ -340,6 +349,7 @@ export function PrintScreen() {
                         totalWeight={wt}
                         tripId={tripId}
                         trips={trips}
+                        dayStopOrder={plan.dayStopOrder}
                       />
                     </div>
                   );
@@ -430,6 +440,7 @@ export function PrintScreen() {
                     i.area,
                     tripId,
                     trips,
+                    plan.dayStopOrder,
                   );
                   return (
                     <tr key={i.id}>

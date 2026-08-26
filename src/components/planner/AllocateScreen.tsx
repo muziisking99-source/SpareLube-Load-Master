@@ -77,10 +77,11 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
     }),
   );
   const inv = plan.invoices;
-  const allocatable = inv.filter((i) => !i.collection);
+  const allocatable = inv.filter((i) => !i.collection && !i.creditNote);
   const allocated = allocatable.filter((i) => i.truckId);
   const unallocated = allocatable.filter((i) => !i.truckId);
   const collections = inv.filter((i) => i.collection);
+  const creditNotes = inv.filter((i) => i.creditNote);
 
   const planTripIds = plan.tripIds ?? [];
   const planTrips = useMemo(
@@ -243,6 +244,13 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                 (customer collects).
               </p>
             )}
+            {creditNotes.length > 0 && (
+              <p className="mt-3 text-sm text-muted-foreground">
+                {creditNotes.length} credit note
+                {creditNotes.length === 1 ? "" : "s"} excluded until marked Load on truck
+                on Enter.
+              </p>
+            )}
           </section>
 
           <section className="panel p-4 sm:p-5">
@@ -402,10 +410,11 @@ function TruckWorkbench({
   const isAdjust = mode === "adjust";
   const customers = useStore((s) => s.customers);
   const trips = useStore((s) => s.trips);
+  const dayStopOrder = useStore((s) => s.plans[s.currentDate]?.dayStopOrder ?? {});
   const sendToSecondRound = useStore((s) => s.sendToSecondRound);
   const setInvoiceRound = useStore((s) => s.setInvoiceRound);
-  const reorderTripStopsPartial = useStore((s) => s.reorderTripStopsPartial);
-  const setTripCustomerLoadNumber = useStore((s) => s.setTripCustomerLoadNumber);
+  const reorderDayTripStopsPartial = useStore((s) => s.reorderDayTripStopsPartial);
+  const setDayTripCustomerLoadNumber = useStore((s) => s.setDayTripCustomerLoadNumber);
 
   const defaultFocus =
     activeTrucks.find((t) => planInvoices.some((i) => i.truckId === t.id))?.id ??
@@ -430,8 +439,10 @@ function TruckWorkbench({
     if (!focusTruck) return [];
     return planInvoices
       .filter((i) => i.truckId === focusTruck.id)
-      .sort((a, b) => compareByLoadingNumber(customers, a, b, tripId, trips));
-  }, [planInvoices, focusTruck, customers, tripId, trips]);
+      .sort((a, b) =>
+        compareByLoadingNumber(customers, a, b, tripId, trips, dayStopOrder),
+      );
+  }, [planInvoices, focusTruck, customers, tripId, trips, dayStopOrder]);
 
   const round1 = truckInvoices.filter((i) => (i.round ?? 1) === 1);
   const round2 = truckInvoices.filter((i) => (i.round ?? 1) === 2);
@@ -482,7 +493,7 @@ function TruckWorkbench({
     if (j < 0 || j >= stopKeys.length) return;
     const next = [...stopKeys];
     [next[index], next[j]] = [next[j], next[index]];
-    reorderTripStopsPartial(tripId, next);
+    reorderDayTripStopsPartial(tripId, next);
   }
 
   function handleSecondRound() {
@@ -695,6 +706,7 @@ function TruckWorkbench({
                       i.area,
                       tripId,
                       trips,
+                      dayStopOrder,
                     );
                     const stopIndex = stopKeys.indexOf(key);
                     const checked = selected.includes(i.id);
@@ -734,14 +746,14 @@ function TruckWorkbench({
                                 value={loadNo || ""}
                                 onChange={(e) => {
                                   const n = Number(e.target.value);
-                                  setTripCustomerLoadNumber(
+                                  setDayTripCustomerLoadNumber(
                                     tripId,
                                     key,
                                     Number.isFinite(n) ? n : 0,
                                   );
                                 }}
                                 className="metric-mono h-8 w-14"
-                                title="Load # (saves to trip)"
+                                title="Load # (this day only)"
                               />
                               <Button
                                 type="button"
@@ -825,7 +837,7 @@ function TruckWorkbench({
           )}
           {isAdjust && tripId && truckInvoices.length > 0 && (
             <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-              Load # and ↑↓ save to Admin → Trips stop order for this trip.
+              Load # and ↑↓ apply to this day only — Admin → Trips stop order is unchanged.
             </p>
           )}
         </section>

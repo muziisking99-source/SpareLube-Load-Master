@@ -90,7 +90,7 @@ export function setCustomerLoadingNumber(
 }
 
 /**
- * Resolve load #: trip stopOrder first, else town defaultArea loadingNumber.
+ * Resolve load #: day plan override → trip stopOrder → town defaultArea loadingNumber.
  */
 export function loadingNumberFor(
   customers: Record<string, CustomerMemory>,
@@ -98,14 +98,24 @@ export function loadingNumberFor(
   area: string,
   tripId?: string | null,
   trips?: Trip[],
+  dayStopOrder?: Record<string, Record<string, number>>,
 ): number {
   const c = findCustomer(customers, customerName);
   if (!c) return 0;
 
+  const key = customerKey(c);
+
+  if (tripId && dayStopOrder) {
+    const dayMap = dayStopOrder[tripId];
+    if (dayMap) {
+      const fromDay = dayMap[key] ?? dayMap[c.name];
+      if (typeof fromDay === "number" && fromDay > 0) return fromDay;
+    }
+  }
+
   if (tripId && trips?.length) {
     const trip = tripById(trips, tripId);
     if (trip) {
-      const key = customerKey(c);
       const fromTrip = trip.stopOrder?.[key] ?? trip.stopOrder?.[c.name];
       if (typeof fromTrip === "number" && fromTrip > 0) return fromTrip;
     }
@@ -167,9 +177,10 @@ export function compareByLoadingNumber(
   b: { customer: string; area: string; doc: string },
   tripId?: string | null,
   trips?: Trip[],
+  dayStopOrder?: Record<string, Record<string, number>>,
 ): number {
-  const la = loadingNumberFor(customers, a.customer, a.area, tripId, trips);
-  const lb = loadingNumberFor(customers, b.customer, b.area, tripId, trips);
+  const la = loadingNumberFor(customers, a.customer, a.area, tripId, trips, dayStopOrder);
+  const lb = loadingNumberFor(customers, b.customer, b.area, tripId, trips, dayStopOrder);
   const aUnset = la <= 0 ? 1 : 0;
   const bUnset = lb <= 0 ? 1 : 0;
   if (aUnset !== bUnset) return aUnset - bUnset;
@@ -217,4 +228,21 @@ export function mergePartialTripReorder(
     stopOrder[key] = i + 1;
   });
   return stopOrder;
+}
+
+/**
+ * Day-scoped partial reorder: uses existing day map if present, else trip template, then merges.
+ */
+export function mergePartialDayReorder(
+  customers: Record<string, CustomerMemory>,
+  trip: Trip,
+  dayMap: Record<string, number> | undefined,
+  orderedSubsetKeys: string[],
+): Record<string, number> {
+  const baseTrip: Trip = {
+    ...trip,
+    stopOrder:
+      dayMap && Object.keys(dayMap).length > 0 ? dayMap : trip.stopOrder ?? {},
+  };
+  return mergePartialTripReorder(customers, baseTrip, orderedSubsetKeys);
 }

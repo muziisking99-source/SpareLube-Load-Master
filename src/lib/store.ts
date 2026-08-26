@@ -16,9 +16,11 @@ import {
   reorderCustomersInArea,
   setCustomerLoadingNumber as applyLoadingNumber,
   mergePartialTripReorder,
+  mergePartialDayReorder,
 } from "./loadingOrder";
+import type { ParsedRow } from "./parse";
 import { customerKey, findCustomer, findCustomerKey } from "./customers";
-import { normalizeTrip, townsForTruckDay, townsFromTripIds, townsForPlan } from "./trips";
+import { normalizeTrip, townsForTruckDay, townsFromTripIds, townsForPlan, tripById } from "./trips";
 import {
   hydrateWarehouse,
   persistWarehouse,
@@ -56,6 +58,7 @@ function emptyPlan(date: string): Plan {
     tripIds: [],
     truckDay: [],
     invoices: [],
+    dayStopOrder: {},
     locked: false,
     createdAt: new Date().toISOString(),
     step: "setup",
@@ -153,21 +156,33 @@ type State = {
   updateInvoice: (id: string, patch: Partial<Invoice>) => void;
   removeInvoice: (id: string) => void;
   confirmImport: () => { known: number; learned: number };
+  /**
+   * Bulk-add Excel invoice rows (doc + customer). Skips duplicate docs.
+   * Weight stays 0 for manual entry. Routes off-trip towns to held.
+   */
+  importInvoiceRows: (
+    rows: ParsedRow[],
+  ) => { added: number; held: number; skipped: number };
 
   // held invoices (warehouse pool across days)
   holdInvoices: (
-    items: Omit<HeldInvoice, "id" | "heldAt" | "reason" | "collection">[],
+    items: Omit<HeldInvoice, "id" | "heldAt" | "reason" | "collection" | "creditNote">[],
     reason: HeldInvoice["reason"],
   ) => number;
   holdFromPlan: (invoiceId: string) => boolean;
   /** Pick held into today's plan. asException allows off-trip towns. */
   pickHeld: (
     id: string,
-    opts?: { asException?: boolean; asCollection?: boolean },
+    opts?: { asException?: boolean; asCollection?: boolean; asCreditNote?: boolean },
   ) => "ok" | "duplicate" | "missing" | "off_trip";
   updateHeld: (
     id: string,
-    patch: Partial<Pick<HeldInvoice, "doc" | "customer" | "weight" | "area" | "collection" | "reason">>,
+    patch: Partial<
+      Pick<
+        HeldInvoice,
+        "doc" | "customer" | "weight" | "area" | "collection" | "creditNote" | "reason"
+      >
+    >,
   ) => void;
   removeHeld: (id: string) => void;
   /** Mark / unmark held invoice as a collection. */
@@ -177,6 +192,12 @@ type State = {
    * Merges into full trip stopOrder so Admin stay in sync.
    */
   reorderTripStopsPartial: (tripId: string, orderedKeys: string[]) => void;
+  /**
+   * Day-only stop reorder for Adjust — writes plan.dayStopOrder, not Admin trips.
+   */
+  reorderDayTripStopsPartial: (tripId: string, orderedKeys: string[]) => void;
+  /** Day-only load # for Adjust. */
+  setDayTripCustomerLoadNumber: (tripId: string, customerKey: string, n: number) => void;
 
   // allocation
   runAllocation: () => void;
@@ -646,6 +667,46 @@ export const useStore = create<State>((set, get) => {
       }));
       log("trip.reorder", `Adjusted stop order on trip ${tripId}`);
     },
+    reorderDayTripStopsPartial: (tripId, orderedKeys) => {
+      patchPlan((p) => {
+        const trip = tripById(get().trips, tripId);
+        if (!trip) return p;
+        const dayMap = p.dayStopOrder?.[tripId];
+        const stopOrder = mergePartialDayReorder(
+          get().customers,
+          trip,
+          dayMap,
+          orderedKeys,
+        );
+        return {
+          ...p,
+          dayStopOrder: {
+            ...(p.dayStopOrder ?? {}),
+            [tripId]: stopOrder,
+          },
+        };
+      });
+      log("plan.day_reorder", `Day stop order adjusted for trip ${tripId}`);
+    },
+    setDayTripCustomerLoadNumber: (tripId, key, n) => {
+      patchPlan((p) => {
+        const dayStopOrder = { ...(p.dayStopOrder ?? {}) };
+        const map = { ...(dayStopOrder[tripId] ?? {}) };
+        const num = Math.floor(n);
+        if (!Number.isFinite(num) || num < 1) {
+          delete map[key];
+        } else {
+          map[key] = num;
+        }
+        if (Object.keys(map).length === 0) {
+          delete dayStopOrder[tripId];
+        } else {
+          dayStopOrder[tripId] = map;
+        }
+        return { ...p, dayStopOrder };
+      });
+      log("plan.day_load", `Day load #${n} for ${key} on trip ${tripId}`);
+    },
     importTrips: (rows) => {
       let added = 0;
       let skipped = 0;
@@ -788,6 +849,7 @@ export const useStore = create<State>((set, get) => {
               tripIds: [],
               truckDay: [],
               invoices: [],
+              dayStopOrder: {},
               locked: r.locked,
               createdAt: r.createdAt,
               step: r.step,
@@ -1128,7 +1190,14 @@ export const useStore = create<State>((set, get) => {
     updateInvoice: (id, patch) => {
       patchPlan((p) => ({
         ...p,
-        invoices: p.invoices.map((i) => (i.id === id ? { ...i, ...patch } : i)),
+        invoices: p.invoices.map((i) => {
+          if (i.id !== id) return i;
+          const next = { ...i, ...patch };
+          if (typeof next.weight === "number" && next.weight < 0) {
+            next.creditNote = true;
+          }
+          return next;
+        }),
       }));
     },
     removeInvoice: (id) => {
@@ -1166,6 +1235,108 @@ export const useStore = create<State>((set, get) => {
       return { known, learned };
     },
 
+    importInvoiceRows: (rows) => {
+      let added = 0;
+      let held = 0;
+      let skipped = 0;
+      const now = new Date().toISOString();
+      mutate((s) => {
+        const plan = s.plans[s.currentDate] ?? emptyPlan(s.currentDate);
+        const todayTowns = new Set(townsForPlan(plan, s.trips));
+        const existingDocs = new Set<string>();
+        for (const i of plan.invoices) if (i.doc) existingDocs.add(i.doc);
+        for (const h of s.heldInvoices) if (h.doc) existingDocs.add(h.doc);
+
+        let customers = { ...s.customers };
+        const newInvoices: Invoice[] = [];
+        const newHeld: HeldInvoice[] = [];
+
+        for (const row of rows) {
+          const doc = (row.doc || "").trim();
+          const rawName = (row.customer || "").trim();
+          if (!doc || !rawName) continue;
+          if (existingDocs.has(doc)) {
+            skipped++;
+            continue;
+          }
+          existingDocs.add(doc);
+
+          const known =
+            (row.customerCode ? findCustomer(customers, row.customerCode) : undefined) ??
+            findCustomer(customers, rawName);
+          const name = known?.name || rawName;
+          const area = known?.defaultArea ?? "";
+          const isCollection = !!known?.collection;
+
+          if (!known) {
+            const key = customerKey({ code: row.customerCode ?? "", name });
+            customers[key || name] = {
+              code: (row.customerCode ?? "").trim(),
+              name,
+              defaultArea: "",
+              loadingNumber: 0,
+              firstSeen: now,
+            };
+          } else if (area && !known.defaultArea) {
+            customers = assignCustomerArea(customers, customerKey(known) || known.name, area);
+          }
+
+          const onToday = !area || todayTowns.has(area);
+          if (!onToday && !isCollection) {
+            newHeld.push(
+              normalizeHeldInvoice({
+                id: uid(),
+                doc,
+                customer: name,
+                weight: 0,
+                area,
+                source: "SYSTEM",
+                heldAt: now,
+                reason: "town_not_on_trips",
+              }),
+            );
+            held++;
+          } else {
+            newInvoices.push({
+              id: uid(),
+              doc,
+              customer: name,
+              weight: 0,
+              area,
+              source: "SYSTEM",
+              truckId: null,
+              round: 1,
+              collection: isCollection,
+            });
+            added++;
+          }
+        }
+
+        if (!added && !held) {
+          return skipped ? {} : {};
+        }
+
+        return {
+          customers,
+          heldInvoices: newHeld.length ? [...s.heldInvoices, ...newHeld] : s.heldInvoices,
+          plans: {
+            ...s.plans,
+            [s.currentDate]: {
+              ...plan,
+              invoices: newInvoices.length ? [...plan.invoices, ...newInvoices] : plan.invoices,
+            },
+          },
+        };
+      });
+      if (added || held) {
+        log(
+          "import.excel",
+          `Excel import: +${added} plan, +${held} held, ${skipped} duplicate(s) skipped`,
+        );
+      }
+      return { added, held, skipped };
+    },
+
     holdInvoices: (items, reason) => {
       const now = new Date().toISOString();
       let added = 0;
@@ -1187,6 +1358,7 @@ export const useStore = create<State>((set, get) => {
                 source: item.source,
                 heldAt: now,
                 reason,
+                creditNote: reason === "credit_note" || (typeof item.weight === "number" && item.weight < 0),
               }),
             ),
           ],
@@ -1207,6 +1379,11 @@ export const useStore = create<State>((set, get) => {
         return true;
       }
       const now = new Date().toISOString();
+      const reason: HeldInvoice["reason"] = inv.creditNote
+        ? "credit_note"
+        : inv.collection
+          ? "collection"
+          : "manual";
       mutate((st) => ({
         heldInvoices: [
           ...st.heldInvoices,
@@ -1218,7 +1395,9 @@ export const useStore = create<State>((set, get) => {
             area: inv.area,
             source: inv.source,
             heldAt: now,
-            reason: "manual",
+            reason,
+            collection: !!inv.collection,
+            creditNote: !!inv.creditNote,
           }),
         ],
         plans: {
@@ -1245,7 +1424,8 @@ export const useStore = create<State>((set, get) => {
       const offTrip = !!held.area && !todayTowns.has(held.area);
       const asException = !!opts?.asException;
       const asCollection = !!opts?.asCollection || !!held.collection;
-      if (offTrip && !asException && !asCollection) return "off_trip";
+      const asCreditNote = !!opts?.asCreditNote || !!held.creditNote;
+      if (offTrip && !asException && !asCollection && !asCreditNote) return "off_trip";
 
       mutate((st) => ({
         heldInvoices: st.heldInvoices.filter((h) => h.id !== id),
@@ -1264,8 +1444,9 @@ export const useStore = create<State>((set, get) => {
                 source: held.source,
                 truckId: null,
                 round: 1,
-                exception: asException || (offTrip && asCollection),
+                exception: asException || (offTrip && (asCollection || asCreditNote)),
                 collection: asCollection,
+                creditNote: asCreditNote,
               },
             ],
           },
@@ -1273,7 +1454,7 @@ export const useStore = create<State>((set, get) => {
       }));
       log(
         "held.pick",
-        `Picked ${held.doc} into plan${asException ? " (exception)" : ""}${asCollection ? " (collection)" : ""}`,
+        `Picked ${held.doc} into plan${asException ? " (exception)" : ""}${asCollection ? " (collection)" : ""}${asCreditNote ? " (credit)" : ""}`,
       );
       void flushSaveNow();
       return "ok";
@@ -1420,6 +1601,7 @@ export const useStore = create<State>((set, get) => {
           s.customers,
           plan.truckDay.find((td) => td.truckId === truckId)?.tripId,
           s.trips,
+          plan.dayStopOrder,
         );
       }
       if (ids.length === 0) return 0;

@@ -33,6 +33,8 @@ export type Invoice = {
   exception?: boolean;
   /** Collection stop (not a normal delivery) */
   collection?: boolean;
+  /** Credit note — stays in Credit notes until loaded on a truck; weight may be negative */
+  creditNote?: boolean;
 };
 
 /** Warehouse-scoped invoice waiting for a day when its town is on a trip */
@@ -44,9 +46,11 @@ export type HeldInvoice = {
   area: string;
   source: InvoiceSource;
   heldAt: string;
-  reason: "town_not_on_trips" | "manual" | "collection";
+  reason: "town_not_on_trips" | "manual" | "collection" | "credit_note";
   /** Marked as a collection (stays in Held until picked / cleared) */
   collection?: boolean;
+  /** Credit note waiting in the held pool */
+  creditNote?: boolean;
 };
 
 export type Trip = {
@@ -77,10 +81,33 @@ export type Plan = {
   tripIds: string[];
   truckDay: TruckDay[]; // per truck today's trip (assigned in Step 3)
   invoices: Invoice[];
+  /**
+   * Day-only stop order overrides from Adjust.
+   * tripId → customerKey → load #. Does not mutate Admin trip templates.
+   */
+  dayStopOrder: Record<string, Record<string, number>>;
   locked: boolean;
   createdAt: string;
   step: PlanStep;
 };
+
+/** Normalize plan.dayStopOrder from JSON / legacy plans. */
+export function normalizeDayStopOrder(
+  raw: unknown,
+): Record<string, Record<string, number>> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, Record<string, number>> = {};
+  for (const [tripId, map] of Object.entries(raw as Record<string, unknown>)) {
+    if (!tripId || !map || typeof map !== "object" || Array.isArray(map)) continue;
+    const stopOrder: Record<string, number> = {};
+    for (const [k, v] of Object.entries(map as Record<string, unknown>)) {
+      const n = typeof v === "number" ? v : Number(v);
+      if (k && Number.isFinite(n) && n >= 1) stopOrder[k] = Math.floor(n);
+    }
+    if (Object.keys(stopOrder).length) out[tripId] = stopOrder;
+  }
+  return out;
+}
 
 export type PlanStep = "setup" | "import" | "allocate" | "adjust" | "lock" | "print";
 
@@ -121,6 +148,10 @@ export function normalizeCustomer(raw: Partial<CustomerMemory> & { name: string 
 }
 
 export function normalizeInvoice(raw: Partial<Invoice> & Pick<Invoice, "id" | "doc" | "customer">): Invoice {
+  const creditNote =
+    raw.creditNote !== undefined
+      ? !!raw.creditNote
+      : typeof raw.weight === "number" && raw.weight < 0;
   return {
     id: raw.id,
     doc: raw.doc,
@@ -132,18 +163,26 @@ export function normalizeInvoice(raw: Partial<Invoice> & Pick<Invoice, "id" | "d
     round: raw.round === 2 ? 2 : 1,
     exception: !!raw.exception,
     collection: !!raw.collection,
+    creditNote,
   };
 }
 
 export function normalizeHeldInvoice(
   raw: Partial<HeldInvoice> & Pick<HeldInvoice, "id" | "doc" | "customer">,
 ): HeldInvoice {
-  const reason =
+  const creditNote =
+    raw.creditNote !== undefined
+      ? !!raw.creditNote
+      : raw.reason === "credit_note" ||
+        (typeof raw.weight === "number" && raw.weight < 0);
+  const reason: HeldInvoice["reason"] =
     raw.reason === "manual"
       ? "manual"
-      : raw.reason === "collection" || raw.collection
-        ? "collection"
-        : "town_not_on_trips";
+      : raw.reason === "credit_note" || (creditNote && raw.reason !== "collection" && !raw.collection)
+        ? "credit_note"
+        : raw.reason === "collection" || raw.collection
+          ? "collection"
+          : "town_not_on_trips";
   return {
     id: raw.id,
     doc: raw.doc,
@@ -154,5 +193,6 @@ export function normalizeHeldInvoice(
     heldAt: raw.heldAt ?? new Date().toISOString(),
     reason,
     collection: reason === "collection" || !!raw.collection,
+    creditNote: reason === "credit_note" || creditNote,
   };
 }
