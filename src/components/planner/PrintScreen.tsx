@@ -97,6 +97,7 @@ function LoadStopsTable({
   trips?: import("@/lib/types").Trip[];
   dayStopOrder?: Record<string, Record<string, number>>;
 }) {
+  const invoiceCount = stops.reduce((n, s) => n + s.count, 0);
   return (
     <table style={{ marginTop: 4, width: "100%", borderCollapse: "collapse" }}>
       <thead>
@@ -163,7 +164,7 @@ function LoadStopsTable({
       <tfoot>
         <tr>
           <td colSpan={2} style={{ fontWeight: 700 }}>
-            Total weight
+            Total — {invoiceCount} invoice{invoiceCount === 1 ? "" : "s"}
           </td>
           <td
             style={{

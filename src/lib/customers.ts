@@ -22,6 +22,18 @@ export function findCustomer(
   );
 }
 
+/** Resolve strictly by customer / account code (case-insensitive). */
+export function findCustomerByCode(
+  customers: Record<string, CustomerMemory>,
+  code: string,
+): CustomerMemory | undefined {
+  const q = code.trim();
+  if (!q) return undefined;
+  if (customers[q] && customers[q].code) return customers[q];
+  const lower = q.toLowerCase();
+  return Object.values(customers).find((c) => c.code.trim().toLowerCase() === lower);
+}
+
 /** Map key for a query string, if a matching customer exists. */
 export function findCustomerKey(
   customers: Record<string, CustomerMemory>,

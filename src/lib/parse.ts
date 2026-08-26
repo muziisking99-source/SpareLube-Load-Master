@@ -144,11 +144,12 @@ export function parseExcel(buffer: ArrayBuffer): ParsedRow[] {
   if (hasHeader) {
     startRow = 1;
   } else {
-    // Legacy positional: Doc | Customer, or Customer Code | Customer Name | Doc
-    if (first.length >= 3 && !DOC_HEADERS.includes(first[0])) {
-      codeIdx = 0;
-      custIdx = 1;
-      docIdx = 2;
+    // No header row: Invoice | Customer Code | Customer Name (template order)
+    // or legacy Doc | Customer
+    if (first.length >= 3) {
+      docIdx = 0;
+      codeIdx = 1;
+      custIdx = 2;
     } else {
       docIdx = 0;
       custIdx = 1;

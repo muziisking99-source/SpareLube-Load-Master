@@ -19,7 +19,7 @@ import {
   mergePartialDayReorder,
 } from "./loadingOrder";
 import type { ParsedRow } from "./parse";
-import { customerKey, findCustomer, findCustomerKey } from "./customers";
+import { customerKey, findCustomer, findCustomerByCode, findCustomerKey } from "./customers";
 import { normalizeTrip, townsForTruckDay, townsFromTripIds, townsForPlan, tripById } from "./trips";
 import {
   hydrateWarehouse,
@@ -162,7 +162,7 @@ type State = {
    */
   importInvoiceRows: (
     rows: ParsedRow[],
-  ) => { added: number; held: number; skipped: number };
+  ) => { added: number; held: number; skipped: number; missingCode: number };
 
   // held invoices (warehouse pool across days)
   holdInvoices: (
@@ -997,13 +997,27 @@ export const useStore = create<State>((set, get) => {
       if (!name) return null;
       const area = (input.defaultArea ?? "").trim();
       const s = get();
-      const existing = findCustomer(s.customers, code || name);
+      const existing =
+        (code ? findCustomerByCode(s.customers, code) : undefined) ??
+        findCustomer(s.customers, code || name);
       if (existing) {
-        const id = findCustomerKey(s.customers, code || name) ?? customerKey(existing);
+        const id = findCustomerKey(s.customers, customerKey(existing) || existing.name) ?? customerKey(existing);
+        let next = existing;
+        if (code && !existing.code) {
+          mutate((state) => ({
+            customers: {
+              ...state.customers,
+              [id]: { ...state.customers[id], code },
+            },
+          }));
+          next = { ...existing, code };
+        }
         if (area && !existing.defaultArea) {
           get().setCustomerArea(id, area);
         }
-        return findCustomer(get().customers, code || name) ?? existing;
+        return findCustomerByCode(get().customers, code) ??
+          findCustomer(get().customers, name) ??
+          next;
       }
       const now = new Date().toISOString();
       const key = code || name;
@@ -1026,7 +1040,7 @@ export const useStore = create<State>((set, get) => {
         }
         return { customers, areaHistory: history };
       });
-      log("customers.add", `Added ${name}`);
+      log("customers.add", code ? `Added ${name} (${code})` : `Added ${name}`);
       return get().customers[key] ?? null;
     },
     setCustomerArea: (key, area) => {
@@ -1188,6 +1202,8 @@ export const useStore = create<State>((set, get) => {
       }));
     },
     updateInvoice: (id, patch) => {
+      let customerName = "";
+      let areaToLearn = "";
       patchPlan((p) => ({
         ...p,
         invoices: p.invoices.map((i) => {
@@ -1196,9 +1212,22 @@ export const useStore = create<State>((set, get) => {
           if (typeof next.weight === "number" && next.weight < 0) {
             next.creditNote = true;
           }
+          if (patch.area !== undefined && patch.area.trim()) {
+            customerName = next.customer;
+            areaToLearn = patch.area.trim();
+          }
           return next;
         }),
       }));
+      // Town chosen on Enter also becomes the customer's Admin default town when unset
+      if (customerName && areaToLearn) {
+        const s = get();
+        const known = findCustomer(s.customers, customerName);
+        if (known && !known.defaultArea) {
+          const key = findCustomerKey(s.customers, customerName) ?? customerKey(known);
+          get().setCustomerArea(key, areaToLearn);
+        }
+      }
     },
     removeInvoice: (id) => {
       patchPlan((p) => ({ ...p, invoices: p.invoices.filter((i) => i.id !== id) }));
@@ -1239,6 +1268,7 @@ export const useStore = create<State>((set, get) => {
       let added = 0;
       let held = 0;
       let skipped = 0;
+      let missingCode = 0;
       const now = new Date().toISOString();
       mutate((s) => {
         const plan = s.plans[s.currentDate] ?? emptyPlan(s.currentDate);
@@ -1253,33 +1283,45 @@ export const useStore = create<State>((set, get) => {
 
         for (const row of rows) {
           const doc = (row.doc || "").trim();
+          const code = (row.customerCode || "").trim();
           const rawName = (row.customer || "").trim();
-          if (!doc || !rawName) continue;
+          if (!doc) continue;
+          if (!code) {
+            missingCode++;
+            continue;
+          }
+          if (!rawName) continue;
           if (existingDocs.has(doc)) {
             skipped++;
             continue;
           }
           existingDocs.add(doc);
 
-          const known =
-            (row.customerCode ? findCustomer(customers, row.customerCode) : undefined) ??
-            findCustomer(customers, rawName);
-          const name = known?.name || rawName;
-          const area = known?.defaultArea ?? "";
-          const isCollection = !!known?.collection;
-
+          // Always resolve by code so similarly named accounts don't collide
+          let known = findCustomerByCode(customers, code);
           if (!known) {
-            const key = customerKey({ code: row.customerCode ?? "", name });
-            customers[key || name] = {
-              code: (row.customerCode ?? "").trim(),
-              name,
+            customers[code] = {
+              code,
+              name: rawName,
               defaultArea: "",
               loadingNumber: 0,
               firstSeen: now,
             };
-          } else if (area && !known.defaultArea) {
-            customers = assignCustomerArea(customers, customerKey(known) || known.name, area);
+            known = customers[code];
+          } else {
+            const key = findCustomerKey(customers, code) ?? customerKey(known);
+            if (key && customers[key]) {
+              let next = customers[key];
+              if (!next.code) next = { ...next, code };
+              if (!next.name.trim()) next = { ...next, name: rawName };
+              customers[key] = next;
+              known = next;
+            }
           }
+
+          const name = known.name || rawName;
+          const area = known.defaultArea ?? "";
+          const isCollection = !!known.collection;
 
           const onToday = !area || todayTowns.has(area);
           if (!onToday && !isCollection) {
@@ -1313,7 +1355,9 @@ export const useStore = create<State>((set, get) => {
         }
 
         if (!added && !held) {
-          return skipped ? {} : {};
+          return Object.keys(customers).length !== Object.keys(s.customers).length
+            ? { customers }
+            : {};
         }
 
         return {
@@ -1331,10 +1375,10 @@ export const useStore = create<State>((set, get) => {
       if (added || held) {
         log(
           "import.excel",
-          `Excel import: +${added} plan, +${held} held, ${skipped} duplicate(s) skipped`,
+          `Excel import: +${added} plan, +${held} held, ${skipped} duplicate(s), ${missingCode} missing code`,
         );
       }
-      return { added, held, skipped };
+      return { added, held, skipped, missingCode };
     },
 
     holdInvoices: (items, reason) => {

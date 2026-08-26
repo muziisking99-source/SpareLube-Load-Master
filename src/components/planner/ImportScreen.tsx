@@ -18,6 +18,7 @@ import { useStore } from "@/lib/store";
 import { findCustomer } from "@/lib/customers";
 import { loadingNumberFor } from "@/lib/loadingOrder";
 import { parseExcelFile } from "@/lib/parse";
+import { downloadInvoiceTemplate } from "@/lib/excelTemplates";
 import { townsForPlan } from "@/lib/trips";
 import type { CustomerMemory, HeldInvoice, Invoice } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -287,13 +288,18 @@ export function ImportScreen() {
         toast.error("No valid rows found in the Excel file");
         return;
       }
-      const { added, held, skipped } = importInvoiceRows(rows);
+      const { added, held, skipped, missingCode } = importInvoiceRows(rows);
       const parts: string[] = [];
       if (added) parts.push(`${added} added`);
       if (held) parts.push(`${held} held`);
       if (skipped) parts.push(`${skipped} duplicate${skipped === 1 ? "" : "s"} skipped`);
+      if (missingCode) parts.push(`${missingCode} missing customer code`);
       if (!added && !held) {
-        toast.message(skipped ? `No new invoices — ${skipped} already entered` : "Nothing to import");
+        toast.message(
+          parts.length
+            ? parts.join(", ")
+            : "Nothing to import",
+        );
       } else {
         toast.success(parts.join(", "));
       }
@@ -349,7 +355,7 @@ export function ImportScreen() {
       <section className="panel p-4 sm:p-5">
         <ScreenHeader
           title="Enter Invoice"
-          description="Add invoices one by one, or upload Excel (inv # + customer). Weights are entered manually. Re-upload hourly — duplicates are skipped."
+          description="Add invoices one by one, or upload Excel. Weights are entered manually. Re-upload hourly — duplicates are skipped."
           className="mb-4"
         />
 
@@ -373,8 +379,11 @@ export function ImportScreen() {
             <FileSpreadsheet className="size-4" />
             {excelParsing ? "Importing…" : "Import Excel"}
           </Button>
+          <Button type="button" variant="ghost" onClick={() => downloadInvoiceTemplate()}>
+            Download template
+          </Button>
           <span className="text-xs text-muted-foreground">
-            Columns: invoice number, customer name. Weight stays blank until you fill it.
+            Columns: invoice #, customer code, customer name. Code is required and used to match Admin customers; new codes are saved to Admin (set town after).
           </span>
         </div>
 
