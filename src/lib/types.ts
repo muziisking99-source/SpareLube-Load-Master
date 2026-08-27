@@ -86,6 +86,11 @@ export type Plan = {
    * tripId → customerKey → load #. Does not mutate Admin trip templates.
    */
   dayStopOrder: Record<string, Record<string, number>>;
+  /**
+   * Day-only drag order from Adjust (customer keys).
+   * Does not renumber Load # or touch Admin trip templates.
+   */
+  dayStopSequence: Record<string, string[]>;
   locked: boolean;
   createdAt: string;
   step: PlanStep;
@@ -105,6 +110,22 @@ export function normalizeDayStopOrder(
       if (k && Number.isFinite(n) && n >= 1) stopOrder[k] = Math.floor(n);
     }
     if (Object.keys(stopOrder).length) out[tripId] = stopOrder;
+  }
+  return out;
+}
+
+/** Normalize plan.dayStopSequence from JSON / legacy plans. */
+export function normalizeDayStopSequence(
+  raw: unknown,
+): Record<string, string[]> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string[]> = {};
+  for (const [tripId, list] of Object.entries(raw as Record<string, unknown>)) {
+    if (!tripId || !Array.isArray(list)) continue;
+    const keys = list
+      .map((k) => (typeof k === "string" ? k.trim() : ""))
+      .filter(Boolean);
+    if (keys.length) out[tripId] = keys;
   }
   return out;
 }

@@ -52,6 +52,7 @@ import { FormField } from "./ui/FormField";
 import { TownCombobox } from "./TownCombobox";
 import { CustomerCombobox } from "./CustomerCombobox";
 import { cn } from "@/lib/utils";
+import { useRowHighlight } from "@/lib/useRowHighlight";
 
 /** Weight 0 = unset; negatives are valid for credit notes. */
 function weightUnset(w: number) {
@@ -77,6 +78,7 @@ export function ImportScreen() {
   const ensureCustomer = useStore((s) => s.ensureCustomer);
   const importInvoiceRows = useStore((s) => s.importInvoiceRows);
   const setStep = useStore((s) => s.setStep);
+  const { highlightProps } = useRowHighlight();
 
   const docRef = useRef<HTMLInputElement>(null);
   const excelRef = useRef<HTMLInputElement>(null);
@@ -505,6 +507,7 @@ export function ImportScreen() {
                   held={h}
                   todayTowns={areas}
                   townOptions={heldTownOptions}
+                  highlightProps={highlightProps(h.id)}
                   onChange={(patch) => updateHeld(h.id, patch)}
                   onToggleCollection={(v) => setHeldCollection(h.id, v)}
                   onPick={() => handlePick(h.id)}
@@ -535,6 +538,7 @@ export function ImportScreen() {
                       held={h}
                       todayTowns={areas}
                       townOptions={heldTownOptions}
+                      highlightProps={highlightProps(h.id)}
                       onChange={(patch) => updateHeld(h.id, patch)}
                       onToggleCollection={(v) => setHeldCollection(h.id, v)}
                       onPick={() => handlePick(h.id)}
@@ -574,7 +578,7 @@ export function ImportScreen() {
               </TableHeader>
               <TableBody>
                 {collectionInvoices.map((i) => (
-                  <TableRow key={i.id}>
+                  <TableRow key={i.id} {...highlightProps(i.id)}>
                     <TableCell className="metric-mono">{i.doc}</TableCell>
                     <TableCell>{i.customer}</TableCell>
                     <TableCell>{i.area || "—"}</TableCell>
@@ -650,7 +654,7 @@ export function ImportScreen() {
               </TableHeader>
               <TableBody>
                 {creditInvoices.map((i) => (
-                  <TableRow key={i.id}>
+                  <TableRow key={i.id} {...highlightProps(i.id)}>
                     <TableCell className="metric-mono">{i.doc}</TableCell>
                     <TableCell>{i.customer}</TableCell>
                     <TableCell>{i.area || "—"}</TableCell>
@@ -743,6 +747,7 @@ export function ImportScreen() {
                   loadNumber={
                     (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
                   }
+                  highlightProps={highlightProps(i.id)}
                   onChange={(patch) => updateInvoice(i.id, patch)}
                   onRemove={() => removeInvoice(i.id)}
                   onHold={() => handleHold(i.id)}
@@ -775,6 +780,7 @@ export function ImportScreen() {
                       loadNumber={
                         (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
                       }
+                      highlightProps={highlightProps(i.id)}
                       onChange={(patch) => updateInvoice(i.id, patch)}
                       onRemove={() => removeInvoice(i.id)}
                       onHold={() => handleHold(i.id)}
@@ -894,6 +900,7 @@ function InvoiceCard({
   duplicate,
   index,
   loadNumber,
+  highlightProps,
   onChange,
   onRemove,
   onHold,
@@ -906,6 +913,10 @@ function InvoiceCard({
   duplicate?: boolean;
   index?: number;
   loadNumber?: number;
+  highlightProps?: {
+    "data-state"?: "selected";
+    onClick: (e: React.MouseEvent) => void;
+  };
   onChange: (p: Partial<Invoice>) => void;
   onRemove: () => void;
   onHold: () => void;
@@ -919,9 +930,11 @@ function InvoiceCard({
     <div
       style={index !== undefined ? ({ "--index": index } as React.CSSProperties) : undefined}
       className={cn(
-        "space-y-3 rounded-xl border border-border bg-panel-2/40 p-4",
+        "space-y-3 rounded-xl border border-border bg-panel-2/40 p-4 transition-colors",
         index !== undefined && "stagger-item",
+        highlightProps?.["data-state"] === "selected" && "bg-primary/10 ring-1 ring-primary/30",
       )}
+      {...highlightProps}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
@@ -1011,6 +1024,7 @@ function InvoiceRow({
   duplicate,
   index,
   loadNumber,
+  highlightProps,
   onChange,
   onRemove,
   onHold,
@@ -1023,6 +1037,10 @@ function InvoiceRow({
   duplicate?: boolean;
   index?: number;
   loadNumber?: number;
+  highlightProps?: {
+    "data-state"?: "selected";
+    onClick: (e: React.MouseEvent) => void;
+  };
   onChange: (p: Partial<Invoice>) => void;
   onRemove: () => void;
   onHold: () => void;
@@ -1036,6 +1054,7 @@ function InvoiceRow({
     <TableRow
       style={index !== undefined ? ({ "--index": index } as React.CSSProperties) : undefined}
       className={index !== undefined ? "stagger-item" : undefined}
+      {...highlightProps}
     >
       <TableCell className="metric-mono text-muted-foreground">
         {loadNumber && loadNumber > 0 ? loadNumber : "—"}
@@ -1142,6 +1161,7 @@ function HeldCard({
   held,
   todayTowns,
   townOptions,
+  highlightProps,
   onChange,
   onToggleCollection,
   onPick,
@@ -1151,6 +1171,10 @@ function HeldCard({
   held: HeldInvoice;
   todayTowns: string[];
   townOptions: string[];
+  highlightProps?: {
+    "data-state"?: "selected";
+    onClick: (e: React.MouseEvent) => void;
+  };
   onChange: (p: Partial<Pick<HeldInvoice, "weight" | "area" | "doc" | "customer">>) => void;
   onToggleCollection: (v: boolean) => void;
   onPick: () => void;
@@ -1160,7 +1184,13 @@ function HeldCard({
   const pickable = canPickHeld(held, todayTowns);
   const isCollection = !!held.collection || held.reason === "collection";
   return (
-    <div className="space-y-3 rounded-xl border border-border bg-panel-2/40 p-4">
+    <div
+      className={cn(
+        "space-y-3 rounded-xl border border-border bg-panel-2/40 p-4 transition-colors",
+        highlightProps?.["data-state"] === "selected" && "bg-primary/10 ring-1 ring-primary/30",
+      )}
+      {...highlightProps}
+    >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="metric-mono text-sm font-medium">{held.doc}</div>
@@ -1226,6 +1256,7 @@ function HeldRow({
   held,
   todayTowns,
   townOptions,
+  highlightProps,
   onChange,
   onToggleCollection,
   onPick,
@@ -1235,6 +1266,10 @@ function HeldRow({
   held: HeldInvoice;
   todayTowns: string[];
   townOptions: string[];
+  highlightProps?: {
+    "data-state"?: "selected";
+    onClick: (e: React.MouseEvent) => void;
+  };
   onChange: (p: Partial<Pick<HeldInvoice, "weight" | "area" | "doc" | "customer">>) => void;
   onToggleCollection: (v: boolean) => void;
   onPick: () => void;
@@ -1244,7 +1279,13 @@ function HeldRow({
   const pickable = canPickHeld(held, todayTowns);
   const isCollection = !!held.collection || held.reason === "collection";
   return (
-    <tr className="border-b border-border last:border-0">
+    <tr
+      className={cn(
+        "cursor-pointer border-b border-border last:border-0 transition-colors hover:bg-muted/50",
+        highlightProps?.["data-state"] === "selected" && "bg-primary/10",
+      )}
+      {...highlightProps}
+    >
       <td className="px-3 py-2 align-middle">
         <span className="metric-mono">{held.doc}</span>
       </td>

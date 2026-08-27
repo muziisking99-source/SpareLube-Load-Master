@@ -209,7 +209,15 @@ export function PrintScreen() {
   /** Truck sheets: load # lowest → highest; invoices without a load # last. */
   function sortInvoices(list: typeof plan.invoices, tripId?: string | null) {
     return [...list].sort((a, b) =>
-      compareByLoadingNumber(customers, a, b, tripId, trips, plan.dayStopOrder),
+      compareByLoadingNumber(
+        customers,
+        a,
+        b,
+        tripId,
+        trips,
+        plan.dayStopOrder,
+        plan.dayStopSequence,
+      ),
     );
   }
 

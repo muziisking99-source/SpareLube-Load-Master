@@ -1,13 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowDown,
   ArrowRight,
-  ArrowUp,
   Ban,
+  GripVertical,
   Play,
   RotateCcw,
   Undo2,
 } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { truckWeight } from "@/lib/allocation";
@@ -18,6 +34,7 @@ import {
 } from "@/lib/loadingOrder";
 import { townsForTruckDay, tripById } from "@/lib/trips";
 import type { Invoice, Truck } from "@/lib/types";
+import { useRowHighlight } from "@/lib/useRowHighlight";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -411,10 +428,19 @@ function TruckWorkbench({
   const customers = useStore((s) => s.customers);
   const trips = useStore((s) => s.trips);
   const dayStopOrder = useStore((s) => s.plans[s.currentDate]?.dayStopOrder ?? {});
+  const dayStopSequence = useStore(
+    (s) => s.plans[s.currentDate]?.dayStopSequence ?? {},
+  );
   const sendToSecondRound = useStore((s) => s.sendToSecondRound);
   const setInvoiceRound = useStore((s) => s.setInvoiceRound);
-  const reorderDayTripStopsPartial = useStore((s) => s.reorderDayTripStopsPartial);
+  const setDayTripStopSequence = useStore((s) => s.setDayTripStopSequence);
   const setDayTripCustomerLoadNumber = useStore((s) => s.setDayTripCustomerLoadNumber);
+  const { highlightProps } = useRowHighlight();
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   const defaultFocus =
     activeTrucks.find((t) => planInvoices.some((i) => i.truckId === t.id))?.id ??
@@ -440,9 +466,25 @@ function TruckWorkbench({
     return planInvoices
       .filter((i) => i.truckId === focusTruck.id)
       .sort((a, b) =>
-        compareByLoadingNumber(customers, a, b, tripId, trips, dayStopOrder),
+        compareByLoadingNumber(
+          customers,
+          a,
+          b,
+          tripId,
+          trips,
+          dayStopOrder,
+          dayStopSequence,
+        ),
       );
-  }, [planInvoices, focusTruck, customers, tripId, trips, dayStopOrder]);
+  }, [
+    planInvoices,
+    focusTruck,
+    customers,
+    tripId,
+    trips,
+    dayStopOrder,
+    dayStopSequence,
+  ]);
 
   const round1 = truckInvoices.filter((i) => (i.round ?? 1) === 1);
   const round2 = truckInvoices.filter((i) => (i.round ?? 1) === 2);
@@ -460,22 +502,6 @@ function TruckWorkbench({
     round2.some((i) => i.id === id),
   );
 
-  /** Customer stop keys in display order (unique). */
-  const stopKeys = useMemo(() => {
-    const keys: string[] = [];
-    const seen = new Set<string>();
-    for (const inv of truckInvoices) {
-      const key =
-        findCustomerKey(customers, inv.customer) ||
-        customerKey({ code: "", name: inv.customer }) ||
-        inv.customer;
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      keys.push(key);
-    }
-    return keys;
-  }, [truckInvoices, customers]);
-
   function customerKeyFor(inv: Invoice) {
     return (
       findCustomerKey(customers, inv.customer) ||
@@ -484,16 +510,22 @@ function TruckWorkbench({
     );
   }
 
-  function moveStop(inv: Invoice, dir: -1 | 1) {
-    if (!tripId) return;
-    const key = customerKeyFor(inv);
-    const index = stopKeys.indexOf(key);
-    if (index < 0) return;
-    const j = index + dir;
-    if (j < 0 || j >= stopKeys.length) return;
-    const next = [...stopKeys];
-    [next[index], next[j]] = [next[j], next[index]];
-    reorderDayTripStopsPartial(tripId, next);
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || !tripId || active.id === over.id) return;
+    const oldIndex = truckInvoices.findIndex((i) => i.id === active.id);
+    const newIndex = truckInvoices.findIndex((i) => i.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    const reordered = arrayMove(truckInvoices, oldIndex, newIndex);
+    const nextKeys: string[] = [];
+    const seen = new Set<string>();
+    for (const inv of reordered) {
+      const key = customerKeyFor(inv);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      nextKeys.push(key);
+    }
+    setDayTripStopSequence(tripId, nextKeys);
   }
 
   function handleSecondRound() {
@@ -682,162 +714,62 @@ function TruckWorkbench({
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    {isAdjust && <TableHead className="w-10" />}
-                    <TableHead className="w-28">Load #</TableHead>
-                    <TableHead>Doc</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Town</TableHead>
-                    <TableHead className="w-24 text-right">Weight</TableHead>
-                    <TableHead className="w-16">Round</TableHead>
-                    {isAdjust && (
-                      <TableHead className="w-28 text-right">Actions</TableHead>
-                    )}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {truckInvoices.map((i) => {
-                    const key = customerKeyFor(i);
-                    const loadNo = loadingNumberFor(
-                      customers,
-                      i.customer,
-                      i.area,
-                      tripId,
-                      trips,
-                      dayStopOrder,
-                    );
-                    const stopIndex = stopKeys.indexOf(key);
-                    const checked = selected.includes(i.id);
-                    return (
-                      <TableRow
-                        key={i.id}
-                        className={cn(
-                          "hover:bg-panel-2/80",
-                          isAdjust && checked && "bg-primary/5",
-                        )}
-                      >
-                        {isAdjust && (
-                          <TableCell>
-                            <Checkbox
-                              checked={checked}
-                              onCheckedChange={() => onToggleSelect(i.id)}
-                            />
-                          </TableCell>
-                        )}
-                        <TableCell>
-                          {isAdjust && tripId ? (
-                            <div className="flex items-center gap-0.5">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="size-7"
-                                disabled={stopIndex <= 0}
-                                onClick={() => moveStop(i, -1)}
-                                aria-label="Move stop up"
-                              >
-                                <ArrowUp className="size-3.5" />
-                              </Button>
-                              <Input
-                                type="number"
-                                min={0}
-                                value={loadNo || ""}
-                                onChange={(e) => {
-                                  const n = Number(e.target.value);
-                                  setDayTripCustomerLoadNumber(
-                                    tripId,
-                                    key,
-                                    Number.isFinite(n) ? n : 0,
-                                  );
-                                }}
-                                className="metric-mono h-8 w-14"
-                                title="Load # (this day only)"
-                              />
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="size-7"
-                                disabled={stopIndex < 0 || stopIndex >= stopKeys.length - 1}
-                                onClick={() => moveStop(i, 1)}
-                                aria-label="Move stop down"
-                              >
-                                <ArrowDown className="size-3.5" />
-                              </Button>
-                            </div>
-                          ) : (
-                            <span className="metric-mono text-muted-foreground">
-                              {loadNo > 0 ? loadNo : "—"}
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="metric-mono text-sm font-medium">
-                          {i.doc}
-                          <span className="ml-1.5 inline-flex gap-1">
-                            {i.exception && (
-                              <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">
-                                Exception
-                              </Badge>
-                            )}
-                            {i.collection && (
-                              <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal">
-                                Collection
-                              </Badge>
-                            )}
-                          </span>
-                        </TableCell>
-                        <TableCell className="max-w-[14rem] truncate">{i.customer}</TableCell>
-                        <TableCell className="text-muted-foreground">{i.area || "—"}</TableCell>
-                        <TableCell className="metric-mono text-right">
-                          {i.weight.toFixed(0)}
-                        </TableCell>
-                        <TableCell>
-                          <span
-                            className={cn(
-                              "metric-mono text-xs",
-                              (i.round ?? 1) === 2 ? "text-warn" : "text-muted-foreground",
-                            )}
-                          >
-                            R{i.round ?? 1}
-                          </span>
-                        </TableCell>
-                        {isAdjust && (
-                          <TableCell className="text-right">
-                            <div className="inline-flex items-center justify-end gap-0.5">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 px-2 text-xs"
-                                onClick={() => onMoveInvoice(i)}
-                              >
-                                Move
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="size-8 text-muted-foreground hover:text-destructive"
-                                onClick={() => onUnallocate(i)}
-                                title="Move to unallocated"
-                              >
-                                <Ban className="size-3.5" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        )}
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={isAdjust && tripId ? handleDragEnd : undefined}
+              >
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      {isAdjust && <TableHead className="w-14" />}
+                      <TableHead className="w-28">Load #</TableHead>
+                      <TableHead>Doc</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Town</TableHead>
+                      <TableHead className="w-24 text-right">Weight</TableHead>
+                      <TableHead className="w-16">Round</TableHead>
+                      {isAdjust && (
+                        <TableHead className="w-28 text-right">Actions</TableHead>
+                      )}
+                    </TableRow>
+                  </TableHeader>
+                  <SortableContext
+                    items={truckInvoices.map((i) => i.id)}
+                    strategy={verticalListSortingStrategy}
+                    disabled={!isAdjust || !tripId}
+                  >
+                    <TableBody>
+                      {truckInvoices.map((i) => (
+                        <SortableTruckInvoiceRow
+                          key={i.id}
+                          inv={i}
+                          isAdjust={isAdjust}
+                          tripId={tripId}
+                          customers={customers}
+                          trips={trips}
+                          dayStopOrder={dayStopOrder}
+                          checked={selected.includes(i.id)}
+                          highlightProps={highlightProps(i.id)}
+                          onToggleSelect={() => onToggleSelect(i.id)}
+                          onSetLoad={(key, n) =>
+                            tripId && setDayTripCustomerLoadNumber(tripId, key, n)
+                          }
+                          customerKeyFor={customerKeyFor}
+                          onMoveInvoice={() => onMoveInvoice(i)}
+                          onUnallocate={() => onUnallocate(i)}
+                        />
+                      ))}
+                    </TableBody>
+                  </SortableContext>
+                </Table>
+              </DndContext>
             </div>
           )}
           {isAdjust && tripId && truckInvoices.length > 0 && (
             <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-              Load # and ↑↓ apply to this day only — Admin → Trips stop order is unchanged.
+              Drag rows to reorder this day only (Load # stays as typed). Admin → Trips is
+              unchanged.
             </p>
           )}
         </section>
@@ -877,6 +809,7 @@ function TruckWorkbench({
                         "hover:bg-panel-2/80",
                         isAdjust && checked && "bg-primary/5",
                       )}
+                      {...highlightProps(i.id)}
                     >
                       {isAdjust && (
                         <TableCell>
@@ -928,6 +861,167 @@ function TruckWorkbench({
         </section>
       )}
     </div>
+  );
+}
+
+function SortableTruckInvoiceRow({
+  inv,
+  isAdjust,
+  tripId,
+  customers,
+  trips,
+  dayStopOrder,
+  checked,
+  highlightProps,
+  onToggleSelect,
+  onSetLoad,
+  customerKeyFor,
+  onMoveInvoice,
+  onUnallocate,
+}: {
+  inv: Invoice;
+  isAdjust: boolean;
+  tripId: string | null;
+  customers: Record<string, import("@/lib/types").CustomerMemory>;
+  trips: import("@/lib/types").Trip[];
+  dayStopOrder: Record<string, Record<string, number>>;
+  checked: boolean;
+  highlightProps: {
+    "data-state"?: "selected";
+    onClick: (e: React.MouseEvent) => void;
+  };
+  onToggleSelect: () => void;
+  onSetLoad: (key: string, n: number) => void;
+  customerKeyFor: (inv: Invoice) => string;
+  onMoveInvoice: () => void;
+  onUnallocate: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: inv.id, disabled: !isAdjust || !tripId });
+
+  const key = customerKeyFor(inv);
+  const loadNo = loadingNumberFor(
+    customers,
+    inv.customer,
+    inv.area,
+    tripId,
+    trips,
+    dayStopOrder,
+  );
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.55 : 1,
+  };
+
+  return (
+    <TableRow
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "hover:bg-panel-2/80",
+        isAdjust && checked && "bg-primary/5",
+      )}
+      {...highlightProps}
+    >
+      {isAdjust && (
+        <TableCell>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              className="inline-flex size-7 cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-muted active:cursor-grabbing"
+              aria-label="Drag to reorder"
+              data-no-row-highlight
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical className="size-3.5" />
+            </button>
+            <Checkbox checked={checked} onCheckedChange={onToggleSelect} />
+          </div>
+        </TableCell>
+      )}
+      <TableCell>
+        {isAdjust && tripId ? (
+          <Input
+            type="number"
+            min={0}
+            value={loadNo || ""}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              onSetLoad(key, Number.isFinite(n) ? n : 0);
+            }}
+            className="metric-mono h-8 w-14"
+            title="Load # (this day only)"
+            data-no-row-highlight
+          />
+        ) : (
+          <span className="metric-mono text-muted-foreground">
+            {loadNo > 0 ? loadNo : "—"}
+          </span>
+        )}
+      </TableCell>
+      <TableCell className="metric-mono text-sm font-medium">
+        {inv.doc}
+        <span className="ml-1.5 inline-flex gap-1">
+          {inv.exception && (
+            <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">
+              Exception
+            </Badge>
+          )}
+          {inv.collection && (
+            <Badge variant="secondary" className="h-5 px-1.5 text-[10px] font-normal">
+              Collection
+            </Badge>
+          )}
+        </span>
+      </TableCell>
+      <TableCell className="max-w-[14rem] truncate">{inv.customer}</TableCell>
+      <TableCell className="text-muted-foreground">{inv.area || "—"}</TableCell>
+      <TableCell className="metric-mono text-right">{inv.weight.toFixed(0)}</TableCell>
+      <TableCell>
+        <span
+          className={cn(
+            "metric-mono text-xs",
+            (inv.round ?? 1) === 2 ? "text-warn" : "text-muted-foreground",
+          )}
+        >
+          R{inv.round ?? 1}
+        </span>
+      </TableCell>
+      {isAdjust && (
+        <TableCell className="text-right">
+          <div className="inline-flex items-center justify-end gap-0.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 px-2 text-xs"
+              onClick={onMoveInvoice}
+            >
+              Move
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-8 text-muted-foreground hover:text-destructive"
+              onClick={onUnallocate}
+              title="Move to unallocated"
+            >
+              <Ban className="size-3.5" />
+            </Button>
+          </div>
+        </TableCell>
+      )}
+    </TableRow>
   );
 }
 

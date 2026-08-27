@@ -48,6 +48,7 @@ import { StatTile } from "./ui/StatTile";
 import { FormField } from "./ui/FormField";
 import { ScreenHeader } from "./ui/ScreenHeader";
 import { cn } from "@/lib/utils";
+import { useRowHighlight } from "@/lib/useRowHighlight";
 
 type CompareResult = {
   fileName: string;
@@ -67,6 +68,7 @@ export function LockScreen() {
   const unlockPlan = useStore((s) => s.unlockPlan);
   const setStep = useStore((s) => s.setStep);
   const checkPin = useStore((s) => s.checkPin);
+  const { highlightProps } = useRowHighlight();
 
   const [showLockConfirm, setShowLockConfirm] = useState(false);
   const [showUnlock, setShowUnlock] = useState(false);
@@ -458,6 +460,7 @@ export function LockScreen() {
                     key={t.id}
                     style={{ "--index": idx } as React.CSSProperties}
                     className="stagger-item"
+                    {...highlightProps(t.id)}
                   >
                     <TableCell className="font-medium">{t.name}</TableCell>
                     <TableCell>

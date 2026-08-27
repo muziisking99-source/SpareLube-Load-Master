@@ -1,5 +1,5 @@
 import type { CustomerMemory, Invoice, Plan, Trip, Truck } from "./types";
-import { loadingNumberFor } from "./loadingOrder";
+import { compareByLoadingNumber } from "./loadingOrder";
 import { townsForTruckDay } from "./trips";
 
 export function truckWeight(inv: Invoice[], truckId: string, round?: number) {
@@ -18,14 +18,19 @@ export function sortForLoad(
   tripId?: string | null,
   trips?: Trip[],
   dayStopOrder?: Record<string, Record<string, number>>,
+  dayStopSequence?: Record<string, string[]>,
 ): Invoice[] {
   return [...list].sort((a, b) => {
-    const la = loadingNumberFor(customers, a.customer, a.area, tripId, trips, dayStopOrder);
-    const lb = loadingNumberFor(customers, b.customer, b.area, tripId, trips, dayStopOrder);
-    const aUnset = la <= 0 ? 1 : 0;
-    const bUnset = lb <= 0 ? 1 : 0;
-    if (aUnset !== bUnset) return aUnset - bUnset;
-    if (la !== lb) return la - lb;
+    const bySeq = compareByLoadingNumber(
+      customers,
+      a,
+      b,
+      tripId,
+      trips,
+      dayStopOrder,
+      dayStopSequence,
+    );
+    if (bySeq !== 0) return bySeq;
     return b.weight - a.weight;
   });
 }
@@ -42,6 +47,7 @@ export function overflowInvoiceIds(
   tripId?: string | null,
   trips?: Trip[],
   dayStopOrder?: Record<string, Record<string, number>>,
+  dayStopSequence?: Record<string, string[]>,
 ): string[] {
   const r1 = sortForLoad(
     invoices.filter((i) => i.truckId === truckId && (i.round ?? 1) === 1),
@@ -49,6 +55,7 @@ export function overflowInvoiceIds(
     tripId,
     trips,
     dayStopOrder,
+    dayStopSequence,
   );
   let w = 0;
   const overflow: string[] = [];
@@ -73,6 +80,7 @@ export function allocate(
     plan.truckDay.map((td) => [td.truckId, td.tripId] as const),
   );
   const dayStopOrder = plan.dayStopOrder ?? {};
+  const dayStopSequence = plan.dayStopSequence ?? {};
   const invoices = plan.invoices.map((i) => ({
     ...i,
     truckId: null as string | null,
@@ -100,7 +108,10 @@ export function allocate(
       ),
     ] as string[];
     const tripId = tripIds.length === 1 ? tripIds[0] : null;
-    byArea.set(area, sortForLoad(list, customers, tripId, trips, dayStopOrder));
+    byArea.set(
+      area,
+      sortForLoad(list, customers, tripId, trips, dayStopOrder, dayStopSequence),
+    );
   }
 
   for (const [area, list] of byArea) {

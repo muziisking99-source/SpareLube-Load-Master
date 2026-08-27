@@ -40,11 +40,24 @@ const TableFooter = React.forwardRef<
 TableFooter.displayName = "TableFooter";
 
 const TableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTMLTableRowElement>>(
-  ({ className, ...props }, ref) => (
+  ({ className, onClick, ...props }, ref) => (
     <tr
       ref={ref}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick(e as unknown as React.MouseEvent<HTMLTableRowElement>);
+              }
+            }
+          : undefined
+      }
       className={cn(
-        "border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+        "border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-primary/10",
+        onClick && "cursor-pointer focus-visible:outline-none focus-visible:bg-primary/10",
         className,
       )}
       {...props}

@@ -16,7 +16,7 @@ import {
   reorderCustomersInArea,
   setCustomerLoadingNumber as applyLoadingNumber,
   mergePartialTripReorder,
-  mergePartialDayReorder,
+  mergeDayStopSequence,
 } from "./loadingOrder";
 import type { ParsedRow } from "./parse";
 import { customerKey, findCustomer, findCustomerByCode, findCustomerKey } from "./customers";
@@ -59,6 +59,7 @@ function emptyPlan(date: string): Plan {
     truckDay: [],
     invoices: [],
     dayStopOrder: {},
+    dayStopSequence: {},
     locked: false,
     createdAt: new Date().toISOString(),
     step: "setup",
@@ -193,9 +194,9 @@ type State = {
    */
   reorderTripStopsPartial: (tripId: string, orderedKeys: string[]) => void;
   /**
-   * Day-only stop reorder for Adjust — writes plan.dayStopOrder, not Admin trips.
+   * Day-only drag sequence for Adjust — writes plan.dayStopSequence, does not renumber Load #.
    */
-  reorderDayTripStopsPartial: (tripId: string, orderedKeys: string[]) => void;
+  setDayTripStopSequence: (tripId: string, orderedKeys: string[]) => void;
   /** Day-only load # for Adjust. */
   setDayTripCustomerLoadNumber: (tripId: string, customerKey: string, n: number) => void;
 
@@ -667,26 +668,26 @@ export const useStore = create<State>((set, get) => {
       }));
       log("trip.reorder", `Adjusted stop order on trip ${tripId}`);
     },
-    reorderDayTripStopsPartial: (tripId, orderedKeys) => {
+    setDayTripStopSequence: (tripId, orderedKeys) => {
       patchPlan((p) => {
         const trip = tripById(get().trips, tripId);
         if (!trip) return p;
-        const dayMap = p.dayStopOrder?.[tripId];
-        const stopOrder = mergePartialDayReorder(
+        const existing = p.dayStopSequence?.[tripId];
+        const sequence = mergeDayStopSequence(
           get().customers,
           trip,
-          dayMap,
+          existing,
           orderedKeys,
         );
         return {
           ...p,
-          dayStopOrder: {
-            ...(p.dayStopOrder ?? {}),
-            [tripId]: stopOrder,
+          dayStopSequence: {
+            ...(p.dayStopSequence ?? {}),
+            [tripId]: sequence,
           },
         };
       });
-      log("plan.day_reorder", `Day stop order adjusted for trip ${tripId}`);
+      log("plan.day_sequence", `Day stop sequence adjusted for trip ${tripId}`);
     },
     setDayTripCustomerLoadNumber: (tripId, key, n) => {
       patchPlan((p) => {
@@ -850,6 +851,7 @@ export const useStore = create<State>((set, get) => {
               truckDay: [],
               invoices: [],
               dayStopOrder: {},
+              dayStopSequence: {},
               locked: r.locked,
               createdAt: r.createdAt,
               step: r.step,
@@ -1646,6 +1648,7 @@ export const useStore = create<State>((set, get) => {
           plan.truckDay.find((td) => td.truckId === truckId)?.tripId,
           s.trips,
           plan.dayStopOrder,
+          plan.dayStopSequence,
         );
       }
       if (ids.length === 0) return 0;

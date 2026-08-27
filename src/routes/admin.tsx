@@ -36,6 +36,7 @@ import {
 } from "@/components/planner/AdminSearchInput";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { SyncStatusChip } from "@/components/planner/SyncStatusChip";
+import { useRowHighlight } from "@/lib/useRowHighlight";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -143,6 +144,7 @@ function AdminConsole({
   const importAreas = useStore((s) => s.importAreas);
   const deleteAreaCatalog = useStore((s) => s.deleteAreaCatalog);
   const deleteCustomer = useStore((s) => s.deleteCustomer);
+  const { highlightProps } = useRowHighlight();
 
   const [areaFilter, setAreaFilter] = useState<string>("all");
   const [importing, setImporting] = useState(false);
@@ -693,7 +695,7 @@ function AdminConsole({
                       {filteredTowns.map((area) => {
                         const count = customersByArea[area]?.length ?? 0;
                         return (
-                          <TableRow key={area}>
+                          <TableRow key={area} {...highlightProps(area)}>
                             <TableCell className="font-medium">{area}</TableCell>
                             <TableCell className="metric-mono">{count}</TableCell>
                             <TableCell className="text-right">
@@ -826,7 +828,7 @@ function AdminConsole({
                     </TableHeader>
                     <TableBody>
                       {filteredTrucks.map((t) => (
-                        <TableRow key={t.id}>
+                        <TableRow key={t.id} {...highlightProps(t.id)}>
                           <TableCell>
                             <Checkbox
                               checked={t.active}
@@ -899,7 +901,7 @@ function AdminConsole({
                     </TableHeader>
                     <TableBody>
                       {filteredAudit.map((a) => (
-                        <TableRow key={a.id}>
+                        <TableRow key={a.id} {...highlightProps(a.id)}>
                           <TableCell className="metric-mono text-xs">
                             {new Date(a.ts).toLocaleString()}
                           </TableCell>
@@ -943,7 +945,7 @@ function AdminConsole({
                     </TableHeader>
                     <TableBody>
                       {filteredPlans.map((p) => (
-                        <TableRow key={p.date}>
+                        <TableRow key={p.date} {...highlightProps(p.date)}>
                           <TableCell className="metric-mono">{p.date}</TableCell>
                           <TableCell>{p.invoices.length}</TableCell>
                           <TableCell>

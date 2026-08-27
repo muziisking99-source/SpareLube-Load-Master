@@ -1,5 +1,5 @@
 import type { CustomerMemory, Trip } from "./types";
-import { customerKey, findCustomer } from "./customers";
+import { customerKey, findCustomer, findCustomerKey } from "./customers";
 import { tripById } from "./trips";
 
 /** Customers in an area, sorted by load # ascending (unset last). */
@@ -125,6 +125,25 @@ export function loadingNumberFor(
   return c.loadingNumber || 0;
 }
 
+/** Index in day drag sequence, or -1 if not present. */
+export function daySequenceIndex(
+  customers: Record<string, CustomerMemory>,
+  customerName: string,
+  tripId: string | null | undefined,
+  dayStopSequence?: Record<string, string[]>,
+): number {
+  if (!tripId || !dayStopSequence) return -1;
+  const seq = dayStopSequence[tripId];
+  if (!seq?.length) return -1;
+  const key =
+    findCustomerKey(customers, customerName) ||
+    customerKey({ code: "", name: customerName }) ||
+    customerName;
+  const byKey = seq.indexOf(key);
+  if (byKey >= 0) return byKey;
+  return seq.indexOf(customerName);
+}
+
 /**
  * Optional: rewrite load numbers 1…n from a drag order.
  * Prefer manual entry; kept for explicit reorder actions.
@@ -162,7 +181,6 @@ export function customersForTrip(
     const bUnset = lb <= 0 ? 1 : 0;
     if (aUnset !== bUnset) return aUnset - bUnset;
     if (la !== lb) return la - lb;
-    // Keep town order along the trip as secondary sort
     const ai = trip.towns.indexOf(a.defaultArea);
     const bi = trip.towns.indexOf(b.defaultArea);
     if (ai !== bi) return ai - bi;
@@ -170,7 +188,10 @@ export function customersForTrip(
   });
 }
 
-/** Compare invoices for truck sheets: load # lowest → highest, unset last. */
+/**
+ * Compare invoices for truck sheets.
+ * Prefers day drag sequence when set; else load # (day → trip → town).
+ */
 export function compareByLoadingNumber(
   customers: Record<string, CustomerMemory>,
   a: { customer: string; area: string; doc: string },
@@ -178,7 +199,20 @@ export function compareByLoadingNumber(
   tripId?: string | null,
   trips?: Trip[],
   dayStopOrder?: Record<string, Record<string, number>>,
+  dayStopSequence?: Record<string, string[]>,
 ): number {
+  if (tripId && dayStopSequence?.[tripId]?.length) {
+    const ia = daySequenceIndex(customers, a.customer, tripId, dayStopSequence);
+    const ib = daySequenceIndex(customers, b.customer, tripId, dayStopSequence);
+    if (ia >= 0 || ib >= 0) {
+      const aUnset = ia < 0 ? 1 : 0;
+      const bUnset = ib < 0 ? 1 : 0;
+      if (aUnset !== bUnset) return aUnset - bUnset;
+      if (ia !== ib) return ia - ib;
+      return a.doc.localeCompare(b.doc);
+    }
+  }
+
   const la = loadingNumberFor(customers, a.customer, a.area, tripId, trips, dayStopOrder);
   const lb = loadingNumberFor(customers, b.customer, b.area, tripId, trips, dayStopOrder);
   const aUnset = la <= 0 ? 1 : 0;
@@ -231,7 +265,53 @@ export function mergePartialTripReorder(
 }
 
 /**
+ * Merge a dragged subset into the full day stop sequence without renumbering Load #.
+ */
+export function mergeDayStopSequence(
+  customers: Record<string, CustomerMemory>,
+  trip: Trip,
+  existingSequence: string[] | undefined,
+  orderedSubsetKeys: string[],
+): string[] {
+  const all = customersForTrip(customers, trip);
+  const allKeys = all.map((c) => customerKey(c));
+  const base =
+    existingSequence && existingSequence.length > 0
+      ? [
+          ...existingSequence.filter((k) => allKeys.includes(k)),
+          ...allKeys.filter((k) => !existingSequence.includes(k)),
+        ]
+      : allKeys;
+
+  const subset = new Set(orderedSubsetKeys.filter(Boolean));
+  const queue = [...orderedSubsetKeys.filter((k) => k && subset.has(k))];
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  for (const key of base) {
+    if (subset.has(key)) {
+      const next = queue.shift();
+      if (next && !seen.has(next)) {
+        merged.push(next);
+        seen.add(next);
+      }
+    } else if (!seen.has(key)) {
+      merged.push(key);
+      seen.add(key);
+    }
+  }
+  for (const key of queue) {
+    if (!seen.has(key)) {
+      merged.push(key);
+      seen.add(key);
+    }
+  }
+  return merged;
+}
+
+/**
  * Day-scoped partial reorder: uses existing day map if present, else trip template, then merges.
+ * @deprecated Prefer mergeDayStopSequence for Adjust (avoids 1…n renumber).
  */
 export function mergePartialDayReorder(
   customers: Record<string, CustomerMemory>,

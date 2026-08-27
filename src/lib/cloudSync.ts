@@ -7,7 +7,7 @@ import type {
   Truck,
   TruckDay,
 } from "./types";
-import { normalizeCustomer, normalizeDayStopOrder, normalizeHeldInvoice, normalizeInvoice, normalizeTruckDay } from "./types";
+import { normalizeCustomer, normalizeDayStopOrder, normalizeDayStopSequence, normalizeHeldInvoice, normalizeInvoice, normalizeTruckDay } from "./types";
 import { customerKey } from "./customers";
 import { normalizeTrip } from "./trips";
 import { getSupabase, isCloudConfigured } from "./supabase";
@@ -269,6 +269,10 @@ function normalizePlans(raw: Record<string, Plan>): Record<string, Plan> {
         (p as Plan & { day_stop_order?: unknown }).dayStopOrder ??
           (p as Plan & { day_stop_order?: unknown }).day_stop_order,
       ),
+      dayStopSequence: normalizeDayStopSequence(
+        (p as Plan & { day_stop_sequence?: unknown }).dayStopSequence ??
+          (p as Plan & { day_stop_sequence?: unknown }).day_stop_sequence,
+      ),
     };
   }
   return plans;
@@ -391,9 +395,20 @@ export async function fetchPlanFromCloud(date: string): Promise<Plan | null> {
   if (!sb) return null;
   let { data, error } = await sb
     .from("plans")
-    .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order")
+    .select(
+      "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence",
+    )
     .eq("date", date)
     .maybeSingle();
+  if (error && /day_stop_sequence|schema cache|does not exist/i.test(error.message)) {
+    const mid = await sb
+      .from("plans")
+      .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order")
+      .eq("date", date)
+      .maybeSingle();
+    data = mid.data as typeof data;
+    error = mid.error;
+  }
   if (error && /day_stop_order|schema cache|does not exist/i.test(error.message)) {
     const mid = await sb
       .from("plans")
@@ -423,6 +438,7 @@ export async function fetchPlanFromCloud(date: string): Promise<Plan | null> {
     created_at?: string;
     step?: Plan["step"];
     day_stop_order?: unknown;
+    day_stop_sequence?: unknown;
   };
   return normalizePlans({
     [date]: {
@@ -432,6 +448,7 @@ export async function fetchPlanFromCloud(date: string): Promise<Plan | null> {
       truckDay: row.truck_day ?? [],
       invoices: row.invoices ?? [],
       dayStopOrder: normalizeDayStopOrder(row.day_stop_order),
+      dayStopSequence: normalizeDayStopSequence(row.day_stop_sequence),
       locked: !!row.locked,
       createdAt: row.created_at ?? new Date().toISOString(),
       step: row.step ?? "setup",
@@ -476,7 +493,9 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
     sb.from("customers").select("id,code,name,default_area,loading_number,first_seen,collection"),
     sb
       .from("plans")
-      .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order")
+      .select(
+        "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence",
+      )
       .gte("date", cutoff),
     sb
       .from("audit_entries")
@@ -499,6 +518,14 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
 
   let plansData = plansRes.data;
   let plansError = plansRes.error;
+  if (plansError && /day_stop_sequence|schema cache|does not exist/i.test(plansError.message)) {
+    const mid = await sb
+      .from("plans")
+      .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order")
+      .gte("date", cutoff);
+    plansData = mid.data as typeof plansData;
+    plansError = mid.error;
+  }
   if (plansError && /day_stop_order|schema cache|does not exist/i.test(plansError.message)) {
     const mid = await sb
       .from("plans")
@@ -552,9 +579,18 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
   if (activeDate < cutoff) {
     let extra = await sb
       .from("plans")
-      .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order")
+      .select(
+        "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence",
+      )
       .eq("date", activeDate)
       .maybeSingle();
+    if (extra.error && /day_stop_sequence|schema cache|does not exist/i.test(extra.error.message)) {
+      extra = await sb
+        .from("plans")
+        .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order")
+        .eq("date", activeDate)
+        .maybeSingle();
+    }
     if (extra.error && /day_stop_order|schema cache|does not exist/i.test(extra.error.message)) {
       extra = await sb
         .from("plans")
@@ -600,6 +636,7 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
       created_at?: string;
       step?: Plan["step"];
       day_stop_order?: unknown;
+      day_stop_sequence?: unknown;
     };
     plans[row.date] = normalizePlans({
       [row.date]: {
@@ -609,6 +646,7 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
         truckDay: r.truck_day ?? [],
         invoices: r.invoices ?? [],
         dayStopOrder: normalizeDayStopOrder(r.day_stop_order),
+        dayStopSequence: normalizeDayStopSequence(r.day_stop_sequence),
         locked: !!r.locked,
         createdAt: r.created_at ?? new Date().toISOString(),
         step: r.step ?? "setup",
@@ -847,6 +885,7 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
       areas: p.areas ?? [],
       trip_ids: p.tripIds ?? [],
       day_stop_order: p.dayStopOrder ?? {},
+      day_stop_sequence: p.dayStopSequence ?? {},
       truck_day: p.truckDay ?? [],
       invoices: p.invoices ?? [],
       locked: !!p.locked,
@@ -859,11 +898,50 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
       await upsertInChunks("plans", planRows, "date");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (/day_stop_order|schema cache|does not exist/i.test(msg)) {
+      if (/day_stop_sequence|schema cache|does not exist/i.test(msg)) {
         try {
           await upsertInChunks(
             "plans",
-            planRows.map(({ day_stop_order: _d, ...rest }) => rest),
+            planRows.map(({ day_stop_sequence: _s, ...rest }) => rest),
+            "date",
+          );
+        } catch (err2) {
+          const msg2 = err2 instanceof Error ? err2.message : String(err2);
+          if (/day_stop_order|schema cache|does not exist/i.test(msg2)) {
+            try {
+              await upsertInChunks(
+                "plans",
+                planRows.map(({ day_stop_sequence: _s, day_stop_order: _d, ...rest }) => rest),
+                "date",
+              );
+            } catch (err3) {
+              const msg3 = err3 instanceof Error ? err3.message : String(err3);
+              if (!/trip_ids|schema cache|does not exist/i.test(msg3)) throw err3;
+              await upsertInChunks(
+                "plans",
+                planRows.map(
+                  ({ day_stop_sequence: _s, day_stop_order: _d, trip_ids: _t, ...rest }) => rest,
+                ),
+                "date",
+              );
+            }
+          } else if (!/trip_ids|schema cache|does not exist/i.test(msg2)) {
+            throw err2;
+          } else {
+            await upsertInChunks(
+              "plans",
+              planRows.map(
+                ({ day_stop_sequence: _s, day_stop_order: _d, trip_ids: _t, ...rest }) => rest,
+              ),
+              "date",
+            );
+          }
+        }
+      } else if (/day_stop_order|schema cache|does not exist/i.test(msg)) {
+        try {
+          await upsertInChunks(
+            "plans",
+            planRows.map(({ day_stop_order: _d, day_stop_sequence: _s, ...rest }) => rest),
             "date",
           );
         } catch (err2) {
@@ -871,7 +949,9 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
           if (!/trip_ids|schema cache|does not exist/i.test(msg2)) throw err2;
           await upsertInChunks(
             "plans",
-            planRows.map(({ day_stop_order: _d, trip_ids: _t, ...rest }) => rest),
+            planRows.map(
+              ({ day_stop_order: _d, day_stop_sequence: _s, trip_ids: _t, ...rest }) => rest,
+            ),
             "date",
           );
         }
@@ -880,7 +960,9 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
       } else {
         await upsertInChunks(
           "plans",
-          planRows.map(({ trip_ids: _t, day_stop_order: _d, ...rest }) => rest),
+          planRows.map(
+            ({ trip_ids: _t, day_stop_order: _d, day_stop_sequence: _s, ...rest }) => rest,
+          ),
           "date",
         );
       }

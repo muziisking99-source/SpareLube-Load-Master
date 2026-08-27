@@ -23,6 +23,7 @@ import { EmptyState } from "./ui/EmptyState";
 import { FormField } from "./ui/FormField";
 import { AdminSearchInput, matchesQuery } from "./AdminSearchInput";
 import { cn } from "@/lib/utils";
+import { useRowHighlight } from "@/lib/useRowHighlight";
 
 export function SetupScreen() {
   const plan = useStore((s) => s.plans[s.currentDate]);
@@ -33,6 +34,7 @@ export function SetupScreen() {
   const setPlanTrips = useStore((s) => s.setPlanTrips);
   const setStep = useStore((s) => s.setStep);
   const deleteDay = useStore((s) => s.deleteDay);
+  const { highlightProps } = useRowHighlight();
 
   const [tripSearch, setTripSearch] = useState("");
   const [continueAttempted, setContinueAttempted] = useState(false);
@@ -285,7 +287,11 @@ export function SetupScreen() {
                   {dailyPlans.map((p) => {
                     const isCurrent = p.date === currentDate;
                     return (
-                      <TableRow key={p.date} className={cn(isCurrent && "bg-primary/5")}>
+                      <TableRow
+                        key={p.date}
+                        className={cn(isCurrent && "bg-primary/5")}
+                        {...highlightProps(p.date)}
+                      >
                         <TableCell className="metric-mono">
                           {p.date}
                           {isCurrent && (

@@ -116,6 +116,7 @@ export type Database = {
           created_at: string
           date: string
           day_stop_order: Json
+          day_stop_sequence: Json
           invoices: Json
           locked: boolean
           step: string
@@ -128,6 +129,7 @@ export type Database = {
           created_at?: string
           date: string
           day_stop_order?: Json
+          day_stop_sequence?: Json
           invoices?: Json
           locked?: boolean
           step?: string
@@ -140,6 +142,7 @@ export type Database = {
           created_at?: string
           date?: string
           day_stop_order?: Json
+          day_stop_sequence?: Json
           invoices?: Json
           locked?: boolean
           step?: string
