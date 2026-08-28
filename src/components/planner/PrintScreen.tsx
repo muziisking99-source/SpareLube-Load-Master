@@ -2,7 +2,12 @@ import { useState } from "react";
 import { ArrowLeft, Printer } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { compareByLoadingNumber, loadingNumberFor } from "@/lib/loadingOrder";
-import { tripById } from "@/lib/trips";
+import {
+  tripById,
+  tripIdForInvoice,
+  tripIdsForTruckDay,
+  tripNamesForTruckDay,
+} from "@/lib/trips";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { ScreenHeader } from "./ui/ScreenHeader";
@@ -16,6 +21,7 @@ type LoadStop = {
   area: string;
   count: number;
   weight: number;
+  hasCredit: boolean;
 };
 
 /** Group invoices by customer, preserving load-number order from a sorted list. */
@@ -32,12 +38,14 @@ function groupStopsForLoadSheet(list: Invoice[]): LoadStop[] {
         area: inv.area,
         count: 0,
         weight: 0,
+        hasCredit: false,
       };
       map.set(key, stop);
       order.push(key);
     }
     stop.count += 1;
     stop.weight += inv.weight || 0;
+    if (inv.creditNote || inv.weight < 0) stop.hasCredit = true;
   }
   return order.map((k) => map.get(k)!);
 }
@@ -89,6 +97,7 @@ function LoadStopsTable({
   tripId,
   trips,
   dayStopOrder,
+  truckDay,
 }: {
   stops: LoadStop[];
   customers: Record<string, import("@/lib/types").CustomerMemory>;
@@ -96,6 +105,7 @@ function LoadStopsTable({
   tripId?: string | null;
   trips?: import("@/lib/types").Trip[];
   dayStopOrder?: Record<string, Record<string, number>>;
+  truckDay?: import("@/lib/types").TruckDay;
 }) {
   const invoiceCount = stops.reduce((n, s) => n + s.count, 0);
   return (
@@ -110,11 +120,14 @@ function LoadStopsTable({
       </thead>
       <tbody>
         {stops.map((stop) => {
+          const stopTripId = truckDay
+            ? tripIdForInvoice({ area: stop.area }, truckDay, trips ?? [])
+            : tripId;
           const loadNo = loadingNumberFor(
             customers,
             stop.customer,
             stop.area,
-            tripId,
+            stopTripId,
             trips,
             dayStopOrder,
           );
@@ -142,6 +155,24 @@ function LoadStopsTable({
                       title={`${stop.count} invoices`}
                     >
                       {stop.count}
+                    </span>
+                  )}
+                  {stop.hasCredit && (
+                    <span
+                      className="inv-credit-chip"
+                      style={{
+                        display: "inline-block",
+                        padding: "1px 7px",
+                        borderRadius: 999,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        lineHeight: 1.4,
+                        background: "#fff4e5",
+                        border: "1px solid #d4a574",
+                      }}
+                      title="Includes credit note"
+                    >
+                      CR
                     </span>
                   )}
                 </span>
@@ -191,15 +222,7 @@ export function PrintScreen() {
 
   const active = trucks.filter((t) => t.active);
   const customers = useStore((s) => s.customers);
-  const dayTripId = new Map(
-    plan.truckDay.map((td) => [td.truckId, td.tripId] as const),
-  );
-  const dayTripName = new Map(
-    plan.truckDay.map((td) => {
-      const trip = tripById(trips, td.tripId);
-      return [td.truckId, trip?.name ?? null] as const;
-    }),
-  );
+  const truckDayById = new Map(plan.truckDay.map((td) => [td.truckId, td] as const));
 
   function print(v: "truck" | "master") {
     setView(v);
@@ -207,39 +230,58 @@ export function PrintScreen() {
   }
 
   /** Truck sheets: load # lowest → highest; invoices without a load # last. */
-  function sortInvoices(list: typeof plan.invoices, tripId?: string | null) {
-    return [...list].sort((a, b) =>
-      compareByLoadingNumber(
+  function sortInvoices(
+    list: typeof plan.invoices,
+    truckDay?: (typeof plan.truckDay)[number],
+    fixedTripId?: string | null,
+  ) {
+    return [...list].sort((a, b) => {
+      const tripA =
+        fixedTripId ??
+        (truckDay ? tripIdForInvoice(a, truckDay, trips) : null);
+      const tripB =
+        fixedTripId ??
+        (truckDay ? tripIdForInvoice(b, truckDay, trips) : null);
+      return compareByLoadingNumber(
         customers,
         a,
         b,
-        tripId,
+        tripA,
         trips,
         plan.dayStopOrder,
         plan.dayStopSequence,
-      ),
-    );
+      );
+    });
   }
 
   /** One page per truck. Round 2 (if any) prints on the same page under Round 1. */
   const truckSheets = active.map((t) => {
-    const tripId = dayTripId.get(t.id);
+    const truckDay = truckDayById.get(t.id);
     const onTruck = plan.invoices.filter((i) => i.truckId === t.id);
     const r1 = sortInvoices(
       onTruck.filter((i) => (i.round ?? 1) === 1),
-      tripId,
+      truckDay,
     );
+    const r2TripId = truckDay?.round2TripId ?? null;
     const r2 = sortInvoices(
       onTruck.filter((i) => (i.round ?? 1) === 2),
-      tripId,
+      truckDay,
+      r2TripId,
     );
     return {
       truck: t,
-      tripId,
+      truckDay,
       rounds: [
-        { round: 1, list: r1, stops: groupStopsForLoadSheet(r1) },
+        { round: 1 as const, list: r1, stops: groupStopsForLoadSheet(r1), tripId: null as string | null },
         ...(r2.length > 0
-          ? [{ round: 2, list: r2, stops: groupStopsForLoadSheet(r2) }]
+          ? [
+              {
+                round: 2 as const,
+                list: r2,
+                stops: groupStopsForLoadSheet(r2),
+                tripId: r2TripId,
+              },
+            ]
           : []),
       ],
     };
@@ -289,7 +331,12 @@ export function PrintScreen() {
       {view === "truck" && (
         <div className="print-root" style={{ display: "block" }}>
           {truckSheets.map((sheet) => {
-            const { truck: t, tripId, rounds } = sheet;
+            const { truck: t, truckDay, rounds } = sheet;
+            const sheetTripId = truckDay
+              ? tripIdForInvoice({ area: rounds[0]?.list[0]?.area ?? "" }, truckDay, trips) ??
+                tripIdsForTruckDay(truckDay)[0] ??
+                null
+              : null;
             return (
               <div key={t.id} className="load-sheet">
                 <div
@@ -325,7 +372,7 @@ export function PrintScreen() {
                 >
                   <MetaField label="Date" value={plan.date} />
                   <MetaField label="Truck" value={t.name} />
-                  <MetaField label="Trip" value={dayTripName.get(t.id) || "—"} />
+                  <MetaField label="Trip" value={tripNamesForTruckDay(truckDay, trips) || "—"} />
                   <MetaField label="Driver" blank />
                   <MetaField label="Petty cash" blank />
                   <MetaField
@@ -350,15 +397,19 @@ export function PrintScreen() {
                           }}
                         >
                           Round {r.round}
+                          {r.round === 2 && r.tripId
+                            ? ` — ${tripById(trips, r.tripId)?.name ?? ""}`
+                            : ""}
                         </div>
                       )}
                       <LoadStopsTable
                         stops={r.stops}
                         customers={customers}
                         totalWeight={wt}
-                        tripId={tripId}
+                        tripId={r.tripId ?? sheetTripId}
                         trips={trips}
                         dayStopOrder={plan.dayStopOrder}
+                        truckDay={truckDay}
                       />
                     </div>
                   );
@@ -442,12 +493,15 @@ export function PrintScreen() {
               </thead>
               <tbody>
                 {sortInvoices(plan.invoices).map((i) => {
-                  const tripId = i.truckId ? dayTripId.get(i.truckId) : null;
+                  const truckDay = i.truckId ? truckDayById.get(i.truckId) : undefined;
+                  const invTripId = truckDay
+                    ? tripIdForInvoice(i, truckDay, trips)
+                    : null;
                   const loadNo = loadingNumberFor(
                     customers,
                     i.customer,
                     i.area,
-                    tripId,
+                    invTripId,
                     trips,
                     plan.dayStopOrder,
                   );

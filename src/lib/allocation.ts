@@ -1,6 +1,6 @@
 import type { CustomerMemory, Invoice, Plan, Trip, Truck } from "./types";
 import { compareByLoadingNumber } from "./loadingOrder";
-import { townsForTruckDay } from "./trips";
+import { townsForTruckDay, tripIdsForTruckDay } from "./trips";
 
 export function truckWeight(inv: Invoice[], truckId: string, round?: number) {
   return inv
@@ -76,8 +76,8 @@ export function allocate(
   const dayTowns = new Map(
     plan.truckDay.map((td) => [td.truckId, townsForTruckDay(td, trips)]),
   );
-  const tripByTruck = new Map(
-    plan.truckDay.map((td) => [td.truckId, td.tripId] as const),
+  const tripIdsByTruck = new Map(
+    plan.truckDay.map((td) => [td.truckId, tripIdsForTruckDay(td)] as const),
   );
   const dayStopOrder = plan.dayStopOrder ?? {};
   const dayStopSequence = plan.dayStopSequence ?? {};
@@ -101,10 +101,9 @@ export function allocate(
   for (const [area, list] of byArea) {
     const tripIds = [
       ...new Set(
-        [...tripByTruck.entries()]
+        [...tripIdsByTruck.entries()]
           .filter(([truckId]) => (dayTowns.get(truckId) ?? []).includes(area))
-          .map(([, tripId]) => tripId)
-          .filter(Boolean),
+          .flatMap(([, ids]) => ids),
       ),
     ] as string[];
     const tripId = tripIds.length === 1 ? tripIds[0] : null;

@@ -64,11 +64,15 @@ export type Trip = {
 
 export type TruckDay = {
   truckId: string;
-  /** Assigned named trip for the day */
-  tripId: string | null;
+  /** @deprecated use tripIds */
+  tripId?: string | null;
+  /** Assigned named trips for the day */
+  tripIds?: string[];
+  /** Which trip this truck's Round 2 run is for (from today's selected trips) */
+  round2TripId?: string | null;
   /**
-   * Legacy multi-select towns. Used only when tripId is null.
-   * @deprecated prefer tripId
+   * Legacy multi-select towns. Used only when no trips are assigned.
+   * @deprecated prefer tripIds
    */
   areas?: string[];
 };
@@ -140,21 +144,34 @@ export type AuditEntry = {
   payload?: unknown;
 };
 
-/** Normalize TruckDay — supports legacy area / areas and optional tripId */
+/** Normalize TruckDay — supports legacy tripId, tripIds[], and areas[] */
 export function normalizeTruckDay(raw: {
   truckId: string;
   tripId?: string | null;
+  tripIds?: string[];
+  round2TripId?: string | null;
   areas?: string[];
   area?: string;
 }): TruckDay {
-  const tripId = raw.tripId ?? null;
+  let tripIds: string[] = [];
+  if (Array.isArray(raw.tripIds) && raw.tripIds.length > 0) {
+    tripIds = [...new Set(raw.tripIds.filter(Boolean))];
+  } else if (raw.tripId) {
+    tripIds = [raw.tripId];
+  }
   let areas: string[] = [];
   if (Array.isArray(raw.areas)) {
     areas = raw.areas.filter(Boolean);
   } else if (typeof raw.area === "string" && raw.area) {
     areas = [raw.area];
   }
-  return { truckId: raw.truckId, tripId, areas };
+  return {
+    truckId: raw.truckId,
+    tripId: tripIds[0] ?? null,
+    tripIds,
+    round2TripId: raw.round2TripId ?? null,
+    areas,
+  };
 }
 
 export function normalizeCustomer(raw: Partial<CustomerMemory> & { name: string }): CustomerMemory {
@@ -169,10 +186,11 @@ export function normalizeCustomer(raw: Partial<CustomerMemory> & { name: string 
 }
 
 export function normalizeInvoice(raw: Partial<Invoice> & Pick<Invoice, "id" | "doc" | "customer">): Invoice {
+  const onTruck = raw.truckId != null && raw.truckId !== "";
   const creditNote =
     raw.creditNote !== undefined
       ? !!raw.creditNote
-      : typeof raw.weight === "number" && raw.weight < 0;
+      : !onTruck && typeof raw.weight === "number" && raw.weight < 0;
   return {
     id: raw.id,
     doc: raw.doc,
@@ -195,7 +213,7 @@ export function normalizeHeldInvoice(
     raw.creditNote !== undefined
       ? !!raw.creditNote
       : raw.reason === "credit_note" ||
-        (typeof raw.weight === "number" && raw.weight < 0);
+        (typeof raw.weight === "number" && raw.weight < 0 && raw.creditNote !== false);
   const reason: HeldInvoice["reason"] =
     raw.reason === "manual"
       ? "manual"

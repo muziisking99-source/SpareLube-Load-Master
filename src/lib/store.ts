@@ -9,8 +9,8 @@ import type {
   Truck,
   TruckDay,
 } from "./types";
-import { normalizeHeldInvoice } from "./types";
-import { allocate, overflowInvoiceIds } from "./allocation";
+import { normalizeHeldInvoice, normalizeTruckDay } from "./types";
+import { allocate } from "./allocation";
 import {
   assignCustomerArea,
   reorderCustomersInArea,
@@ -20,7 +20,7 @@ import {
 } from "./loadingOrder";
 import type { ParsedRow } from "./parse";
 import { customerKey, findCustomer, findCustomerByCode, findCustomerKey } from "./customers";
-import { normalizeTrip, townsForTruckDay, townsFromTripIds, townsForPlan, tripById } from "./trips";
+import { normalizeTrip, townsForTruckDay, townsFromTripIds, townsForPlan, tripById, tripIdsForTruckDay } from "./trips";
 import {
   hydrateWarehouse,
   persistWarehouse,
@@ -125,6 +125,8 @@ type State = {
   /** Queue rare audit prune when Admin Audit is opened. */
   openAuditPanel: () => void;
   setTruckDayTrip: (truckId: string, tripId: string | null) => void;
+  /** Assign one or more of today's trips to a truck. */
+  setTruckDayTrips: (truckId: string, tripIds: string[]) => void;
   setTruckDayAreas: (truckId: string, areas: string[]) => void;
   /** @deprecated use setTruckDayTrip */
   setTruckDayArea: (truckId: string, area: string) => void;
@@ -204,8 +206,12 @@ type State = {
   runAllocation: () => void;
   moveInvoice: (invId: string, truckId: string | null, reason?: string) => void;
   bulkMove: (ids: string[], truckId: string | null) => void;
-  /** Move selected (or capacity overflow) invoices on a truck to round 2. Returns count moved. */
-  sendToSecondRound: (truckId: string, invoiceIds?: string[]) => number;
+  /** Move Round 1 invoices on a truck to round 2 for the chosen trip. Returns count moved. */
+  sendToSecondRound: (
+    truckId: string,
+    tripId: string,
+    invoiceIds?: string[],
+  ) => number;
   setInvoiceRound: (ids: string[], round: number) => void;
 
   // undo
@@ -616,9 +622,10 @@ export const useStore = create<State>((set, get) => {
           const p = plans[date];
           plans[date] = {
             ...p,
-            truckDay: p.truckDay.map((td) =>
-              td.tripId === id ? { ...td, tripId: null } : td,
-            ),
+            truckDay: p.truckDay.map((td) => {
+              const ids = tripIdsForTruckDay(td).filter((tid) => tid !== id);
+              return normalizeTruckDay({ ...td, tripIds: ids, tripId: ids[0] ?? null });
+            }),
           };
         }
         return {
@@ -868,18 +875,20 @@ export const useStore = create<State>((set, get) => {
       requestAuditPrune();
       scheduleSave();
     },
-    setTruckDayTrip: (truckId, tripId) => {
+    setTruckDayTrips: (truckId, tripIds) => {
       patchPlan((p) => {
+        const planTripSet = new Set(p.tripIds ?? []);
+        const clean = [...new Set(tripIds.filter((id) => planTripSet.has(id)))];
         const exists = p.truckDay.find((t) => t.truckId === truckId);
-        const next: TruckDay = {
+        const next = normalizeTruckDay({
           truckId,
-          tripId,
+          tripIds: clean,
+          tripId: clean[0] ?? null,
           areas: exists?.areas,
-        };
+        });
         const truckDay = exists
           ? p.truckDay.map((t) => (t.truckId === truckId ? next : t))
           : [...p.truckDay, next];
-        // Keep plan.areas from tripIds when set; otherwise derive from truck assignments (legacy)
         if ((p.tripIds ?? []).length > 0) {
           return { ...p, truckDay };
         }
@@ -889,6 +898,9 @@ export const useStore = create<State>((set, get) => {
         ].sort((a, b) => a.localeCompare(b));
         return { ...p, truckDay, areas };
       });
+    },
+    setTruckDayTrip: (truckId, tripId) => {
+      get().setTruckDayTrips(truckId, tripId ? [tripId] : []);
     },
     setPlanTrips: (tripIds) => {
       const s = get();
@@ -1212,7 +1224,12 @@ export const useStore = create<State>((set, get) => {
           if (i.id !== id) return i;
           const next = { ...i, ...patch };
           if (typeof next.weight === "number" && next.weight < 0) {
-            next.creditNote = true;
+            const loadingOnTruck =
+              patch.creditNote === false ||
+              (patch.truckId !== undefined && patch.truckId !== null);
+            if (!loadingOnTruck) {
+              next.creditNote = true;
+            }
           }
           if (patch.area !== undefined && patch.area.trim()) {
             customerName = next.customer;
@@ -1552,7 +1569,14 @@ export const useStore = create<State>((set, get) => {
       patchPlan((p) => ({
         ...p,
         invoices: p.invoices.map((i) =>
-          i.id === invId ? { ...i, truckId, round: 1 } : i,
+          i.id === invId
+            ? {
+                ...i,
+                truckId,
+                round: 1,
+                ...(truckId ? { creditNote: false } : {}),
+              }
+            : i,
         ),
       }));
       log(
@@ -1582,7 +1606,14 @@ export const useStore = create<State>((set, get) => {
       patchPlan((p) => ({
         ...p,
         invoices: p.invoices.map((i) =>
-          ids.includes(i.id) ? { ...i, truckId, round: 1 } : i,
+          ids.includes(i.id)
+            ? {
+                ...i,
+                truckId,
+                round: 1,
+                ...(truckId ? { creditNote: false } : {}),
+              }
+            : i,
         ),
       }));
       log("invoice.bulkMove", `Bulk moved ${ids.length} → ${truckId ?? "UNALLOCATED"}`);
@@ -1627,11 +1658,15 @@ export const useStore = create<State>((set, get) => {
         },
       });
     },
-    sendToSecondRound: (truckId, invoiceIds) => {
+    sendToSecondRound: (truckId, tripId, invoiceIds) => {
       const s = get();
       const plan = s.plans[s.currentDate] ?? emptyPlan(s.currentDate);
       const truck = s.trucks.find((t) => t.id === truckId);
       if (!truck) return 0;
+      if (!(plan.tripIds ?? []).includes(tripId)) return 0;
+      const trip = s.trips.find((t) => t.id === tripId);
+      if (!trip) return 0;
+      const townSet = new Set(trip.towns);
 
       let ids: string[];
       if (invoiceIds && invoiceIds.length > 0) {
@@ -1640,18 +1675,26 @@ export const useStore = create<State>((set, get) => {
           return inv?.truckId === truckId && (inv.round ?? 1) !== 2;
         });
       } else {
-        ids = overflowInvoiceIds(
-          plan.invoices,
-          truckId,
-          truck.maxWeight,
-          s.customers,
-          plan.truckDay.find((td) => td.truckId === truckId)?.tripId,
-          s.trips,
-          plan.dayStopOrder,
-          plan.dayStopSequence,
-        );
+        ids = plan.invoices
+          .filter(
+            (i) =>
+              i.truckId === truckId &&
+              (i.round ?? 1) === 1 &&
+              !!i.area &&
+              townSet.has(i.area),
+          )
+          .map((i) => i.id);
       }
       if (ids.length === 0) return 0;
+
+      patchPlan((p) => ({
+        ...p,
+        truckDay: p.truckDay.map((td) =>
+          td.truckId === truckId
+            ? normalizeTruckDay({ ...td, round2TripId: tripId })
+            : td,
+        ),
+      }));
       get().setInvoiceRound(ids, 2);
       return ids.length;
     },

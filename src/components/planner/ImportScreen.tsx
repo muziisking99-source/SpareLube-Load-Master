@@ -59,6 +59,14 @@ function weightUnset(w: number) {
   return !Number.isFinite(w) || w === 0;
 }
 
+/** Parse kg from a number input; supports in-progress "-" and negatives. */
+function parseWeightInput(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (trimmed === "" || trimmed === "-") return undefined;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 export function ImportScreen() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
   const customers = useStore((s) => s.customers);
@@ -662,10 +670,12 @@ export function ImportScreen() {
                       <Input
                         type="number"
                         inputMode="decimal"
+                        step="any"
                         value={weightUnset(i.weight) ? "" : i.weight}
-                        onChange={(e) =>
-                          updateInvoice(i.id, { weight: Number(e.target.value) })
-                        }
+                        onChange={(e) => {
+                          const w = parseWeightInput(e.target.value);
+                          updateInvoice(i.id, { weight: w ?? 0 });
+                        }}
                         className={cn(
                           "metric-mono h-9 w-24",
                           weightUnset(i.weight) && "border-crit",
@@ -957,8 +967,12 @@ function InvoiceCard({
           <Input
             type="number"
             inputMode="decimal"
+            step="any"
             value={weightUnset(inv.weight) ? "" : inv.weight}
-            onChange={(e) => onChange({ weight: Number(e.target.value) })}
+            onChange={(e) => {
+              const w = parseWeightInput(e.target.value);
+              onChange({ weight: w ?? 0 });
+            }}
             className={cn("weight-input metric-mono h-11 text-lg", badWeight && "border-crit")}
             placeholder="0"
           />
@@ -1070,8 +1084,13 @@ function InvoiceRow({
       <TableCell>
         <Input
           type="number"
+          inputMode="decimal"
+          step="any"
           value={weightUnset(inv.weight) ? "" : inv.weight}
-          onChange={(e) => onChange({ weight: Number(e.target.value) })}
+          onChange={(e) => {
+            const w = parseWeightInput(e.target.value);
+            onChange({ weight: w ?? 0 });
+          }}
           className={`weight-input metric-mono h-8 w-24 text-foreground ${badWeight ? "border-crit" : ""}`}
           placeholder="0"
         />
@@ -1202,8 +1221,12 @@ function HeldCard({
         <Input
           type="number"
           inputMode="decimal"
+          step="any"
           value={weightUnset(held.weight) ? "" : held.weight}
-          onChange={(e) => onChange({ weight: Number(e.target.value) })}
+          onChange={(e) => {
+            const w = parseWeightInput(e.target.value);
+            onChange({ weight: w ?? 0 });
+          }}
           className="metric-mono h-11"
           placeholder="0"
         />
@@ -1293,8 +1316,13 @@ function HeldRow({
       <td className="px-3 py-2 align-middle">
         <Input
           type="number"
+          inputMode="decimal"
+          step="any"
           value={weightUnset(held.weight) ? "" : held.weight}
-          onChange={(e) => onChange({ weight: Number(e.target.value) })}
+          onChange={(e) => {
+            const w = parseWeightInput(e.target.value);
+            onChange({ weight: w ?? 0 });
+          }}
           className="metric-mono h-9 w-full min-w-[5.5rem]"
           placeholder="0"
         />

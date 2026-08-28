@@ -15,7 +15,7 @@ import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
 import { findCustomer } from "@/lib/customers";
 import { parseExcelFile, type ParsedRow } from "@/lib/parse";
-import { townsForTruckDay, tripById } from "@/lib/trips";
+import { townsForTruckDay, tripNamesForTruckDay } from "@/lib/trips";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -84,10 +84,7 @@ export function LockScreen() {
     plan.truckDay.map((td) => [td.truckId, townsForTruckDay(td, trips)]),
   );
   const dayTripName = new Map(
-    plan.truckDay.map((td) => {
-      const trip = tripById(trips, td.tripId);
-      return [td.truckId, trip?.name ?? null] as const;
-    }),
+    plan.truckDay.map((td) => [td.truckId, tripNamesForTruckDay(td, trips)] as const),
   );
   const needsTruck = plan.invoices.filter((i) => !i.truckId && !i.collection);
   const allocated = plan.invoices.filter((i) => i.truckId);

@@ -1,16 +1,60 @@
 import type { Plan, Trip, TruckDay } from "./types";
 
-/** Towns for a truck today: prefer assigned trip, else legacy areas[]. */
+/** Trip ids assigned to a truck today (supports legacy single tripId). */
+export function tripIdsForTruckDay(td: TruckDay | undefined): string[] {
+  if (!td) return [];
+  if (td.tripIds && td.tripIds.length > 0) return [...td.tripIds];
+  if (td.tripId) return [td.tripId];
+  return [];
+}
+
+/** Towns for a truck today: union of all assigned trips, else legacy areas[]. */
 export function townsForTruckDay(
   td: TruckDay | undefined,
   trips: Trip[],
 ): string[] {
   if (!td) return [];
-  if (td.tripId) {
-    const trip = trips.find((t) => t.id === td.tripId);
-    if (trip) return [...trip.towns];
+  const ids = tripIdsForTruckDay(td);
+  if (ids.length > 0) {
+    const set = new Set<string>();
+    for (const id of ids) {
+      const trip = trips.find((t) => t.id === id);
+      if (trip) for (const town of trip.towns) if (town) set.add(town);
+    }
+    return [...set];
   }
   return [...(td.areas ?? [])].filter(Boolean);
+}
+
+/** Comma-separated trip names for a truck today. */
+export function tripNamesForTruckDay(
+  td: TruckDay | undefined,
+  trips: Trip[],
+): string | null {
+  const names = tripIdsForTruckDay(td)
+    .map((id) => tripById(trips, id)?.name)
+    .filter(Boolean);
+  return names.length > 0 ? names.join(", ") : null;
+}
+
+/**
+ * Resolve which assigned trip an invoice belongs to (by town).
+ * Falls back to sole assigned trip when area is empty or unmatched.
+ */
+export function tripIdForInvoice(
+  invoice: { area: string },
+  truckDay: TruckDay | undefined,
+  trips: Trip[],
+): string | null {
+  const ids = tripIdsForTruckDay(truckDay);
+  if (ids.length === 0) return null;
+  if (invoice.area) {
+    for (const id of ids) {
+      const trip = tripById(trips, id);
+      if (trip?.towns.includes(invoice.area)) return id;
+    }
+  }
+  return ids.length === 1 ? ids[0] : null;
 }
 
 /** Unique towns for the plan day: prefer selected tripIds, else truck trips, else plan.areas. */

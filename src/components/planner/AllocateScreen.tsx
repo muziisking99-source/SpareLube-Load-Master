@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   Ban,
+  ChevronDown,
   GripVertical,
   Play,
   RotateCcw,
@@ -32,8 +33,8 @@ import {
   compareByLoadingNumber,
   loadingNumberFor,
 } from "@/lib/loadingOrder";
-import { townsForTruckDay, tripById } from "@/lib/trips";
-import type { Invoice, Truck } from "@/lib/types";
+import { townsForTruckDay, tripById, tripIdForInvoice, tripIdsForTruckDay, tripNamesForTruckDay } from "@/lib/trips";
+import type { Invoice, Truck, TruckDay } from "@/lib/types";
 import { useRowHighlight } from "@/lib/useRowHighlight";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +59,11 @@ import { EmptyState } from "./ui/EmptyState";
 import { FormField } from "./ui/FormField";
 import { ScreenHeader } from "./ui/ScreenHeader";
 import { cn } from "@/lib/utils";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const plan = useStore((s) => s.plans[s.currentDate])!;
@@ -70,7 +76,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const undoStack = useStore((s) => s.undoStack);
   const setStep = useStore((s) => s.setStep);
   const updateTruck = useStore((s) => s.updateTruck);
-  const setTruckDayTrip = useStore((s) => s.setTruckDayTrip);
+  const setTruckDayTrips = useStore((s) => s.setTruckDayTrips);
   const ensureTruckDay = useStore((s) => s.ensureTruckDay);
 
   const [selected, setSelected] = useState<string[]>([]);
@@ -88,10 +94,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
     plan.truckDay.map((td) => [td.truckId, townsForTruckDay(td, trips)]),
   );
   const dayTripName = new Map(
-    plan.truckDay.map((td) => {
-      const trip = tripById(trips, td.tripId);
-      return [td.truckId, trip?.name ?? null] as const;
-    }),
+    plan.truckDay.map((td) => [td.truckId, tripNamesForTruckDay(td, trips)] as const),
   );
   const inv = plan.invoices;
   const allocatable = inv.filter((i) => !i.collection && !i.creditNote);
@@ -125,7 +128,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
         .filter((i) => i.area && townSet.has(i.area))
         .reduce((s, i) => s + (i.weight || 0), 0);
       const truckIds = plan.truckDay
-        .filter((td) => td.tripId === trip.id)
+        .filter((td) => tripIdsForTruckDay(td).includes(trip.id))
         .map((td) => td.truckId);
       const truckCap = trucks
         .filter((t) => t.active && truckIds.includes(t.id))
@@ -140,7 +143,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
     tripsMissingTrucks.length === 0 &&
     activeTrucks.some((t) => {
       const td = plan.truckDay.find((d) => d.truckId === t.id);
-      return !!td?.tripId;
+      return tripIdsForTruckDay(td).length > 0;
     });
 
   function toggleSelect(id: string) {
@@ -289,7 +292,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                       <TableHead className="w-16">Active</TableHead>
                       <TableHead>Truck</TableHead>
                       <TableHead className="w-28">Max kg</TableHead>
-                      <TableHead>Today&apos;s trip</TableHead>
+                      <TableHead>Today&apos;s trips</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -306,21 +309,12 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                           <TableCell className="font-medium">{t.name}</TableCell>
                           <TableCell className="metric-mono">{t.maxWeight}</TableCell>
                           <TableCell>
-                            <select
+                            <TruckTripMultiSelect
                               disabled={!t.active || planTrips.length === 0}
-                              className="h-9 w-full max-w-xs rounded-md border border-input bg-background px-2 text-sm"
-                              value={td?.tripId ?? ""}
-                              onChange={(e) =>
-                                setTruckDayTrip(t.id, e.target.value || null)
-                              }
-                            >
-                              <option value="">Unassigned</option>
-                              {planTrips.map((tr) => (
-                                <option key={tr.id} value={tr.id}>
-                                  {tr.name}
-                                </option>
-                              ))}
-                            </select>
+                              planTrips={planTrips}
+                              selectedIds={tripIdsForTruckDay(td)}
+                              onChange={(ids) => setTruckDayTrips(t.id, ids)}
+                            />
                           </TableCell>
                         </TableRow>
                       );
@@ -342,6 +336,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
       <TruckWorkbench
         mode={mode}
         planInvoices={inv}
+        planTrips={planTrips}
         activeTrucks={activeTrucks}
         dayTowns={dayTowns}
         dayTripName={dayTripName}
@@ -382,6 +377,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
 function TruckWorkbench({
   mode,
   planInvoices,
+  planTrips,
   activeTrucks,
   dayTowns,
   dayTripName,
@@ -404,10 +400,11 @@ function TruckWorkbench({
 }: {
   mode: "allocate" | "adjust";
   planInvoices: Invoice[];
+  planTrips: import("@/lib/types").Trip[];
   activeTrucks: Truck[];
   dayTowns: Map<string, string[]>;
   dayTripName: Map<string, string | null>;
-  planTruckDay: { truckId: string; tripId: string | null }[];
+  planTruckDay: TruckDay[];
   selected: string[];
   undoStack: { label: string }[];
   unallocated: Invoice[];
@@ -448,6 +445,8 @@ function TruckWorkbench({
     "";
 
   const [focusId, setFocusId] = useState(defaultFocus);
+  const [secondRoundOpen, setSecondRoundOpen] = useState(false);
+  const [secondRoundTripId, setSecondRoundTripId] = useState("");
 
   useEffect(() => {
     if (!focusId || !activeTrucks.some((t) => t.id === focusId)) {
@@ -456,31 +455,36 @@ function TruckWorkbench({
   }, [activeTrucks, defaultFocus, focusId]);
 
   const focusTruck = activeTrucks.find((t) => t.id === focusId) ?? activeTrucks[0];
-  const tripId =
-    planTruckDay.find((td) => td.truckId === focusTruck?.id)?.tripId ?? null;
+  const focusTruckDay = planTruckDay.find((td) => td.truckId === focusTruck?.id);
+  const assignedTripIds = tripIdsForTruckDay(focusTruckDay);
   const tripName = focusTruck ? dayTripName.get(focusTruck.id) : null;
+  const round2TripName = focusTruckDay?.round2TripId
+    ? tripById(trips, focusTruckDay.round2TripId)?.name
+    : null;
   const towns = focusTruck ? dayTowns.get(focusTruck.id) ?? [] : [];
 
   const truckInvoices = useMemo(() => {
     if (!focusTruck) return [];
     return planInvoices
       .filter((i) => i.truckId === focusTruck.id)
-      .sort((a, b) =>
-        compareByLoadingNumber(
+      .sort((a, b) => {
+        const tripA = tripIdForInvoice(a, focusTruckDay, trips);
+        const tripB = tripIdForInvoice(b, focusTruckDay, trips);
+        return compareByLoadingNumber(
           customers,
           a,
           b,
-          tripId,
+          tripA,
           trips,
           dayStopOrder,
           dayStopSequence,
-        ),
-      );
+        );
+      });
   }, [
     planInvoices,
     focusTruck,
+    focusTruckDay,
     customers,
-    tripId,
     trips,
     dayStopOrder,
     dayStopSequence,
@@ -512,11 +516,16 @@ function TruckWorkbench({
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
-    if (!over || !tripId || active.id === over.id) return;
+    if (!over || assignedTripIds.length === 0 || active.id === over.id) return;
     const oldIndex = truckInvoices.findIndex((i) => i.id === active.id);
     const newIndex = truckInvoices.findIndex((i) => i.id === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
     const reordered = arrayMove(truckInvoices, oldIndex, newIndex);
+    const activeInv = truckInvoices.find((i) => i.id === active.id);
+    const sequenceTripId = activeInv
+      ? tripIdForInvoice(activeInv, focusTruckDay, trips)
+      : assignedTripIds[0];
+    if (!sequenceTripId) return;
     const nextKeys: string[] = [];
     const seen = new Set<string>();
     for (const inv of reordered) {
@@ -525,29 +534,49 @@ function TruckWorkbench({
       seen.add(key);
       nextKeys.push(key);
     }
-    setDayTripStopSequence(tripId, nextKeys);
+    setDayTripStopSequence(sequenceTripId, nextKeys);
   }
 
-  function handleSecondRound() {
-    if (!focusTruck) return;
+  function confirmSecondRound(tripId: string) {
+    if (!focusTruck || !tripId) return;
+    const trip = planTrips.find((t) => t.id === tripId);
     const n = sendToSecondRound(
       focusTruck.id,
+      tripId,
       selectedRound1.length > 0 ? selectedRound1 : undefined,
     );
+    setSecondRoundOpen(false);
     if (n === 0) {
       toast.message(
         selectedRound1.length > 0
           ? "No selected invoices to send to Round 2"
-          : "Nothing overflows capacity — select invoices or add more weight",
+          : trip
+            ? `No Round 1 invoices for ${trip.name} on this truck`
+            : "No Round 1 invoices on this truck",
       );
       return;
     }
     toast.success(
-      selectedRound1.length > 0
-        ? `Moved ${n} invoice${n === 1 ? "" : "s"} to Round 2`
-        : `Sent ${n} overflow invoice${n === 1 ? "" : "s"} to Round 2`,
+      `Moved ${n} invoice${n === 1 ? "" : "s"} to Round 2${trip ? ` (${trip.name})` : ""}`,
     );
     onClearSel();
+  }
+
+  function handleSecondRoundClick() {
+    if (!focusTruck) return;
+    if (planTrips.length === 0) {
+      toast.error("Select trips for today on Setup first");
+      return;
+    }
+    if (planTrips.length === 1) {
+      confirmSecondRound(planTrips[0].id);
+      return;
+    }
+    setSecondRoundTripId((current) => {
+      if (current && planTrips.some((t) => t.id === current)) return current;
+      return planTrips[0]?.id ?? "";
+    });
+    setSecondRoundOpen(true);
   }
 
   function handleBackToRound1() {
@@ -676,6 +705,9 @@ function TruckWorkbench({
               <h3 className="font-semibold tracking-tight">{focusTruck.name}</h3>
               <p className="mt-0.5 truncate text-sm text-muted-foreground">
                 {tripName ?? "No trip assigned"}
+                {round2.length > 0 && round2TripName
+                  ? ` · Round 2: ${round2TripName}`
+                  : ""}
                 {towns.length > 0 ? ` · ${towns.join(" · ")}` : ""}
               </p>
             </div>
@@ -686,7 +718,7 @@ function TruckWorkbench({
               </div>
               {isAdjust && (
                 <>
-                  <Button type="button" size="sm" variant="secondary" onClick={handleSecondRound}>
+                  <Button type="button" size="sm" variant="secondary" onClick={handleSecondRoundClick}>
                     <RotateCcw className="size-3.5" />
                     Second Round
                     {selectedRound1.length > 0 ? ` (${selectedRound1.length})` : ""}
@@ -717,7 +749,7 @@ function TruckWorkbench({
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
-                onDragEnd={isAdjust && tripId ? handleDragEnd : undefined}
+                onDragEnd={isAdjust && assignedTripIds.length > 0 ? handleDragEnd : undefined}
               >
                 <Table>
                   <TableHeader>
@@ -737,15 +769,17 @@ function TruckWorkbench({
                   <SortableContext
                     items={truckInvoices.map((i) => i.id)}
                     strategy={verticalListSortingStrategy}
-                    disabled={!isAdjust || !tripId}
+                    disabled={!isAdjust || assignedTripIds.length === 0}
                   >
                     <TableBody>
-                      {truckInvoices.map((i) => (
+                      {truckInvoices.map((i) => {
+                        const invoiceTripId = tripIdForInvoice(i, focusTruckDay, trips);
+                        return (
                         <SortableTruckInvoiceRow
                           key={i.id}
                           inv={i}
                           isAdjust={isAdjust}
-                          tripId={tripId}
+                          tripId={invoiceTripId}
                           customers={customers}
                           trips={trips}
                           dayStopOrder={dayStopOrder}
@@ -753,20 +787,22 @@ function TruckWorkbench({
                           highlightProps={highlightProps(i.id)}
                           onToggleSelect={() => onToggleSelect(i.id)}
                           onSetLoad={(key, n) =>
-                            tripId && setDayTripCustomerLoadNumber(tripId, key, n)
+                            invoiceTripId &&
+                            setDayTripCustomerLoadNumber(invoiceTripId, key, n)
                           }
                           customerKeyFor={customerKeyFor}
                           onMoveInvoice={() => onMoveInvoice(i)}
                           onUnallocate={() => onUnallocate(i)}
                         />
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </SortableContext>
                 </Table>
               </DndContext>
             </div>
           )}
-          {isAdjust && tripId && truckInvoices.length > 0 && (
+          {isAdjust && assignedTripIds.length > 0 && truckInvoices.length > 0 && (
             <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
               Drag rows to reorder this day only (Load # stays as typed). Admin → Trips is
               unchanged.
@@ -860,6 +896,53 @@ function TruckWorkbench({
           </div>
         </section>
       )}
+
+      <Dialog open={secondRoundOpen} onOpenChange={setSecondRoundOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Second round trip</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Choose which of today&apos;s trips this second round is for. If nothing is
+            selected on the truck, Round 1 invoices in that trip&apos;s towns will move
+            to Round 2.
+          </p>
+          <div className="space-y-2">
+            {planTrips.map((trip) => (
+              <label
+                key={trip.id}
+                className={cn(
+                  "flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors hover:bg-panel-2",
+                  secondRoundTripId === trip.id
+                    ? "border-primary bg-primary/5"
+                    : "border-border",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="second-round-trip"
+                  className="size-4 accent-primary"
+                  checked={secondRoundTripId === trip.id}
+                  onChange={() => setSecondRoundTripId(trip.id)}
+                />
+                <span className="text-sm font-medium">{trip.name}</span>
+              </label>
+            ))}
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={() => setSecondRoundOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!secondRoundTripId}
+              onClick={() => confirmSecondRound(secondRoundTripId)}
+            >
+              Send to Round 2
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1174,5 +1257,62 @@ function MoveDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function TruckTripMultiSelect({
+  planTrips,
+  selectedIds,
+  disabled,
+  onChange,
+}: {
+  planTrips: import("@/lib/types").Trip[];
+  selectedIds: string[];
+  disabled?: boolean;
+  onChange: (tripIds: string[]) => void;
+}) {
+  const label =
+    selectedIds.length === 0
+      ? "Unassigned"
+      : planTrips
+          .filter((t) => selectedIds.includes(t.id))
+          .map((t) => t.name)
+          .join(", ");
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          className="h-9 w-full max-w-xs justify-between gap-2 px-2 font-normal"
+        >
+          <span className="truncate">{label}</span>
+          <ChevronDown className="size-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56 p-2" align="start">
+        <div className="space-y-1">
+          {planTrips.map((tr) => (
+            <label
+              key={tr.id}
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted"
+            >
+              <Checkbox
+                checked={selectedIds.includes(tr.id)}
+                onCheckedChange={(v) => {
+                  const next = v
+                    ? [...selectedIds, tr.id]
+                    : selectedIds.filter((id) => id !== tr.id);
+                  onChange(next);
+                }}
+              />
+              <span className="truncate">{tr.name}</span>
+            </label>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
