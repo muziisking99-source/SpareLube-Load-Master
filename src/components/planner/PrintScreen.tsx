@@ -586,7 +586,7 @@ export function PrintScreen() {
           className="mb-3"
         />
         <div className="overflow-auto rounded-xl border border-border bg-panel-2 p-4">
-          <div className="mx-auto max-w-4xl bg-white text-black shadow-lg">
+          <div className="load-sheet-document mx-auto max-w-4xl bg-white text-black shadow-lg">
             {view === "truck" && (
               <TruckSheetsContent
                 planDate={plan.date}
@@ -613,7 +613,7 @@ export function PrintScreen() {
       </div>
 
       {/* Must sit outside any .no-print ancestor — parent display:none hides all descendants */}
-      <div className="print-root">
+      <div className="print-root load-sheet-document">
         {view === "truck" && (
           <TruckSheetsContent
             planDate={plan.date}

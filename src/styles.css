@@ -237,7 +237,57 @@
   }
 }
 
-/* Print */
+/* Load sheet document — shared by on-screen preview and print output */
+.load-sheet-document {
+  color: #000;
+  background: #fff;
+}
+
+.load-sheet-document .load-sheet {
+  padding: 28px 32px;
+}
+
+.load-sheet-document .load-sheet + .load-sheet {
+  border-top: 1px solid #e4e4e7;
+}
+
+.load-sheet-document .load-sheet-logo {
+  height: 72px;
+  width: auto;
+  object-fit: contain;
+}
+
+.load-sheet-document table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.load-sheet-document th,
+.load-sheet-document td {
+  border: 1px solid #666;
+  padding: 7px 10px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.load-sheet-document thead th {
+  background: #f3f3f3;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.load-sheet-document tfoot td {
+  border-top: 2px solid #333;
+  background: #fafafa;
+}
+
+/* Hidden on screen; shown only when printing */
+.print-root {
+  display: none;
+}
+
 @media print {
   body {
     background: white !important;
@@ -256,88 +306,35 @@
     color: black !important;
     border-color: #999 !important;
   }
-  .print-root table {
-    border-collapse: collapse;
-    width: 100%;
+  .load-sheet-document .load-sheet + .load-sheet {
+    border-top: none;
   }
-  .print-root th,
-  .print-root td {
-    border: 1px solid #666;
-    padding: 7px 10px;
-    text-align: left;
-    font-size: 12px;
-  }
-  .print-root thead th {
-    background: #f3f3f3 !important;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-    font-size: 10px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    font-weight: 700;
-  }
-  .print-root tfoot td {
-    border-top: 2px solid #333 !important;
-    background: #fafafa !important;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-  .print-root .inv-count-chip {
-    background: #efefef !important;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-  }
-}
-.print-root {
-  display: none;
-}
-.print-root .load-sheet {
-  padding: 28px 32px;
-}
-.print-root .load-sheet-logo {
-  height: 72px;
-  width: auto;
-  object-fit: contain;
-}
-
-.print-root table {
-  border-collapse: collapse;
-  width: 100%;
-}
-.print-root th,
-.print-root td {
-  border: 1px solid #666;
-  padding: 7px 10px;
-  text-align: left;
-  font-size: 12px;
-}
-.print-root thead th {
-  background: #f3f3f3;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-weight: 700;
-}
-.print-root tfoot td {
-  border-top: 2px solid #333;
-  background: #fafafa;
-}
-
-@media print {
-  .print-root .load-sheet {
+  .load-sheet-document .load-sheet {
     break-after: page;
     page-break-after: always;
     break-inside: avoid;
     page-break-inside: avoid;
   }
-  .print-root .load-sheet:last-child {
+  .load-sheet-document .load-sheet:last-child {
     break-after: auto;
     page-break-after: auto;
   }
-}
-
-@media print {
-  .print-root .load-sheet-logo {
+  .load-sheet-document thead th {
+    background: #f3f3f3 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .load-sheet-document tfoot td {
+    background: #fafafa !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .load-sheet-document .inv-count-chip {
+    background: #efefef !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .load-sheet-document .load-sheet-logo {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
