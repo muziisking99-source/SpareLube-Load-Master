@@ -50,6 +50,23 @@ function groupStopsForLoadSheet(list: Invoice[]): LoadStop[] {
   return order.map((k) => map.get(k)!);
 }
 
+function TickCell() {
+  return (
+    <td style={{ textAlign: "center", verticalAlign: "middle" }}>
+      <span
+        aria-hidden
+        style={{
+          display: "inline-block",
+          width: 14,
+          height: 14,
+          border: "1.5px solid #333",
+          verticalAlign: "middle",
+        }}
+      />
+    </td>
+  );
+}
+
 function MetaField({
   label,
   value,
@@ -114,8 +131,10 @@ function LoadStopsTable({
         <tr>
           <th style={{ width: 56 }}>Load #</th>
           <th>Customer</th>
+          <th style={{ width: 100 }}>Town</th>
           <th style={{ width: 96, textAlign: "right" }}>Weight (kg)</th>
-          <th style={{ width: 88, textAlign: "center" }}>Cash / EFT</th>
+          <th style={{ width: 44, textAlign: "center" }}>Cash</th>
+          <th style={{ width: 44, textAlign: "center" }}>EFT</th>
         </tr>
       </thead>
       <tbody>
@@ -177,16 +196,18 @@ function LoadStopsTable({
                   )}
                 </span>
               </td>
+              <td>{stop.area}</td>
               <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                 {stop.weight}
               </td>
-              <td style={{ textAlign: "center", color: "#999" }}>&nbsp;</td>
+              <TickCell />
+              <TickCell />
             </tr>
           );
         })}
         {stops.length === 0 && (
           <tr>
-            <td colSpan={4} style={{ textAlign: "center", color: "#666" }}>
+            <td colSpan={6} style={{ textAlign: "center", color: "#666" }}>
               No invoices
             </td>
           </tr>
@@ -194,7 +215,7 @@ function LoadStopsTable({
       </tbody>
       <tfoot>
         <tr>
-          <td colSpan={2} style={{ fontWeight: 700 }}>
+          <td colSpan={3} style={{ fontWeight: 700 }}>
             Total — {invoiceCount} invoice{invoiceCount === 1 ? "" : "s"}
           </td>
           <td
@@ -206,6 +227,7 @@ function LoadStopsTable({
           >
             {totalWeight.toFixed(0)}
           </td>
+          <td />
           <td />
         </tr>
       </tfoot>
