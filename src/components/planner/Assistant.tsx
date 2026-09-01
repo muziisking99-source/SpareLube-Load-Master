@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { PanelRightClose, PanelRightOpen, Sparkles } from "lucide-react";
+import { BarChart3, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -16,15 +16,27 @@ import { AnimatedNumber } from "./ui/AnimatedNumber";
 import { findCustomer } from "@/lib/customers";
 import { townsForTruckDay } from "@/lib/trips";
 import type { PlanStep } from "@/lib/types";
+import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 
-export function Assistant() {
+export function Assistant({
+  desktopOpen,
+  onDesktopOpenChange,
+}: {
+  desktopOpen?: boolean;
+  onDesktopOpenChange?: (open: boolean) => void;
+}) {
   const plan = useStore((s) => s.plans[s.currentDate])!;
   const trucks = useStore((s) => s.trucks);
   const trips = useStore((s) => s.trips);
   const customers = useStore((s) => s.customers);
   const heldInvoices = useStore((s) => s.heldInvoices);
-  const [desktopOpen, setDesktopOpen] = useState(true);
+  const [internalOpen, setInternalOpen] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const reducedMotion = usePrefersReducedMotion();
+
+  const isControlled = desktopOpen !== undefined;
+  const sidebarOpen = isControlled ? desktopOpen : internalOpen;
+  const setSidebarOpen = isControlled ? onDesktopOpenChange! : setInternalOpen;
 
   if (!plan) return null;
 
@@ -65,11 +77,15 @@ export function Assistant() {
     return townsForTruckDay(td, trips).length > 0;
   }).length;
   const tripsSelected = (plan.tripIds ?? []).length;
+  const missingWeights = plan.invoices.filter((i) => !i.weight).length;
+  const missingTowns = plan.invoices.filter((i) => !i.area).length;
+  const needsTruck = plan.invoices.filter((i) => !i.truckId && !i.collection && !i.creditNote);
 
   const body = (
     <AssistantBody
       step={plan.step}
       planDate={plan.date}
+      blockersOnly={plan.step === "lock" || plan.step === "print"}
       invoiceCount={plan.invoices.length}
       totalWeight={totalWeight}
       activeCount={active.length}
@@ -80,12 +96,13 @@ export function Assistant() {
       known={known}
       newly={newly}
       duplicates={duplicates}
-      missingWeights={plan.invoices.filter((i) => !i.weight).length}
-      missingTowns={plan.invoices.filter((i) => !i.area).length}
+      missingWeights={missingWeights}
+      missingTowns={missingTowns}
       heldCount={heldInvoices.length}
       remaining={remaining}
       allocatedCount={allocated.length}
       unallocatedCount={unallocated.length}
+      needsTruckCount={needsTruck.length}
       util={util}
       above90={above90}
       heaviest={heaviest ? `${heaviest.t.name} (${heaviest.w.toFixed(0)}kg)` : null}
@@ -96,6 +113,7 @@ export function Assistant() {
           ? `${areaSorted[areaSorted.length - 1][0]} (${areaSorted[areaSorted.length - 1][1].toFixed(0)}kg)`
           : null
       }
+      reducedMotion={reducedMotion}
     />
   );
 
@@ -110,38 +128,38 @@ export function Assistant() {
           className="fixed bottom-4 right-4 z-30 gap-2 rounded-full px-4 py-6 shadow-lg"
           style={{ marginBottom: "env(safe-area-inset-bottom, 0px)" }}
         >
-          <Sparkles className="size-4" />
-          Assistant
+          <BarChart3 className="size-4" />
+          Day snapshot
         </Button>
         <Drawer open={mobileOpen} onOpenChange={setMobileOpen}>
           <DrawerContent className="max-h-[85dvh] pb-[env(safe-area-inset-bottom,0px)]">
             <DrawerHeader className="text-left">
-              <DrawerTitle>Planning Assistant</DrawerTitle>
+              <DrawerTitle>Day snapshot</DrawerTitle>
             </DrawerHeader>
             <div className="overflow-y-auto px-4 pb-6">{body}</div>
           </DrawerContent>
         </Drawer>
       </div>
 
-      {!desktopOpen ? (
+      {!sidebarOpen ? (
         <Button
           type="button"
           variant="outline"
-          onClick={() => setDesktopOpen(true)}
+          onClick={() => setSidebarOpen(true)}
           className="fixed right-0 top-1/2 z-30 hidden h-auto -translate-y-1/2 rounded-l-xl rounded-r-none border-r-0 px-2 py-4 no-print lg:inline-flex"
         >
           <PanelRightOpen className="size-4" />
-          <span className="sr-only">Open planner assistant</span>
+          <span className="sr-only">Open day snapshot</span>
         </Button>
       ) : (
-        <aside className="panel sticky top-20 hidden h-fit p-4 no-print lg:block">
+        <aside className="panel sticky top-[6.5rem] hidden h-fit p-4 no-print lg:block">
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="font-semibold tracking-tight">Planning Assistant</h3>
+            <h3 className="font-semibold tracking-tight">Day snapshot</h3>
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => setDesktopOpen(false)}
+              onClick={() => setSidebarOpen(false)}
               className="h-8 gap-1 px-2 text-xs text-muted-foreground"
             >
               <PanelRightClose className="size-3.5" />
@@ -158,6 +176,7 @@ export function Assistant() {
 function AssistantBody({
   step,
   planDate,
+  blockersOnly,
   invoiceCount,
   totalWeight,
   activeCount,
@@ -174,15 +193,18 @@ function AssistantBody({
   remaining,
   allocatedCount,
   unallocatedCount,
+  needsTruckCount,
   util,
   above90,
   heaviest,
   lightest,
   topTown,
   lowTown,
+  reducedMotion,
 }: {
   step: PlanStep;
   planDate: string;
+  blockersOnly?: boolean;
   invoiceCount: number;
   totalWeight: number;
   activeCount: number;
@@ -199,17 +221,55 @@ function AssistantBody({
   remaining: number;
   allocatedCount: number;
   unallocatedCount: number;
+  needsTruckCount: number;
   util: number;
   above90: number;
   heaviest: string | null;
   lightest: string | null;
   topTown: string | null;
   lowTown: string | null;
+  reducedMotion: boolean;
 }) {
   const isSetup = step === "setup";
   const isImport = step === "import";
   const isAllocate = step === "allocate" || step === "adjust";
   const isSummary = step === "lock" || step === "print";
+
+  if (blockersOnly) {
+    const blockers: { label: string; value: string | number; tone?: "good" | "warn" | "crit" }[] =
+      [];
+    if (needsTruckCount > 0) {
+      blockers.push({ label: "Need truck", value: needsTruckCount, tone: "crit" });
+    }
+    if (unallocatedCount > 0) {
+      blockers.push({ label: "Unallocated", value: unallocatedCount, tone: "crit" });
+    }
+    if (missingWeights > 0) {
+      blockers.push({ label: "Missing weights", value: missingWeights, tone: "warn" });
+    }
+    if (missingTowns > 0) {
+      blockers.push({ label: "Missing towns", value: missingTowns, tone: "warn" });
+    }
+    if (duplicates > 0) {
+      blockers.push({ label: "Duplicate docs", value: duplicates, tone: "warn" });
+    }
+    return (
+      <>
+        <p className="mb-4 text-xs text-muted-foreground">
+          Plan for <span className="font-medium text-foreground">{planDate}</span>
+        </p>
+        <Section title="Blockers">
+          {blockers.length === 0 ? (
+            <p className="text-sm text-good">No blockers — ready to lock or print</p>
+          ) : (
+            blockers.map((b) => (
+              <Row key={b.label} label={b.label} value={b.value} tone={b.tone} />
+            ))
+          )}
+        </Section>
+      </>
+    );
+  }
 
   return (
     <>
@@ -273,10 +333,17 @@ function AssistantBody({
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Fleet utilisation</span>
                 <span className="metric-mono text-foreground">
-                  <AnimatedNumber value={Math.round(util)} suffix="%" />
+                  {reducedMotion ? (
+                    `${Math.round(util)}%`
+                  ) : (
+                    <AnimatedNumber value={Math.round(util)} suffix="%" />
+                  )}
                 </span>
               </div>
-              <Progress value={util} className="animate-breathe h-1.5" />
+              <Progress
+                value={util}
+                className={reducedMotion ? "h-1.5" : "animate-breathe h-1.5"}
+              />
             </div>
             <Row label="Trucks at 90%+" value={above90} tone={above90 ? "warn" : undefined} />
             {heaviest && <Row label="Heaviest" value={heaviest} />}
@@ -287,7 +354,7 @@ function AssistantBody({
         </>
       )}
 
-      {isSummary && (
+      {isSummary && !blockersOnly && (
         <Section title="Summary">
           <Row label="Total invoices" value={invoiceCount} />
           <Row label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />

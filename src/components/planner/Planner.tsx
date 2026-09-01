@@ -1,7 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { stepList, useStore } from "@/lib/store";
 import { isWarehouseDirty } from "@/lib/cloudSync";
+import {
+  buildSearchResults,
+  scrollToSearchTarget,
+  stepForSearchResult,
+  type SearchResult,
+} from "@/lib/searchNavigation";
 import { SetupScreen } from "./SetupScreen";
 import { ImportScreen } from "./ImportScreen";
 import { AllocateScreen } from "./AllocateScreen";
@@ -19,13 +25,27 @@ export function Planner() {
   const hydrate = useStore((s) => s.hydrate);
   const currentDate = useStore((s) => s.currentDate);
   const plan = useStore((s) => s.plans[currentDate]);
+  const heldInvoices = useStore((s) => s.heldInvoices);
   const setStep = useStore((s) => s.setStep);
+  const setSearchHighlightId = useStore((s) => s.setSearchHighlightId);
   const showResume = useStore((s) => s.showResume);
   const dismissResume = useStore((s) => s.dismissResume);
   const newPlan = useStore((s) => s.newPlan);
   const ensureTruckDay = useStore((s) => s.ensureTruckDay);
   const undo = useStore((s) => s.undo);
   const [q, setQ] = useState("");
+  const [snapshotOpen, setSnapshotOpen] = useState(true);
+
+  const handleSelectSearchResult = useCallback(
+    (result: SearchResult) => {
+      if (!plan) return;
+      const step = stepForSearchResult(result, plan.invoices);
+      setStep(step);
+      setSearchHighlightId(result.id);
+      scrollToSearchTarget(result.id);
+    },
+    [plan, setStep, setSearchHighlightId],
+  );
 
   useEffect(() => {
     void hydrate();
@@ -101,18 +121,12 @@ export function Planner() {
     return () => window.removeEventListener("keydown", h);
   }, [undo]);
 
-  const searchResults = useMemo(() => {
-    if (!q.trim() || !plan) return null;
-    const term = q.toLowerCase();
-    return plan.invoices
-      .filter(
-        (i) =>
-          i.doc.toLowerCase().includes(term) ||
-          i.customer.toLowerCase().includes(term) ||
-          i.area.toLowerCase().includes(term),
-      )
-      .slice(0, 12);
-  }, [q, plan]);
+  const searchResults = useMemo(
+    () => buildSearchResults(q, plan, heldInvoices),
+    [q, plan, heldInvoices],
+  );
+
+  const searchDisabled = !plan || (plan.step === "setup" && plan.invoices.length === 0 && heldInvoices.length === 0);
 
   if (!hydrated || !plan) {
     return <PlannerSkeleton />;
@@ -122,10 +136,23 @@ export function Planner() {
 
   return (
     <div className="min-h-[100dvh]">
-      <TopBar q={q} setQ={setQ} searchResults={searchResults} />
+      <TopBar
+        q={q}
+        setQ={setQ}
+        searchResults={searchResults}
+        searchDisabled={searchDisabled}
+        onSelectResult={handleSelectSearchResult}
+        currentStep={step}
+      />
       <Stepper current={step} onGo={setStep} locked={plan.locked} />
 
-      <main className="mx-auto grid max-w-7xl gap-4 px-3 py-4 pb-24 sm:px-4 lg:grid-cols-[1fr_320px] lg:pb-4">
+      <main
+        className={
+          snapshotOpen
+            ? "mx-auto grid max-w-7xl gap-4 px-3 py-4 pb-24 sm:px-4 lg:grid-cols-[1fr_320px] lg:pb-4"
+            : "mx-auto max-w-7xl px-3 py-4 pb-24 sm:px-4 lg:pb-4"
+        }
+      >
         <div className="min-w-0">
           <StepTransition stepKey={step}>
             {step === "setup" && <SetupScreen />}
@@ -136,7 +163,7 @@ export function Planner() {
             {step === "print" && <PrintScreen />}
           </StepTransition>
         </div>
-        <Assistant />
+        <Assistant desktopOpen={snapshotOpen} onDesktopOpenChange={setSnapshotOpen} />
       </main>
 
       <ResumeModal

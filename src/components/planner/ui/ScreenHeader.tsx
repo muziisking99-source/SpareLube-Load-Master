@@ -14,7 +14,9 @@ export function ScreenHeader({
   return (
     <div className={cn("flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between", className)}>
       <div>
-        <h2 className="text-lg font-semibold tracking-tight text-foreground">{title}</h2>
+        <h2 className="border-l-2 border-primary/50 pl-3 text-lg font-semibold tracking-tight text-foreground">
+          {title}
+        </h2>
         {description && (
           <p className="mt-0.5 text-sm text-muted-foreground max-w-[65ch]">{description}</p>
         )}

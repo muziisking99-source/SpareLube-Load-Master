@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { stepLabels, stepList } from "@/lib/store";
 import type { PlanStep } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 
 const shortLabels: Record<PlanStep, string> = {
   setup: "Setup",
@@ -26,14 +27,16 @@ export function Stepper({
   locked: boolean;
 }) {
   const currentIdx = stepList.indexOf(current);
+  const reducedMotion = usePrefersReducedMotion();
 
   return (
-    <nav className="border-b border-border no-print">
+    <nav className="border-b border-border/50 bg-panel/40 no-print backdrop-blur-sm" aria-label="Plan steps">
       <div className="mx-auto max-w-7xl px-3 sm:px-4">
-        <div className="flex items-center gap-0.5 overflow-x-auto py-2 sm:gap-1">
+        <div className="flex items-center gap-0.5 overflow-x-auto py-1.5 sm:gap-1">
           {stepList.map((s, idx) => {
             const active = s === current;
             const done = idx < currentIdx;
+            const upcoming = idx > currentIdx;
             const stepNum = idx + 1;
 
             return (
@@ -41,24 +44,30 @@ export function Stepper({
                 key={s}
                 type="button"
                 onClick={() => onGo(s)}
-                style={{ "--index": idx } as React.CSSProperties}
+                aria-current={active ? "step" : undefined}
+                aria-label={`${stepLabels[s]}${done ? ", completed" : upcoming ? ", upcoming" : ", current"}`}
+                style={reducedMotion ? undefined : ({ "--index": idx } as React.CSSProperties)}
                 className={cn(
-                  "stagger-item group relative flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-2 text-left transition-colors sm:gap-2 sm:px-3",
+                  "group relative flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors sm:gap-2 sm:px-2.5",
+                  !reducedMotion && "stagger-item",
                   active
-                    ? "text-primary"
+                    ? "bg-primary/12 text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
                     : done
                       ? "text-foreground/80 hover:text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
+                      : upcoming
+                        ? "text-muted-foreground/60 hover:text-muted-foreground"
+                        : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 <span
                   className={cn(
-                    "metric-mono flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors sm:h-6 sm:w-6",
+                    "metric-mono flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors",
                     active
                       ? "bg-primary text-primary-foreground"
                       : done
                         ? "bg-primary/20 text-primary"
                         : "bg-secondary text-muted-foreground",
+                    upcoming && !active && "opacity-60",
                   )}
                 >
                   {stepNum}
@@ -69,17 +78,20 @@ export function Stepper({
                 <span className="hidden whitespace-nowrap text-sm font-medium sm:inline">
                   {stepLabels[s].replace(/^\d+\.\s*/, "")}
                 </span>
-                {active && (
+                {active && !reducedMotion && (
                   <motion.span
                     layoutId="step-indicator"
-                    className="absolute inset-x-2 -bottom-2 h-0.5 rounded-full bg-primary"
+                    className="absolute inset-x-2 -bottom-1.5 h-0.5 rounded-full bg-primary"
                     transition={{ type: "spring", stiffness: 100, damping: 20 }}
                   />
+                )}
+                {active && reducedMotion && (
+                  <span className="absolute inset-x-2 -bottom-1.5 h-0.5 rounded-full bg-primary" />
                 )}
                 {idx < stepList.length - 1 && (
                   <span
                     className={cn(
-                      "mx-1 hidden h-px w-6 shrink-0 lg:block",
+                      "mx-1 hidden h-px w-4 shrink-0 lg:block",
                       done ? "bg-primary/50" : "bg-border",
                     )}
                     aria-hidden

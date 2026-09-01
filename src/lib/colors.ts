@@ -9,16 +9,16 @@ export function areaColor(name: string): { bg: string; border: string; text: str
 
   if (dark) {
     return {
-      bg: `hsl(${hue} 40% 22% / 0.55)`,
-      border: `hsl(${hue} 45% 42% / 0.7)`,
-      text: `hsl(${hue} 55% 82%)`,
+      bg: `hsl(${hue} 22% 20% / 0.6)`,
+      border: `hsl(${hue} 24% 40% / 0.6)`,
+      text: `hsl(${hue} 30% 76%)`,
     };
   }
 
-  // Light mode: soft tinted chips that stay readable on white panels
+  // Light mode: tonal chips that stay readable on warm panels
   return {
-    bg: `hsl(${hue} 42% 95%)`,
-    border: `hsl(${hue} 28% 78%)`,
-    text: `hsl(${hue} 40% 28%)`,
+    bg: `hsl(${hue} 24% 94%)`,
+    border: `hsl(${hue} 18% 80%)`,
+    text: `hsl(${hue} 28% 30%)`,
   };
 }

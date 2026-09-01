@@ -240,7 +240,7 @@ export function PrintScreen() {
   const trucks = useStore((s) => s.trucks);
   const trips = useStore((s) => s.trips);
   const setStep = useStore((s) => s.setStep);
-  const [view, setView] = useState<"truck" | "master" | null>(null);
+  const [view, setView] = useState<"truck" | "master">("truck");
 
   const active = trucks.filter((t) => t.active);
   const customers = useStore((s) => s.customers);
@@ -311,47 +311,42 @@ export function PrintScreen() {
 
   return (
     <div className="space-y-4">
-      <div className="panel flex flex-col gap-3 p-4 no-print sm:flex-row sm:flex-wrap">
+      <div className="panel flex flex-col gap-3 p-4 no-print sm:flex-row sm:flex-wrap sm:items-center">
         <Button variant="outline" className="w-full sm:w-auto" onClick={() => setStep("lock")}>
           <ArrowLeft className="size-4" />
           Back
         </Button>
-        <Button className="w-full sm:w-auto" onClick={() => print("truck")}>
-          <Printer className="size-4" />
-          Truck Load Sheets
-        </Button>
-        <Button className="w-full sm:w-auto" onClick={() => print("master")}>
-          <Printer className="size-4" />
-          Master Reconciliation
-        </Button>
-      </div>
-
-      <div className="panel p-4 no-print">
-        <ScreenHeader
-          title="Print preview"
-          description="Each truck prints on its own page. Select a view below to preview on screen."
-          className="mb-3"
-        />
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 sm:ml-auto">
           <Button
             variant={view === "truck" ? "default" : "outline"}
             size="sm"
             onClick={() => setView("truck")}
           >
-            Preview Truck Sheets
+            Truck sheets
           </Button>
           <Button
             variant={view === "master" ? "default" : "outline"}
             size="sm"
             onClick={() => setView("master")}
           >
-            Preview Master Report
+            Master report
+          </Button>
+          <Button className="w-full sm:w-auto" onClick={() => print(view)}>
+            <Printer className="size-4" />
+            Print {view === "truck" ? "truck sheets" : "master report"}
           </Button>
         </div>
       </div>
 
-      {view === "truck" && (
-        <div className="print-root" style={{ display: "block" }}>
+      <div className="panel p-4 no-print">
+        <ScreenHeader
+          title="Print preview"
+          description="Each truck prints on its own page. Preview updates as you switch views above."
+          className="mb-3"
+        />
+        <div className="overflow-auto rounded-xl border border-border bg-panel-2 p-4">
+          {view === "truck" && (
+            <div className="print-root mx-auto max-w-4xl bg-white text-black shadow-lg" style={{ display: "block" }}>
           {truckSheets.map((sheet) => {
             const { truck: t, truckDay, rounds } = sheet;
             const sheetTripId = truckDay
@@ -478,74 +473,76 @@ export function PrintScreen() {
               </div>
             );
           })}
-        </div>
-      )}
+            </div>
+          )}
 
-      {view === "master" && (
-        <div className="print-root" style={{ display: "block" }}>
-          <div style={{ padding: "24px" }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 16,
-                marginBottom: 12,
-              }}
-            >
-              <div>
-                <h1 style={{ fontSize: 22, margin: "0 0 6px" }}>Master Reconciliation</h1>
-                <div style={{ fontSize: 13 }}>
-                  Date: <b>{plan.date}</b>
+          {view === "master" && (
+            <div className="print-root mx-auto max-w-4xl bg-white text-black shadow-lg" style={{ display: "block" }}>
+              <div style={{ padding: "24px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 16,
+                    marginBottom: 12,
+                  }}
+                >
+                  <div>
+                    <h1 style={{ fontSize: 22, margin: "0 0 6px" }}>Master Reconciliation</h1>
+                    <div style={{ fontSize: 13 }}>
+                      Date: <b>{plan.date}</b>
+                    </div>
+                  </div>
+                  <Logo variant="light" className="load-sheet-logo" />
+                </div>
+
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 60 }}>Load #</th>
+                      <th style={{ width: 100 }}>Document</th>
+                      <th>Customer</th>
+                      <th style={{ width: 100 }}>Weight</th>
+                      <th style={{ width: 160 }}>Truck</th>
+                      <th style={{ width: 70 }}>Round</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortInvoices(plan.invoices).map((i) => {
+                      const truckDay = i.truckId ? truckDayById.get(i.truckId) : undefined;
+                      const invTripId = truckDay
+                        ? tripIdForInvoice(i, truckDay, trips)
+                        : null;
+                      const loadNo = loadingNumberFor(
+                        customers,
+                        i.customer,
+                        i.area,
+                        invTripId,
+                        trips,
+                        plan.dayStopOrder,
+                      );
+                      return (
+                        <tr key={i.id}>
+                          <td style={{ textAlign: "right" }}>{loadNo > 0 ? loadNo : ""}</td>
+                          <td>{i.doc}</td>
+                          <td>{i.customer}</td>
+                          <td style={{ textAlign: "right" }}>{i.weight}</td>
+                          <td>{trucks.find((t) => t.id === i.truckId)?.name ?? "UNALLOCATED"}</td>
+                          <td style={{ textAlign: "center" }}>{i.truckId ? (i.round ?? 1) : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div style={{ marginTop: 24, fontSize: 12 }}>
+                  Reconciled By: ______________________ Signature: ______________________
                 </div>
               </div>
-              <Logo variant="light" className="load-sheet-logo" />
             </div>
-
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: 60 }}>Load #</th>
-                  <th style={{ width: 100 }}>Document</th>
-                  <th>Customer</th>
-                  <th style={{ width: 100 }}>Weight</th>
-                  <th style={{ width: 160 }}>Truck</th>
-                  <th style={{ width: 70 }}>Round</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortInvoices(plan.invoices).map((i) => {
-                  const truckDay = i.truckId ? truckDayById.get(i.truckId) : undefined;
-                  const invTripId = truckDay
-                    ? tripIdForInvoice(i, truckDay, trips)
-                    : null;
-                  const loadNo = loadingNumberFor(
-                    customers,
-                    i.customer,
-                    i.area,
-                    invTripId,
-                    trips,
-                    plan.dayStopOrder,
-                  );
-                  return (
-                    <tr key={i.id}>
-                      <td style={{ textAlign: "right" }}>{loadNo > 0 ? loadNo : ""}</td>
-                      <td>{i.doc}</td>
-                      <td>{i.customer}</td>
-                      <td style={{ textAlign: "right" }}>{i.weight}</td>
-                      <td>{trucks.find((t) => t.id === i.truckId)?.name ?? "UNALLOCATED"}</td>
-                      <td style={{ textAlign: "center" }}>{i.truckId ? (i.round ?? 1) : "—"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <div style={{ marginTop: 24, fontSize: 12 }}>
-              Reconciled By: ______________________ Signature: ______________________
-            </div>
-          </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

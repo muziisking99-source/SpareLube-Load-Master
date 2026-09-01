@@ -59,6 +59,7 @@ import { EmptyState } from "./ui/EmptyState";
 import { FormField } from "./ui/FormField";
 import { ScreenHeader } from "./ui/ScreenHeader";
 import { cn } from "@/lib/utils";
+import { usePlanReadOnly } from "@/hooks/use-plan-read-only";
 import {
   Popover,
   PopoverContent,
@@ -75,6 +76,8 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const undo = useStore((s) => s.undo);
   const undoStack = useStore((s) => s.undoStack);
   const setStep = useStore((s) => s.setStep);
+  const searchHighlightId = useStore((s) => s.searchHighlightId);
+  const readOnly = usePlanReadOnly();
   const updateTruck = useStore((s) => s.updateTruck);
   const setTruckDayTrips = useStore((s) => s.setTruckDayTrips);
   const ensureTruckDay = useStore((s) => s.ensureTruckDay);
@@ -179,6 +182,22 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
 
   return (
     <>
+      <ScreenHeader
+        title={mode === "allocate" ? "Trucks & Allocation" : "Adjust loads"}
+        description={
+          mode === "allocate"
+            ? "Assign trucks to trips, then run allocation to balance weight across the fleet."
+            : "Move invoices between trucks, reorder stops, and send items to a second round."
+        }
+        className="mb-4"
+      />
+
+      {readOnly && (
+        <div className="mb-4 rounded-xl border border-warn/40 bg-warn/5 px-4 py-3 text-sm text-warn">
+          This plan is locked. Allocation is read-only until you unlock on the Lock step.
+        </div>
+      )}
+
       {mode === "allocate" && (
         <div className="mb-4 space-y-4">
           <section className="panel p-4 sm:p-5">
@@ -335,6 +354,8 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
 
       <TruckWorkbench
         mode={mode}
+        readOnly={readOnly}
+        searchHighlightId={searchHighlightId}
         planInvoices={inv}
         planTrips={planTrips}
         activeTrucks={activeTrucks}
@@ -376,6 +397,8 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
 
 function TruckWorkbench({
   mode,
+  readOnly = false,
+  searchHighlightId,
   planInvoices,
   planTrips,
   activeTrucks,
@@ -399,6 +422,8 @@ function TruckWorkbench({
   onLock,
 }: {
   mode: "allocate" | "adjust";
+  readOnly?: boolean;
+  searchHighlightId?: string | null;
   planInvoices: Invoice[];
   planTrips: import("@/lib/types").Trip[];
   activeTrucks: Truck[];
@@ -432,7 +457,7 @@ function TruckWorkbench({
   const setInvoiceRound = useStore((s) => s.setInvoiceRound);
   const setDayTripStopSequence = useStore((s) => s.setDayTripStopSequence);
   const setDayTripCustomerLoadNumber = useStore((s) => s.setDayTripCustomerLoadNumber);
-  const { highlightProps } = useRowHighlight();
+  const { highlightProps } = useRowHighlight(searchHighlightId);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -447,6 +472,23 @@ function TruckWorkbench({
   const [focusId, setFocusId] = useState(defaultFocus);
   const [secondRoundOpen, setSecondRoundOpen] = useState(false);
   const [secondRoundTripId, setSecondRoundTripId] = useState("");
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (activeTrucks.length === 0) return;
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+        return;
+      const idx = activeTrucks.findIndex((t) => t.id === focusId);
+      if (e.key === "ArrowRight" && idx < activeTrucks.length - 1) {
+        setFocusId(activeTrucks[idx + 1]!.id);
+      } else if (e.key === "ArrowLeft" && idx > 0) {
+        setFocusId(activeTrucks[idx - 1]!.id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeTrucks, focusId]);
 
   useEffect(() => {
     if (!focusId || !activeTrucks.some((t) => t.id === focusId)) {
@@ -588,14 +630,14 @@ function TruckWorkbench({
 
   return (
     <div className="space-y-4">
-      <div className="panel sticky top-14 z-20 flex flex-col gap-2 p-3 no-print sm:top-[7.5rem] sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:p-4">
+      <div className="panel sticky top-[6.5rem] z-20 flex flex-col gap-2 p-3 no-print sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:p-4">
         {isAdjust ? (
           <>
             <Button
               variant="outline"
               className="w-full sm:w-auto"
               onClick={onUndo}
-              disabled={undoStack.length === 0}
+              disabled={readOnly || undoStack.length === 0}
             >
               <Undo2 className="size-4" />
               Undo{undoStack[0] ? ` (${undoStack[0].label})` : ""}
@@ -629,7 +671,7 @@ function TruckWorkbench({
                 </Button>
               </div>
             )}
-            <Button className="w-full sm:ml-auto sm:w-auto" onClick={onLock}>
+            <Button className="w-full sm:ml-auto sm:w-auto" onClick={onLock} disabled={readOnly}>
               Proceed to Lock
               <ArrowRight className="size-4" />
             </Button>
@@ -639,7 +681,7 @@ function TruckWorkbench({
             <Button
               className="w-full sm:w-auto"
               onClick={onRunAllocation}
-              disabled={!canRunAllocation}
+              disabled={readOnly || !canRunAllocation}
             >
               <Play className="size-4" />
               <span className="sm:hidden">Run Allocation</span>
@@ -697,7 +739,10 @@ function TruckWorkbench({
       </div>
 
       {!focusTruck ? (
-        <EmptyState title="No active trucks" description="Activate trucks on Setup first." />
+        <EmptyState
+          title="No active trucks"
+          description="Activate trucks below, or add trucks in Admin → Trucks."
+        />
       ) : (
         <section className="panel overflow-hidden">
           <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">

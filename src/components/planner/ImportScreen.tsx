@@ -12,6 +12,7 @@ import {
   Receipt,
   Trash2,
   TriangleAlert,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
@@ -26,6 +27,13 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -49,10 +57,13 @@ import { CollapsibleSection } from "./ui/CollapsibleSection";
 import { EmptyState } from "./ui/EmptyState";
 import { StatTile } from "./ui/StatTile";
 import { FormField } from "./ui/FormField";
+import { StickyStepBar } from "./ui/StickyStepBar";
 import { TownCombobox } from "./TownCombobox";
 import { CustomerCombobox } from "./CustomerCombobox";
 import { cn } from "@/lib/utils";
 import { useRowHighlight } from "@/lib/useRowHighlight";
+import { usePlanReadOnly } from "@/hooks/use-plan-read-only";
+import { scrollToSearchTarget } from "@/lib/searchNavigation";
 
 /** Weight 0 = unset; negatives are valid for credit notes. */
 function weightUnset(w: number) {
@@ -86,7 +97,9 @@ export function ImportScreen() {
   const ensureCustomer = useStore((s) => s.ensureCustomer);
   const importInvoiceRows = useStore((s) => s.importInvoiceRows);
   const setStep = useStore((s) => s.setStep);
-  const { highlightProps } = useRowHighlight();
+  const searchHighlightId = useStore((s) => s.searchHighlightId);
+  const readOnly = usePlanReadOnly();
+  const { highlightProps } = useRowHighlight(searchHighlightId);
 
   const docRef = useRef<HTMLInputElement>(null);
   const excelRef = useRef<HTMLInputElement>(null);
@@ -96,6 +109,7 @@ export function ImportScreen() {
   const [area, setArea] = useState("");
   const [weight, setWeight] = useState("");
   const [excelParsing, setExcelParsing] = useState(false);
+  const [excelDragOver, setExcelDragOver] = useState(false);
   const [pendingHold, setPendingHold] = useState<{
     doc: string;
     customer: string;
@@ -151,8 +165,38 @@ export function ImportScreen() {
   const totalWeight = invoices.reduce((s, i) => s + (i.weight || 0), 0);
   const entered = invoices.filter((i) => !weightUnset(i.weight)).length;
   const avg = entered ? totalWeight / entered : 0;
-  const canConfirm = invoices.length > 0 && missingWeights === 0 && missingAreas === 0;
+  const canConfirm =
+    !readOnly && invoices.length > 0 && missingWeights === 0 && missingAreas === 0;
   const progressPct = invoices.length ? (entered / invoices.length) * 100 : 0;
+
+  const continueStatus = useMemo(() => {
+    if (readOnly) return "Plan is locked — unlock on Lock step to edit.";
+    if (invoices.length === 0) return "Enter at least one invoice to continue.";
+    if (missingWeights > 0)
+      return `${missingWeights} invoice${missingWeights === 1 ? "" : "s"} missing weight.`;
+    if (missingAreas > 0)
+      return `${missingAreas} invoice${missingAreas === 1 ? "" : "s"} missing town.`;
+    return "All invoices complete — ready for trucks.";
+  }, [readOnly, invoices.length, missingWeights, missingAreas]);
+
+  function scrollToFirstIncomplete() {
+    requestAnimationFrame(() => {
+      const el = document.querySelector(".weight-input.border-crit, [data-incomplete-town]");
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+
+  function handleContinueAttempt() {
+    if (!canConfirm) {
+      scrollToFirstIncomplete();
+      const firstBad = deliveryInvoices.find(
+        (i) => weightUnset(i.weight) || !i.area,
+      );
+      if (firstBad) scrollToSearchTarget(firstBad.id);
+      return;
+    }
+    handleConfirm();
+  }
 
   function resetForm() {
     setDoc("");
@@ -362,6 +406,12 @@ export function ImportScreen() {
 
   return (
     <div className="space-y-6">
+      {readOnly && (
+        <div className="rounded-xl border border-warn/40 bg-warn/5 px-4 py-3 text-sm text-warn">
+          This plan is locked. Invoices are read-only until you unlock on the Lock step.
+        </div>
+      )}
+
       <section className="panel p-4 sm:p-5">
         <ScreenHeader
           title="Enter Invoice"
@@ -369,39 +419,69 @@ export function ImportScreen() {
           className="mb-4"
         />
 
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <input
-            ref={excelRef}
-            type="file"
-            accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void handleExcelUpload(f);
-            }}
-          />
-          <Button
-            type="button"
-            variant="outline"
-            disabled={excelParsing}
-            onClick={() => excelRef.current?.click()}
-          >
-            <FileSpreadsheet className="size-4" />
-            {excelParsing ? "Importing…" : "Import Excel"}
-          </Button>
-          <Button type="button" variant="ghost" onClick={() => downloadInvoiceTemplate()}>
+        <input
+          ref={excelRef}
+          type="file"
+          accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+          className="hidden"
+          disabled={readOnly}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void handleExcelUpload(f);
+          }}
+        />
+        <button
+          type="button"
+          disabled={excelParsing || readOnly}
+          onClick={() => excelRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setExcelDragOver(true);
+          }}
+          onDragLeave={() => setExcelDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setExcelDragOver(false);
+            if (readOnly) return;
+            const f = e.dataTransfer.files?.[0];
+            if (f) void handleExcelUpload(f);
+          }}
+          className={cn(
+            "mb-4 flex w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed px-4 py-6 text-center transition-colors",
+            excelDragOver
+              ? "border-primary bg-primary/5"
+              : "border-border bg-panel-2/50 hover:border-primary/50 hover:bg-panel-2",
+            (excelParsing || readOnly) && "opacity-60",
+          )}
+        >
+          <div className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary">
+            {excelParsing ? (
+              <Upload className="size-5 animate-pulse" />
+            ) : (
+              <FileSpreadsheet className="size-5" />
+            )}
+          </div>
+          <div>
+            <p className="text-sm font-medium">
+              {excelParsing ? "Importing…" : "Drop Excel here or click to upload"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Columns: invoice #, customer code, customer name
+            </p>
+          </div>
+        </button>
+        <div className="mb-4 flex justify-end">
+          <Button type="button" variant="ghost" size="sm" onClick={() => downloadInvoiceTemplate()}>
             Download template
           </Button>
-          <span className="text-xs text-muted-foreground">
-            Columns: invoice #, customer code, customer name. Code is required and used to match Admin customers; new codes are saved to Admin (set town after).
-          </span>
         </div>
 
+        <div className="sticky top-[6.5rem] z-10 -mx-1 rounded-xl border border-border/60 bg-panel/95 p-3 backdrop-blur-md sm:-mx-0 sm:p-4">
         <form
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
           onSubmit={(e) => {
             e.preventDefault();
-            submitEntry();
+            if (!readOnly) submitEntry();
           }}
         >
           <FormField label="Doc number">
@@ -413,6 +493,7 @@ export function ImportScreen() {
               className="metric-mono h-11"
               autoComplete="off"
               autoFocus
+              disabled={readOnly}
             />
           </FormField>
           <FormField label="Customer" className="sm:col-span-1 lg:col-span-2">
@@ -420,7 +501,7 @@ export function ImportScreen() {
               value={customerName}
               customers={customers}
               onChange={applyCustomer}
-              allowCreate
+              allowCreate={!readOnly}
               searchPlaceholder="Search or add customer…"
               emptyLabel="Type a name to add a customer."
               buttonClassName="h-11 w-full"
@@ -446,15 +527,17 @@ export function ImportScreen() {
               onChange={(e) => setWeight(e.target.value)}
               placeholder="0"
               className="metric-mono h-11 text-lg"
+              disabled={readOnly}
             />
           </FormField>
           <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-5">
-            <Button type="submit" className="min-w-[8rem]">
+            <Button type="submit" className="min-w-[8rem]" disabled={readOnly}>
               Add invoice
             </Button>
             <Button
               type="button"
               variant="secondary"
+              disabled={readOnly}
               onClick={() => submitEntry({ forceHold: true })}
             >
               <Pause className="size-4" />
@@ -463,6 +546,7 @@ export function ImportScreen() {
             <Button
               type="button"
               variant="secondary"
+              disabled={readOnly}
               onClick={() => submitEntry({ asCollection: true })}
             >
               <Package className="size-4" />
@@ -471,6 +555,7 @@ export function ImportScreen() {
             <Button
               type="button"
               variant="secondary"
+              disabled={readOnly}
               onClick={() => submitEntry({ asCreditNote: true })}
             >
               <Receipt className="size-4" />
@@ -488,6 +573,7 @@ export function ImportScreen() {
             )}
           </div>
         </form>
+        </div>
       </section>
 
       <CollapsibleSection
@@ -571,7 +657,22 @@ export function ImportScreen() {
             description="Customer collects, or load on a truck. Mark Collection when entering an invoice — same as Hold for later."
             className="mb-4"
           />
-          <div className="overflow-x-auto rounded-xl border border-border">
+          <div className="space-y-3 md:hidden">
+            {collectionInvoices.map((i) => (
+              <CollectionCreditCard
+                key={i.id}
+                inv={i}
+                customers={customers}
+                mode="collection"
+                readOnly={readOnly}
+                highlightProps={highlightProps(i.id)}
+                onUpdate={(patch) => updateInvoice(i.id, patch)}
+                onHold={() => handleHold(i.id)}
+                onRemove={() => removeInvoice(i.id)}
+              />
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
             <Table>
               <TableHeader>
                 <TableRow className="bg-panel-2 hover:bg-panel-2">
@@ -595,19 +696,17 @@ export function ImportScreen() {
                       {(i.area && loadingNumberFor(customers, i.customer, i.area)) || "—"}
                     </TableCell>
                     <TableCell>
-                      <select
-                        className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                      <HandlingSelect
+                        mode="collection"
                         value={i.collection ? "collects" : "truck"}
-                        onChange={(e) =>
+                        disabled={readOnly}
+                        onChange={(v) =>
                           updateInvoice(i.id, {
-                            collection: e.target.value === "collects",
-                            truckId: e.target.value === "collects" ? null : i.truckId,
+                            collection: v === "collects",
+                            truckId: v === "collects" ? null : i.truckId,
                           })
                         }
-                      >
-                        <option value="collects">Customer collects</option>
-                        <option value="truck">Load on truck</option>
-                      </select>
+                      />
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
@@ -615,8 +714,8 @@ export function ImportScreen() {
                           type="button"
                           variant="ghost"
                           size="sm"
+                          disabled={readOnly || !i.doc}
                           onClick={() => handleHold(i.id)}
-                          disabled={!i.doc}
                         >
                           <Pause className="size-3.5" />
                           Hold
@@ -626,6 +725,7 @@ export function ImportScreen() {
                           variant="ghost"
                           size="icon"
                           className="size-8 text-muted-foreground hover:text-destructive"
+                          disabled={readOnly}
                           onClick={() => removeInvoice(i.id)}
                         >
                           <Trash2 className="size-4" />
@@ -647,7 +747,22 @@ export function ImportScreen() {
             description="Negative weights stay here until loaded on a truck. Unpicked credits remain in this section."
             className="mb-4"
           />
-          <div className="overflow-x-auto rounded-xl border border-border">
+          <div className="space-y-3 md:hidden">
+            {creditInvoices.map((i) => (
+              <CollectionCreditCard
+                key={i.id}
+                inv={i}
+                customers={customers}
+                mode="credit"
+                readOnly={readOnly}
+                highlightProps={highlightProps(i.id)}
+                onUpdate={(patch) => updateInvoice(i.id, patch)}
+                onHold={() => handleHold(i.id)}
+                onRemove={() => removeInvoice(i.id)}
+              />
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
             <Table>
               <TableHeader>
                 <TableRow className="bg-panel-2 hover:bg-panel-2">
@@ -671,6 +786,7 @@ export function ImportScreen() {
                         type="number"
                         inputMode="decimal"
                         step="any"
+                        disabled={readOnly}
                         value={weightUnset(i.weight) ? "" : i.weight}
                         onChange={(e) => {
                           const w = parseWeightInput(e.target.value);
@@ -687,19 +803,17 @@ export function ImportScreen() {
                       {(i.area && loadingNumberFor(customers, i.customer, i.area)) || "—"}
                     </TableCell>
                     <TableCell>
-                      <select
-                        className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                      <HandlingSelect
+                        mode="credit"
                         value={i.creditNote ? "credit" : "truck"}
-                        onChange={(e) =>
+                        disabled={readOnly}
+                        onChange={(v) =>
                           updateInvoice(i.id, {
-                            creditNote: e.target.value === "credit",
-                            truckId: e.target.value === "credit" ? null : i.truckId,
+                            creditNote: v === "credit",
+                            truckId: v === "credit" ? null : i.truckId,
                           })
                         }
-                      >
-                        <option value="credit">Credit note</option>
-                        <option value="truck">Load on truck</option>
-                      </select>
+                      />
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
@@ -707,8 +821,8 @@ export function ImportScreen() {
                           type="button"
                           variant="ghost"
                           size="sm"
+                          disabled={readOnly || !i.doc}
                           onClick={() => handleHold(i.id)}
-                          disabled={!i.doc}
                         >
                           <Pause className="size-3.5" />
                           Hold
@@ -718,6 +832,7 @@ export function ImportScreen() {
                           variant="ghost"
                           size="icon"
                           className="size-8 text-muted-foreground hover:text-destructive"
+                          disabled={readOnly}
                           onClick={() => removeInvoice(i.id)}
                         >
                           <Trash2 className="size-4" />
@@ -805,7 +920,7 @@ export function ImportScreen() {
         )}
       </section>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2">
         <div className="panel p-4">
           <div className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
             Validation
@@ -838,27 +953,18 @@ export function ImportScreen() {
         </div>
 
         <StatTile label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />
-        <div className="panel flex flex-col justify-between p-4">
-          <div className="mb-3 grid grid-cols-2 gap-2 text-sm">
-            <span className="text-muted-foreground">Invoices</span>
-            <span className="metric-mono text-right">{invoices.length}</span>
-            <span className="text-muted-foreground">Weights entered</span>
-            <span className="metric-mono text-right">{entered}</span>
-            <span className="text-muted-foreground">Average</span>
-            <span className="metric-mono text-right">{avg.toFixed(1)} kg</span>
-          </div>
-          <div className="space-y-2">
-            <Button disabled={!canConfirm} className="w-full" size="lg" onClick={handleConfirm}>
-              Continue to Trucks
-              <ArrowRight className="size-4" />
-            </Button>
-            <Button variant="outline" className="w-full" onClick={() => setStep("setup")}>
-              <ArrowLeft className="size-4" />
-              Back to Setup
-            </Button>
-          </div>
-        </div>
       </div>
+
+      <StickyStepBar
+        status={continueStatus}
+        primaryLabel="Continue to Trucks"
+        primaryIcon={ArrowRight}
+        onPrimary={handleContinueAttempt}
+        primaryDisabled={readOnly}
+        secondaryLabel="Back to Setup"
+        secondaryIcon={ArrowLeft}
+        onSecondary={() => setStep("setup")}
+      />
 
       <AlertDialog open={!!pendingHold} onOpenChange={(o) => !o && setPendingHold(null)}>
         <AlertDialogContent className="panel border-border">
@@ -899,6 +1005,130 @@ export function ImportScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+function HandlingSelect({
+  mode,
+  value,
+  disabled,
+  onChange,
+}: {
+  mode: "collection" | "credit";
+  value: string;
+  disabled?: boolean;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <Select value={value} disabled={disabled} onValueChange={onChange}>
+      <SelectTrigger className="h-9 w-[11rem]">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {mode === "collection" ? (
+          <>
+            <SelectItem value="collects">Customer collects</SelectItem>
+            <SelectItem value="truck">Load on truck</SelectItem>
+          </>
+        ) : (
+          <>
+            <SelectItem value="credit">Credit note</SelectItem>
+            <SelectItem value="truck">Load on truck</SelectItem>
+          </>
+        )}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function CollectionCreditCard({
+  inv,
+  customers,
+  mode,
+  readOnly,
+  highlightProps,
+  onUpdate,
+  onHold,
+  onRemove,
+}: {
+  inv: Invoice;
+  customers: Record<string, CustomerMemory>;
+  mode: "collection" | "credit";
+  readOnly?: boolean;
+  highlightProps?: {
+    "data-search-target"?: string;
+    "data-state"?: "selected";
+    onClick: (e: React.MouseEvent) => void;
+  };
+  onUpdate: (patch: Partial<Invoice>) => void;
+  onHold: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "space-y-3 rounded-xl border border-border bg-panel-2/40 p-4",
+        highlightProps?.["data-state"] === "selected" && "bg-primary/10 ring-1 ring-primary/30",
+      )}
+      {...highlightProps}
+    >
+      <div className="metric-mono text-sm font-medium">{inv.doc}</div>
+      <div className="text-sm">{inv.customer}</div>
+      <div className="text-sm text-muted-foreground">{inv.area || "—"}</div>
+      {mode === "credit" && (
+        <Input
+          type="number"
+          inputMode="decimal"
+          step="any"
+          disabled={readOnly}
+          value={weightUnset(inv.weight) ? "" : inv.weight}
+          onChange={(e) => {
+            const w = parseWeightInput(e.target.value);
+            onUpdate({ weight: w ?? 0 });
+          }}
+          className={cn("metric-mono h-9", weightUnset(inv.weight) && "border-crit")}
+        />
+      )}
+      <HandlingSelect
+        mode={mode}
+        disabled={readOnly}
+        value={
+          mode === "collection"
+            ? inv.collection
+              ? "collects"
+              : "truck"
+            : inv.creditNote
+              ? "credit"
+              : "truck"
+        }
+        onChange={(v) =>
+          mode === "collection"
+            ? onUpdate({
+                collection: v === "collects",
+                truckId: v === "collects" ? null : inv.truckId,
+              })
+            : onUpdate({
+                creditNote: v === "credit",
+                truckId: v === "credit" ? null : inv.truckId,
+              })
+        }
+      />
+      <div className="flex gap-2">
+        <Button type="button" variant="secondary" size="sm" disabled={readOnly} onClick={onHold}>
+          Hold
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="text-destructive"
+          disabled={readOnly}
+          onClick={onRemove}
+        >
+          Remove
+        </Button>
+      </div>
     </div>
   );
 }

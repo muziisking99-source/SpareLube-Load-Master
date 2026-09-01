@@ -23,7 +23,14 @@ export function StatTile({
             : "";
 
   return (
-    <div className={cn("panel p-4", className)}>
+    <div
+      className={cn(
+        "panel relative overflow-hidden p-4",
+        !tone &&
+          "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-primary/70 before:to-transparent",
+        className,
+      )}
+    >
       <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className={cn("mt-1 text-2xl font-semibold metric-mono tracking-tight", color)}>
         {value}

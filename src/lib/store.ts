@@ -85,6 +85,9 @@ type State = {
   currentDate: string;
   undoStack: UndoAction[];
   showResume: boolean;
+  /** Global row highlight from TopBar search navigation. */
+  searchHighlightId: string | null;
+  setSearchHighlightId: (id: string | null) => void;
 
   /** Hydrate from cloud/IDB. Skips if already hydrated unless force. Won't overwrite dirty local. */
   hydrate: (opts?: { force?: boolean }) => Promise<void>;
@@ -509,6 +512,8 @@ export const useStore = create<State>((set, get) => {
     currentDate: tomorrowISO(),
     undoStack: [],
     showResume: false,
+    searchHighlightId: null,
+    setSearchHighlightId: (id) => set({ searchHighlightId: id }),
     adminPin: "",
 
     hydrate: async (opts) => {

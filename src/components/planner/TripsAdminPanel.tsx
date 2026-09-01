@@ -15,6 +15,16 @@ import { EmptyState } from "@/components/planner/ui/EmptyState";
 import { FormField } from "@/components/planner/ui/FormField";
 import { AdminSearchInput, matchesQuery } from "@/components/planner/AdminSearchInput";
 import { TownCombobox } from "@/components/planner/TownCombobox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
   const trips = useStore((s) => s.trips);
@@ -35,6 +45,7 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
   const [newName, setNewName] = useState("");
   const [newTowns, setNewTowns] = useState<string[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const filteredTrips = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -309,11 +320,7 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
                             size="sm"
                             variant="ghost"
                             className="text-destructive"
-                            onClick={() => {
-                              if (!confirm(`Delete trip "${trip.name}"?`)) return;
-                              deleteTrip(trip.id);
-                              toast.success("Trip deleted");
-                            }}
+                            onClick={() => setDeleteTarget({ id: trip.id, name: trip.name })}
                           >
                             <Trash2 className="size-4" />
                           </Button>
@@ -337,6 +344,32 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
           )}
         </>
       )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent className="panel border-border">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete trip {deleteTarget?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the trip from the catalog. Plans that reference it may need updating.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deleteTarget) {
+                  deleteTrip(deleteTarget.id);
+                  toast.success("Trip deleted");
+                  setDeleteTarget(null);
+                }
+              }}
+            >
+              Delete trip
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

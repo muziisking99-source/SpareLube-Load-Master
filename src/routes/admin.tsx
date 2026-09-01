@@ -25,6 +25,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmptyState } from "@/components/planner/ui/EmptyState";
+import { PlannerSkeleton } from "@/components/planner/PlannerSkeleton";
 import { CustomerAreaBoard } from "@/components/planner/CustomerAreaBoard";
 import { LoadingNumbersBoard } from "@/components/planner/LoadingNumbersBoard";
 import { TripsAdminPanel } from "@/components/planner/TripsAdminPanel";
@@ -104,11 +105,7 @@ function AdminPage() {
   }, []);
 
   if (!hydrated) {
-    return (
-      <div className="grid min-h-[100dvh] place-items-center p-4">
-        <p className="text-sm text-muted-foreground">Loading admin…</p>
-      </div>
-    );
+    return <PlannerSkeleton />;
   }
 
   // Server session gate (/admin-unlock) already verified access — no second PIN screen.
@@ -433,7 +430,7 @@ function AdminConsole({
 
     <div className="min-h-[100dvh]">
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-3 sm:gap-4 sm:px-4">
+        <div className="mx-auto flex h-12 max-w-7xl items-center gap-2 px-3 sm:gap-3 sm:px-4">
           <Link
             to="/"
             className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg px-2 text-sm font-medium text-foreground hover:bg-secondary/50 sm:h-8 sm:px-3"
@@ -464,13 +461,13 @@ function AdminConsole({
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl p-4">
+      <main className="mx-auto max-w-7xl p-4">
         <Tabs
           value={adminTab}
           onValueChange={setAdminTab}
           className="w-full"
         >
-          <TabsList className="mb-4 h-auto w-full flex-wrap justify-start gap-1 bg-secondary p-1">
+          <TabsList className="mb-4 h-auto w-full justify-start gap-1 overflow-x-auto bg-secondary p-1 flex-nowrap">
             <TabsTrigger value="customers">Customers</TabsTrigger>
             <TabsTrigger value="areas">Towns</TabsTrigger>
             <TabsTrigger value="trips">Trips</TabsTrigger>
