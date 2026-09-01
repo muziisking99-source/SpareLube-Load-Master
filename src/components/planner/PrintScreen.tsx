@@ -235,6 +235,243 @@ function LoadStopsTable({
   );
 }
 
+type TruckSheetData = {
+  truck: { id: string; name: string };
+  truckDay: import("@/lib/types").TruckDay | undefined;
+  rounds: Array<{
+    round: 1 | 2;
+    list: Invoice[];
+    stops: LoadStop[];
+    tripId: string | null;
+  }>;
+};
+
+function TruckSheetsContent({
+  planDate,
+  truckSheets,
+  customers,
+  trips,
+  dayStopOrder,
+}: {
+  planDate: string;
+  truckSheets: TruckSheetData[];
+  customers: Record<string, import("@/lib/types").CustomerMemory>;
+  trips: import("@/lib/types").Trip[];
+  dayStopOrder: import("@/lib/types").Plan["dayStopOrder"];
+}) {
+  return (
+    <>
+      {truckSheets.map((sheet) => {
+        const { truck: t, truckDay, rounds } = sheet;
+        const sheetTripId = truckDay
+          ? tripIdForInvoice({ area: rounds[0]?.list[0]?.area ?? "" }, truckDay, trips) ??
+            tripIdsForTruckDay(truckDay)[0] ??
+            null
+          : null;
+        return (
+          <div key={t.id} className="load-sheet">
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 16,
+                borderBottom: "2px solid #111",
+                paddingBottom: 10,
+                marginBottom: 18,
+              }}
+            >
+              <div>
+                <h1
+                  style={{ fontSize: 20, fontWeight: 700, margin: 0, letterSpacing: "-0.02em" }}
+                >
+                  Truck Load Sheet
+                </h1>
+                <div style={{ fontSize: 12, color: "#444" }}>SpareLube Load Master</div>
+              </div>
+              <Logo variant="light" className="load-sheet-logo" />
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: "14px 28px",
+                marginBottom: 20,
+              }}
+            >
+              <MetaField label="Date" value={planDate} />
+              <MetaField label="Truck" value={t.name} />
+              <MetaField label="Trip" value={tripNamesForTruckDay(truckDay, trips) || "—"} />
+              <MetaField label="Driver" blank />
+              <MetaField label="Petty cash" blank />
+              <MetaField label="Rounds" value={rounds.length > 1 ? "1 + 2" : "1"} />
+            </div>
+
+            {rounds.map((r) => {
+              const wt = r.list.reduce((s, i) => s + i.weight, 0);
+              return (
+                <div
+                  key={r.round}
+                  style={{ marginBottom: r.round === 1 && rounds.length > 1 ? 28 : 0 }}
+                >
+                  {rounds.length > 1 && (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        letterSpacing: "0.04em",
+                        textTransform: "uppercase",
+                        marginBottom: 8,
+                        color: "#333",
+                      }}
+                    >
+                      Round {r.round}
+                      {r.round === 2 && r.tripId
+                        ? ` — ${tripById(trips, r.tripId)?.name ?? ""}`
+                        : ""}
+                    </div>
+                  )}
+                  <LoadStopsTable
+                    stops={r.stops}
+                    customers={customers}
+                    totalWeight={wt}
+                    tripId={r.tripId ?? sheetTripId}
+                    trips={trips}
+                    dayStopOrder={dayStopOrder}
+                    truckDay={truckDay}
+                  />
+                </div>
+              );
+            })}
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1.4fr 1fr",
+                gap: 32,
+                marginTop: 28,
+                fontSize: 12,
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    fontSize: 10,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    color: "#555",
+                    marginBottom: 4,
+                  }}
+                >
+                  Loader signature
+                </div>
+                <div style={{ borderBottom: "1px solid #222", minHeight: 22 }} />
+              </div>
+              <div>
+                <div
+                  style={{
+                    fontSize: 10,
+                    letterSpacing: "0.06em",
+                    textTransform: "uppercase",
+                    color: "#555",
+                    marginBottom: 4,
+                  }}
+                >
+                  Time departed
+                </div>
+                <div style={{ borderBottom: "1px solid #222", minHeight: 22 }} />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function MasterReportContent({
+  planDate,
+  invoices,
+  trucks,
+  trips,
+  customers,
+  dayStopOrder,
+  truckDayById,
+  sortInvoices,
+}: {
+  planDate: string;
+  invoices: Invoice[];
+  trucks: { id: string; name: string }[];
+  trips: import("@/lib/types").Trip[];
+  customers: Record<string, import("@/lib/types").CustomerMemory>;
+  dayStopOrder: import("@/lib/types").Plan["dayStopOrder"];
+  truckDayById: Map<string, import("@/lib/types").TruckDay>;
+  sortInvoices: (list: Invoice[]) => Invoice[];
+}) {
+  return (
+    <div style={{ padding: "24px" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 16,
+          marginBottom: 12,
+        }}
+      >
+        <div>
+          <h1 style={{ fontSize: 22, margin: "0 0 6px" }}>Master Reconciliation</h1>
+          <div style={{ fontSize: 13 }}>
+            Date: <b>{planDate}</b>
+          </div>
+        </div>
+        <Logo variant="light" className="load-sheet-logo" />
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: 60 }}>Load #</th>
+            <th style={{ width: 100 }}>Document</th>
+            <th>Customer</th>
+            <th style={{ width: 100 }}>Weight</th>
+            <th style={{ width: 160 }}>Truck</th>
+            <th style={{ width: 70 }}>Round</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sortInvoices(invoices).map((i) => {
+            const truckDay = i.truckId ? truckDayById.get(i.truckId) : undefined;
+            const invTripId = truckDay ? tripIdForInvoice(i, truckDay, trips) : null;
+            const loadNo = loadingNumberFor(
+              customers,
+              i.customer,
+              i.area,
+              invTripId,
+              trips,
+              dayStopOrder,
+            );
+            return (
+              <tr key={i.id}>
+                <td style={{ textAlign: "right" }}>{loadNo > 0 ? loadNo : ""}</td>
+                <td>{i.doc}</td>
+                <td>{i.customer}</td>
+                <td style={{ textAlign: "right" }}>{i.weight}</td>
+                <td>{trucks.find((t) => t.id === i.truckId)?.name ?? "UNALLOCATED"}</td>
+                <td style={{ textAlign: "center" }}>{i.truckId ? (i.round ?? 1) : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={{ marginTop: 24, fontSize: 12 }}>
+        Reconciled By: ______________________ Signature: ______________________
+      </div>
+    </div>
+  );
+}
+
 export function PrintScreen() {
   const plan = useStore((s) => s.plans[s.currentDate])!;
   const trucks = useStore((s) => s.trucks);
@@ -248,7 +485,11 @@ export function PrintScreen() {
 
   function print(v: "truck" | "master") {
     setView(v);
-    setTimeout(() => window.print(), 100);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.print();
+      });
+    });
   }
 
   /** Truck sheets: load # lowest → highest; invoices without a load # last. */
@@ -345,203 +586,55 @@ export function PrintScreen() {
           className="mb-3"
         />
         <div className="overflow-auto rounded-xl border border-border bg-panel-2 p-4">
-          {view === "truck" && (
-            <div className="print-root mx-auto max-w-4xl bg-white text-black shadow-lg" style={{ display: "block" }}>
-          {truckSheets.map((sheet) => {
-            const { truck: t, truckDay, rounds } = sheet;
-            const sheetTripId = truckDay
-              ? tripIdForInvoice({ area: rounds[0]?.list[0]?.area ?? "" }, truckDay, trips) ??
-                tripIdsForTruckDay(truckDay)[0] ??
-                null
-              : null;
-            return (
-              <div key={t.id} className="load-sheet">
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 16,
-                    borderBottom: "2px solid #111",
-                    paddingBottom: 10,
-                    marginBottom: 18,
-                  }}
-                >
-                  <div>
-                    <h1
-                      style={{ fontSize: 20, fontWeight: 700, margin: 0, letterSpacing: "-0.02em" }}
-                    >
-                      Truck Load Sheet
-                    </h1>
-                    <div style={{ fontSize: 12, color: "#444" }}>SpareLube Load Master</div>
-                  </div>
-                  <Logo variant="light" className="load-sheet-logo" />
-                </div>
-
-
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(3, 1fr)",
-                    gap: "14px 28px",
-                    marginBottom: 20,
-                  }}
-                >
-                  <MetaField label="Date" value={plan.date} />
-                  <MetaField label="Truck" value={t.name} />
-                  <MetaField label="Trip" value={tripNamesForTruckDay(truckDay, trips) || "—"} />
-                  <MetaField label="Driver" blank />
-                  <MetaField label="Petty cash" blank />
-                  <MetaField
-                    label="Rounds"
-                    value={rounds.length > 1 ? "1 + 2" : "1"}
-                  />
-                </div>
-
-                {rounds.map((r) => {
-                  const wt = r.list.reduce((s, i) => s + i.weight, 0);
-                  return (
-                    <div key={r.round} style={{ marginBottom: r.round === 1 && rounds.length > 1 ? 28 : 0 }}>
-                      {rounds.length > 1 && (
-                        <div
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 700,
-                            letterSpacing: "0.04em",
-                            textTransform: "uppercase",
-                            marginBottom: 8,
-                            color: "#333",
-                          }}
-                        >
-                          Round {r.round}
-                          {r.round === 2 && r.tripId
-                            ? ` — ${tripById(trips, r.tripId)?.name ?? ""}`
-                            : ""}
-                        </div>
-                      )}
-                      <LoadStopsTable
-                        stops={r.stops}
-                        customers={customers}
-                        totalWeight={wt}
-                        tripId={r.tripId ?? sheetTripId}
-                        trips={trips}
-                        dayStopOrder={plan.dayStopOrder}
-                        truckDay={truckDay}
-                      />
-                    </div>
-                  );
-                })}
-
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1.4fr 1fr",
-                    gap: 32,
-                    marginTop: 28,
-                    fontSize: 12,
-                  }}
-                >
-                  <div>
-                    <div
-                      style={{
-                        fontSize: 10,
-                        letterSpacing: "0.06em",
-                        textTransform: "uppercase",
-                        color: "#555",
-                        marginBottom: 4,
-                      }}
-                    >
-                      Loader signature
-                    </div>
-                    <div style={{ borderBottom: "1px solid #222", minHeight: 22 }} />
-                  </div>
-                  <div>
-                    <div
-                      style={{
-                        fontSize: 10,
-                        letterSpacing: "0.06em",
-                        textTransform: "uppercase",
-                        color: "#555",
-                        marginBottom: 4,
-                      }}
-                    >
-                      Time departed
-                    </div>
-                    <div style={{ borderBottom: "1px solid #222", minHeight: 22 }} />
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-            </div>
-          )}
-
-          {view === "master" && (
-            <div className="print-root mx-auto max-w-4xl bg-white text-black shadow-lg" style={{ display: "block" }}>
-              <div style={{ padding: "24px" }}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 16,
-                    marginBottom: 12,
-                  }}
-                >
-                  <div>
-                    <h1 style={{ fontSize: 22, margin: "0 0 6px" }}>Master Reconciliation</h1>
-                    <div style={{ fontSize: 13 }}>
-                      Date: <b>{plan.date}</b>
-                    </div>
-                  </div>
-                  <Logo variant="light" className="load-sheet-logo" />
-                </div>
-
-                <table>
-                  <thead>
-                    <tr>
-                      <th style={{ width: 60 }}>Load #</th>
-                      <th style={{ width: 100 }}>Document</th>
-                      <th>Customer</th>
-                      <th style={{ width: 100 }}>Weight</th>
-                      <th style={{ width: 160 }}>Truck</th>
-                      <th style={{ width: 70 }}>Round</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortInvoices(plan.invoices).map((i) => {
-                      const truckDay = i.truckId ? truckDayById.get(i.truckId) : undefined;
-                      const invTripId = truckDay
-                        ? tripIdForInvoice(i, truckDay, trips)
-                        : null;
-                      const loadNo = loadingNumberFor(
-                        customers,
-                        i.customer,
-                        i.area,
-                        invTripId,
-                        trips,
-                        plan.dayStopOrder,
-                      );
-                      return (
-                        <tr key={i.id}>
-                          <td style={{ textAlign: "right" }}>{loadNo > 0 ? loadNo : ""}</td>
-                          <td>{i.doc}</td>
-                          <td>{i.customer}</td>
-                          <td style={{ textAlign: "right" }}>{i.weight}</td>
-                          <td>{trucks.find((t) => t.id === i.truckId)?.name ?? "UNALLOCATED"}</td>
-                          <td style={{ textAlign: "center" }}>{i.truckId ? (i.round ?? 1) : "—"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <div style={{ marginTop: 24, fontSize: 12 }}>
-                  Reconciled By: ______________________ Signature: ______________________
-                </div>
-              </div>
-            </div>
-          )}
+          <div className="mx-auto max-w-4xl bg-white text-black shadow-lg">
+            {view === "truck" && (
+              <TruckSheetsContent
+                planDate={plan.date}
+                truckSheets={truckSheets}
+                customers={customers}
+                trips={trips}
+                dayStopOrder={plan.dayStopOrder}
+              />
+            )}
+            {view === "master" && (
+              <MasterReportContent
+                planDate={plan.date}
+                invoices={plan.invoices}
+                trucks={trucks}
+                trips={trips}
+                customers={customers}
+                dayStopOrder={plan.dayStopOrder}
+                truckDayById={truckDayById}
+                sortInvoices={(list) => sortInvoices(list)}
+              />
+            )}
+          </div>
         </div>
+      </div>
+
+      {/* Must sit outside any .no-print ancestor — parent display:none hides all descendants */}
+      <div className="print-root">
+        {view === "truck" && (
+          <TruckSheetsContent
+            planDate={plan.date}
+            truckSheets={truckSheets}
+            customers={customers}
+            trips={trips}
+            dayStopOrder={plan.dayStopOrder}
+          />
+        )}
+        {view === "master" && (
+          <MasterReportContent
+            planDate={plan.date}
+            invoices={plan.invoices}
+            trucks={trucks}
+            trips={trips}
+            customers={customers}
+            dayStopOrder={plan.dayStopOrder}
+            truckDayById={truckDayById}
+            sortInvoices={(list) => sortInvoices(list)}
+          />
+        )}
       </div>
     </div>
   );

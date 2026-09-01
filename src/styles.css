@@ -250,6 +250,7 @@
   .print-root {
     display: block !important;
     color: black !important;
+    background: white !important;
   }
   .print-root * {
     color: black !important;
