@@ -35,6 +35,8 @@ export type Invoice = {
   collection?: boolean;
   /** Credit note — stays in Credit notes until loaded on a truck; weight may be negative */
   creditNote?: boolean;
+  /** Free-text note for Adjust / load sheet (this day only) */
+  comment?: string;
 };
 
 /** Warehouse-scoped invoice waiting for a day when its town is on a trip */
@@ -203,6 +205,7 @@ export function normalizeInvoice(raw: Partial<Invoice> & Pick<Invoice, "id" | "d
     exception: !!raw.exception,
     collection: !!raw.collection,
     creditNote,
+    comment: typeof raw.comment === "string" ? raw.comment : "",
   };
 }
 

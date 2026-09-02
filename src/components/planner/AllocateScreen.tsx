@@ -468,6 +468,7 @@ function TruckWorkbench({
   const setInvoiceRound = useStore((s) => s.setInvoiceRound);
   const setDayTripStopSequence = useStore((s) => s.setDayTripStopSequence);
   const setDayTripCustomerLoadNumber = useStore((s) => s.setDayTripCustomerLoadNumber);
+  const updateInvoice = useStore((s) => s.updateInvoice);
   const { highlightProps } = useRowHighlight(searchHighlightId);
   const unallocatedPagination = usePagination(unallocated, 50);
 
@@ -815,6 +816,7 @@ function TruckWorkbench({
                       <TableHead className="w-28">Load #</TableHead>
                       <TableHead>Doc</TableHead>
                       <TableHead>Customer</TableHead>
+                      {isAdjust && <TableHead className="min-w-[10rem]">Comment</TableHead>}
                       <TableHead>Town</TableHead>
                       <TableHead className="w-24 text-right">Weight</TableHead>
                       <TableHead className="w-16">Round</TableHead>
@@ -847,6 +849,7 @@ function TruckWorkbench({
                             invoiceTripId &&
                             setDayTripCustomerLoadNumber(invoiceTripId, key, n)
                           }
+                          onSetComment={(comment) => updateInvoice(i.id, { comment })}
                           customerKeyFor={customerKeyFor}
                           onMoveInvoice={() => onMoveInvoice(i)}
                           onUnallocate={() => onUnallocate(i)}
@@ -1062,6 +1065,7 @@ function SortableTruckInvoiceRow({
   highlightProps,
   onToggleSelect,
   onSetLoad,
+  onSetComment,
   customerKeyFor,
   onMoveInvoice,
   onUnallocate,
@@ -1079,6 +1083,7 @@ function SortableTruckInvoiceRow({
   };
   onToggleSelect: () => void;
   onSetLoad: (key: string, n: number) => void;
+  onSetComment: (comment: string) => void;
   customerKeyFor: (inv: Invoice) => string;
   onMoveInvoice: () => void;
   onUnallocate: () => void;
@@ -1171,6 +1176,17 @@ function SortableTruckInvoiceRow({
         </span>
       </TableCell>
       <TableCell className="max-w-[14rem] truncate">{inv.customer}</TableCell>
+      {isAdjust && (
+        <TableCell>
+          <Input
+            value={inv.comment ?? ""}
+            onChange={(e) => onSetComment(e.target.value)}
+            placeholder="Note…"
+            className="h-8 min-w-[8rem] text-sm"
+            data-no-row-highlight
+          />
+        </TableCell>
+      )}
       <TableCell className="text-muted-foreground">{inv.area || "—"}</TableCell>
       <TableCell className="metric-mono text-right">{inv.weight.toFixed(0)}</TableCell>
       <TableCell>

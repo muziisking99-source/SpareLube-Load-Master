@@ -23,6 +23,7 @@ type LoadStop = {
   count: number;
   weight: number;
   hasCredit: boolean;
+  comment: string;
 };
 
 /** Group invoices by customer, preserving load-number order from a sorted list. */
@@ -40,6 +41,7 @@ function groupStopsForLoadSheet(list: Invoice[]): LoadStop[] {
         count: 0,
         weight: 0,
         hasCredit: false,
+        comment: "",
       };
       map.set(key, stop);
       order.push(key);
@@ -47,6 +49,10 @@ function groupStopsForLoadSheet(list: Invoice[]): LoadStop[] {
     stop.count += 1;
     stop.weight += inv.weight || 0;
     if (inv.creditNote || inv.weight < 0) stop.hasCredit = true;
+    const note = (inv.comment ?? "").trim();
+    if (note && !stop.comment.split(" · ").includes(note)) {
+      stop.comment = stop.comment ? `${stop.comment} · ${note}` : note;
+    }
   }
   return order.map((k) => map.get(k)!);
 }
@@ -58,9 +64,9 @@ function TickCell() {
         aria-hidden
         style={{
           display: "inline-block",
-          width: 14,
-          height: 14,
-          border: "1.5px solid #333",
+          width: 11,
+          height: 11,
+          border: "1.25px solid #333",
           verticalAlign: "middle",
         }}
       />
@@ -81,22 +87,24 @@ function MetaField({
     <div style={{ minWidth: 0 }}>
       <div
         style={{
-          fontSize: 10,
-          letterSpacing: "0.06em",
+          fontSize: 8,
+          letterSpacing: "0.05em",
           textTransform: "uppercase",
           color: "#555",
-          marginBottom: 4,
+          marginBottom: 1,
+          lineHeight: 1.2,
         }}
       >
         {label}
       </div>
       <div
         style={{
-          fontSize: 13,
+          fontSize: 11,
           fontWeight: blank ? 400 : 600,
           borderBottom: "1px solid #222",
-          minHeight: 22,
-          paddingBottom: 2,
+          minHeight: 16,
+          paddingBottom: 1,
+          lineHeight: 1.2,
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -127,15 +135,16 @@ function LoadStopsTable({
 }) {
   const invoiceCount = stops.reduce((n, s) => n + s.count, 0);
   return (
-    <table style={{ marginTop: 4, width: "100%", borderCollapse: "collapse" }}>
+    <table style={{ marginTop: 0, width: "100%", borderCollapse: "collapse" }}>
       <thead>
         <tr>
-          <th style={{ width: 56 }}>Load #</th>
+          <th style={{ width: 44 }}>Load #</th>
           <th>Customer</th>
-          <th style={{ width: 100 }}>Town</th>
-          <th style={{ width: 96, textAlign: "right" }}>Weight (kg)</th>
-          <th style={{ width: 44, textAlign: "center" }}>Cash</th>
-          <th style={{ width: 44, textAlign: "center" }}>EFT</th>
+          <th style={{ width: 110 }}>Comment</th>
+          <th style={{ width: 80 }}>Town</th>
+          <th style={{ width: 72, textAlign: "right" }}>Weight (kg)</th>
+          <th style={{ width: 36, textAlign: "center" }}>Cash</th>
+          <th style={{ width: 36, textAlign: "center" }}>EFT</th>
         </tr>
       </thead>
       <tbody>
@@ -157,18 +166,18 @@ function LoadStopsTable({
                 {loadNo > 0 ? loadNo : ""}
               </td>
               <td>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                   <span>{stop.customer}</span>
                   {stop.count > 1 && (
                     <span
                       className="inv-count-chip"
                       style={{
                         display: "inline-block",
-                        padding: "1px 7px",
+                        padding: "0 5px",
                         borderRadius: 999,
-                        fontSize: 10,
+                        fontSize: 9,
                         fontWeight: 700,
-                        lineHeight: 1.4,
+                        lineHeight: 1.3,
                         background: "#efefef",
                         border: "1px solid #bbb",
                       }}
@@ -182,11 +191,11 @@ function LoadStopsTable({
                       className="inv-credit-chip"
                       style={{
                         display: "inline-block",
-                        padding: "1px 7px",
+                        padding: "0 5px",
                         borderRadius: 999,
-                        fontSize: 10,
+                        fontSize: 9,
                         fontWeight: 700,
-                        lineHeight: 1.4,
+                        lineHeight: 1.3,
                         background: "#fff4e5",
                         border: "1px solid #d4a574",
                       }}
@@ -197,6 +206,7 @@ function LoadStopsTable({
                   )}
                 </span>
               </td>
+              <td style={{ fontSize: 10, color: "#333" }}>{stop.comment || ""}</td>
               <td>{stop.area}</td>
               <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                 {stop.weight}
@@ -208,7 +218,7 @@ function LoadStopsTable({
         })}
         {stops.length === 0 && (
           <tr>
-            <td colSpan={6} style={{ textAlign: "center", color: "#666" }}>
+            <td colSpan={7} style={{ textAlign: "center", color: "#666" }}>
               No invoices
             </td>
           </tr>
@@ -216,7 +226,7 @@ function LoadStopsTable({
       </tbody>
       <tfoot>
         <tr>
-          <td colSpan={3} style={{ fontWeight: 700 }}>
+          <td colSpan={4} style={{ fontWeight: 700 }}>
             Total — {invoiceCount} invoice{invoiceCount === 1 ? "" : "s"}
           </td>
           <td
@@ -262,130 +272,123 @@ function TruckSheetsContent({
 }) {
   return (
     <>
-      {truckSheets.map((sheet) => {
+      {truckSheets.flatMap((sheet) => {
         const { truck: t, truckDay, rounds } = sheet;
-        const sheetTripId = truckDay
-          ? tripIdForInvoice({ area: rounds[0]?.list[0]?.area ?? "" }, truckDay, trips) ??
-            tripIdsForTruckDay(truckDay)[0] ??
-            null
-          : null;
-        return (
-          <div key={t.id} className="load-sheet">
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 16,
-                borderBottom: "2px solid #111",
-                paddingBottom: 10,
-                marginBottom: 18,
-              }}
-            >
-              <div>
-                <h1
-                  style={{ fontSize: 20, fontWeight: 700, margin: 0, letterSpacing: "-0.02em" }}
-                >
-                  Truck Load Sheet
-                </h1>
-                <div style={{ fontSize: 12, color: "#444" }}>SpareLube Load Master</div>
+        return rounds.map((r) => {
+          const sheetTripId =
+            r.tripId ??
+            (truckDay
+              ? tripIdForInvoice({ area: r.list[0]?.area ?? "" }, truckDay, trips) ??
+                tripIdsForTruckDay(truckDay)[0] ??
+                null
+              : null);
+          const tripLabel =
+            r.round === 2 && r.tripId
+              ? tripById(trips, r.tripId)?.name ||
+                tripNamesForTruckDay(truckDay, trips) ||
+                "—"
+              : tripNamesForTruckDay(truckDay, trips) || "—";
+          const wt = r.list.reduce((s, i) => s + i.weight, 0);
+          return (
+            <div key={`${t.id}-r${r.round}`} className="load-sheet">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  borderBottom: "1.5px solid #111",
+                  paddingBottom: 4,
+                  marginBottom: 8,
+                }}
+              >
+                <div>
+                  <h1
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 700,
+                      margin: 0,
+                      letterSpacing: "-0.02em",
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    Truck Load Sheet
+                    {r.round === 2 ? " — Round 2" : ""}
+                  </h1>
+                  <div style={{ fontSize: 9, color: "#444", lineHeight: 1.2 }}>
+                    SpareLube Load Master
+                  </div>
+                </div>
+                <Logo variant="light" className="load-sheet-logo" />
               </div>
-              <Logo variant="light" className="load-sheet-logo" />
-            </div>
 
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: "14px 28px",
-                marginBottom: 20,
-              }}
-            >
-              <MetaField label="Date" value={planDate} />
-              <MetaField label="Truck" value={t.name} />
-              <MetaField label="Trip" value={tripNamesForTruckDay(truckDay, trips) || "—"} />
-              <MetaField label="Driver" blank />
-              <MetaField label="Petty cash" blank />
-              <MetaField label="Rounds" value={rounds.length > 1 ? "1 + 2" : "1"} />
-            </div>
-
-            {rounds.map((r) => {
-              const wt = r.list.reduce((s, i) => s + i.weight, 0);
-              return (
-                <div
-                  key={r.round}
-                  style={{ marginBottom: r.round === 1 && rounds.length > 1 ? 28 : 0 }}
-                >
-                  {rounds.length > 1 && (
-                    <div
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 700,
-                        letterSpacing: "0.04em",
-                        textTransform: "uppercase",
-                        marginBottom: 8,
-                        color: "#333",
-                      }}
-                    >
-                      Round {r.round}
-                      {r.round === 2 && r.tripId
-                        ? ` — ${tripById(trips, r.tripId)?.name ?? ""}`
-                        : ""}
-                    </div>
-                  )}
-                  <LoadStopsTable
-                    stops={r.stops}
-                    customers={customers}
-                    totalWeight={wt}
-                    tripId={r.tripId ?? sheetTripId}
-                    trips={trips}
-                    dayStopOrder={dayStopOrder}
-                    truckDay={truckDay}
-                  />
-                </div>
-              );
-            })}
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1.4fr 1fr",
-                gap: 32,
-                marginTop: 28,
-                fontSize: 12,
-              }}
-            >
-              <div>
-                <div
-                  style={{
-                    fontSize: 10,
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                    color: "#555",
-                    marginBottom: 4,
-                  }}
-                >
-                  Loader signature
-                </div>
-                <div style={{ borderBottom: "1px solid #222", minHeight: 22 }} />
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: "6px 16px",
+                  marginBottom: 8,
+                }}
+              >
+                <MetaField label="Date" value={planDate} />
+                <MetaField label="Truck" value={t.name} />
+                <MetaField label="Trip" value={tripLabel} />
+                <MetaField label="Driver" blank />
+                <MetaField label="Petty cash" blank />
+                <MetaField label="Round" value={String(r.round)} />
               </div>
-              <div>
-                <div
-                  style={{
-                    fontSize: 10,
-                    letterSpacing: "0.06em",
-                    textTransform: "uppercase",
-                    color: "#555",
-                    marginBottom: 4,
-                  }}
-                >
-                  Time departed
+
+              <LoadStopsTable
+                stops={r.stops}
+                customers={customers}
+                totalWeight={wt}
+                tripId={sheetTripId}
+                trips={trips}
+                dayStopOrder={dayStopOrder}
+                truckDay={truckDay}
+              />
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1.4fr 1fr",
+                  gap: 20,
+                  marginTop: 10,
+                  fontSize: 11,
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 8,
+                      letterSpacing: "0.05em",
+                      textTransform: "uppercase",
+                      color: "#555",
+                      marginBottom: 1,
+                    }}
+                  >
+                    Loader signature
+                  </div>
+                  <div style={{ borderBottom: "1px solid #222", minHeight: 14 }} />
                 </div>
-                <div style={{ borderBottom: "1px solid #222", minHeight: 22 }} />
+                <div>
+                  <div
+                    style={{
+                      fontSize: 8,
+                      letterSpacing: "0.05em",
+                      textTransform: "uppercase",
+                      color: "#555",
+                      marginBottom: 1,
+                    }}
+                  >
+                    Time departed
+                  </div>
+                  <div style={{ borderBottom: "1px solid #222", minHeight: 14 }} />
+                </div>
               </div>
             </div>
-          </div>
-        );
+          );
+        });
       })}
     </>
   );
@@ -518,7 +521,7 @@ export function PrintScreen() {
     });
   }
 
-  /** One page per truck. Round 2 (if any) prints on the same page under Round 1. */
+  /** One page per truck round. Round 2 (if any) prints on its own page. */
   const truckSheets = active.map((t) => {
     const truckDay = truckDayById.get(t.id);
     const onTruck = plan.invoices.filter((i) => i.truckId === t.id);
@@ -584,7 +587,7 @@ export function PrintScreen() {
       <div className="glass-panel p-4 no-print">
         <ScreenHeader
           title="Print preview"
-          description="Each truck prints on its own page. Preview updates as you switch views above."
+          description="Each truck round prints on its own page. Round 2 sheets follow Round 1. Preview updates as you switch views above."
           className="mb-3"
         />
         <div className="overflow-auto rounded-xl border border-border bg-panel-2 p-4">

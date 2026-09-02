@@ -108,8 +108,8 @@ export function SetupScreen() {
       <ScreenShell className="space-y-6">
       {readOnly && (
         <div className="rounded-xl border border-warn/40 bg-warn/5 px-4 py-3 text-sm text-warn">
-          This plan is locked. You can review setup but cannot change trips until you unlock on the
-          Lock step.
+          This plan is locked. You can still switch dates; unlock on the Lock step to change trips
+          for this day.
         </div>
       )}
 
@@ -123,7 +123,6 @@ export function SetupScreen() {
             type="date"
             value={plan?.date ?? currentDate}
             onChange={(e) => setDate(e.target.value)}
-            disabled={readOnly}
             className="h-9 w-full sm:h-8 sm:w-auto"
           />
         </FormField>
