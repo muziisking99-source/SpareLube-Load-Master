@@ -26,7 +26,7 @@ export function StickyStepBar({
   return (
     <div
       className={cn(
-        "sticky bottom-0 z-20 -mx-3 border-t border-border/60 bg-background/95 px-3 py-3 backdrop-blur-md no-print sm:-mx-0 sm:rounded-xl sm:border sm:px-4 lg:static lg:mx-0 lg:mt-4 lg:border lg:bg-panel lg:shadow-none",
+        "sticky bottom-0 z-20 -mx-3 glass-chrome px-3 py-3 no-print sm:-mx-0 sm:rounded-xl sm:px-4 lg:static lg:mx-0 lg:mt-4",
         "mb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] lg:mb-0",
         className,
       )}

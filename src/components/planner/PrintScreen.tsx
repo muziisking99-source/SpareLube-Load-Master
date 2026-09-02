@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { ScreenHeader } from "./ui/ScreenHeader";
+import { ScreenShell } from "./ui/ScreenShell";
 
 import type { Invoice } from "@/lib/types";
 
@@ -551,8 +552,9 @@ export function PrintScreen() {
   });
 
   return (
-    <div className="space-y-4">
-      <div className="panel flex flex-col gap-3 p-4 no-print sm:flex-row sm:flex-wrap sm:items-center">
+    <>
+      <ScreenShell className="space-y-4">
+      <div className="glass-panel flex flex-col gap-3 p-4 no-print sm:flex-row sm:flex-wrap sm:items-center">
         <Button variant="outline" className="w-full sm:w-auto" onClick={() => setStep("lock")}>
           <ArrowLeft className="size-4" />
           Back
@@ -579,7 +581,7 @@ export function PrintScreen() {
         </div>
       </div>
 
-      <div className="panel p-4 no-print">
+      <div className="glass-panel p-4 no-print">
         <ScreenHeader
           title="Print preview"
           description="Each truck prints on its own page. Preview updates as you switch views above."
@@ -611,6 +613,7 @@ export function PrintScreen() {
           </div>
         </div>
       </div>
+      </ScreenShell>
 
       {/* Must sit outside any .no-print ancestor — parent display:none hides all descendants */}
       <div className="print-root load-sheet-document">
@@ -636,6 +639,6 @@ export function PrintScreen() {
           />
         )}
       </div>
-    </div>
+    </>
   );
 }

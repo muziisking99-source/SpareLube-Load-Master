@@ -47,6 +47,7 @@ import {
 import { StatTile } from "./ui/StatTile";
 import { FormField } from "./ui/FormField";
 import { ScreenHeader } from "./ui/ScreenHeader";
+import { ScreenShell } from "./ui/ScreenShell";
 import { cn } from "@/lib/utils";
 import { useRowHighlight } from "@/lib/useRowHighlight";
 
@@ -212,7 +213,8 @@ export function LockScreen() {
         : null;
 
   return (
-    <div className="space-y-5">
+    <>
+      <ScreenShell className="space-y-5">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <StatTile label="Total Invoices" value={plan.invoices.length} />
         <StatTile label="Allocated" value={allocated.length} tone="good" />
@@ -230,13 +232,13 @@ export function LockScreen() {
       </div>
 
       {needsTruck.length > 0 && (
-        <div className="panel flex items-center gap-2 border-crit/40 bg-crit/5 p-4 text-sm text-crit">
+        <div className="glass-panel flex items-center gap-2 border-crit/40 bg-crit/5 p-4 text-sm text-crit">
           <TriangleAlert className="size-4 shrink-0" />
           {needsTruck.length} invoice(s) are not yet on a truck.
         </div>
       )}
 
-      <section className="panel p-4 sm:p-5">
+      <section className="glass-panel p-4 sm:p-5">
         <ScreenHeader
           title="Excel double-check"
           description="Import the system export and compare doc numbers against everything entered today (plan, held, collections)."
@@ -376,7 +378,7 @@ export function LockScreen() {
         )}
       </section>
 
-      <section className="panel p-4">
+      <section className="glass-panel p-4">
         <h3 className="mb-3 font-semibold tracking-tight">Truck Summary</h3>
 
         <div className="space-y-3 md:hidden">
@@ -505,13 +507,14 @@ export function LockScreen() {
       </section>
 
       {lockWarning && !plan.locked && (
-        <div className="panel flex items-center gap-2 border-warn/40 bg-warn/5 p-4 text-sm text-warn">
+        <div className="glass-panel flex items-center gap-2 border-warn/40 bg-warn/5 p-4 text-sm text-warn">
           <TriangleAlert className="size-4 shrink-0" />
           {lockWarning} You can still lock if you&apos;re sure.
         </div>
       )}
+      </ScreenShell>
 
-      <div className="panel flex flex-col gap-3 p-4 sm:flex-row sm:flex-wrap sm:items-center">
+      <div className="glass-panel flex flex-col gap-3 p-4 sm:flex-row sm:flex-wrap sm:items-center">
         <Button variant="outline" className="w-full sm:w-auto" onClick={() => setStep("adjust")}>
           <ArrowLeft className="size-4" />
           Back to Adjust
@@ -544,7 +547,7 @@ export function LockScreen() {
       </div>
 
       <AlertDialog open={showLockConfirm} onOpenChange={setShowLockConfirm}>
-        <AlertDialogContent className="panel border-border">
+        <AlertDialogContent className="glass-panel border-border">
           <AlertDialogHeader>
             <AlertDialogTitle>Lock manifests?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -572,7 +575,7 @@ export function LockScreen() {
           }
         }}
       >
-        <DialogContent className="panel max-w-sm border-border">
+        <DialogContent className="glass-panel max-w-sm border-border">
           <DialogHeader>
             <DialogTitle>Admin unlock</DialogTitle>
           </DialogHeader>
@@ -598,6 +601,6 @@ export function LockScreen() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }

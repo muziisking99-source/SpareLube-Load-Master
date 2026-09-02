@@ -14,11 +14,11 @@ export function ScreenHeader({
   return (
     <div className={cn("flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between", className)}>
       <div>
-        <h2 className="border-l-2 border-primary/50 pl-3 text-lg font-semibold tracking-tight text-foreground">
+        <h2 className="relative pb-2 text-lg font-semibold tracking-tight text-foreground after:absolute after:bottom-0 after:left-0 after:h-px after:w-full after:max-w-[12rem] after:bg-gradient-to-r after:from-transparent after:via-primary/50 after:to-transparent">
           {title}
         </h2>
         {description && (
-          <p className="mt-0.5 text-sm text-muted-foreground max-w-[65ch]">{description}</p>
+          <p className="mt-0.5 max-w-[65ch] text-sm text-muted-foreground">{description}</p>
         )}
       </div>
       {action && <div className="shrink-0">{action}</div>}

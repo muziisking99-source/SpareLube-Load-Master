@@ -25,9 +25,9 @@ export function StatTile({
   return (
     <div
       className={cn(
-        "panel relative overflow-hidden p-4",
+        "glass-panel relative overflow-hidden p-4",
         !tone &&
-          "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-primary/70 before:to-transparent",
+          "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-primary/50 before:to-transparent",
         className,
       )}
     >

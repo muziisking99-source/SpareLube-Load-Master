@@ -30,8 +30,8 @@ export function Stepper({
   const reducedMotion = usePrefersReducedMotion();
 
   return (
-    <nav className="border-b border-border/50 bg-panel/40 no-print backdrop-blur-sm" aria-label="Plan steps">
-      <div className="mx-auto max-w-7xl px-3 sm:px-4">
+    <nav className="glass-chrome border-b border-border/50 no-print" aria-label="Plan steps">
+      <div className="mx-auto max-w-[1600px] px-3 sm:px-4">
         <div className="flex items-center gap-0.5 overflow-x-auto py-1.5 sm:gap-1">
           {stepList.map((s, idx) => {
             const active = s === current;
@@ -51,7 +51,7 @@ export function Stepper({
                   "group relative flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors sm:gap-2 sm:px-2.5",
                   !reducedMotion && "stagger-item",
                   active
-                    ? "bg-primary/12 text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+                    ? "bg-primary/15 text-primary"
                     : done
                       ? "text-foreground/80 hover:text-foreground"
                       : upcoming

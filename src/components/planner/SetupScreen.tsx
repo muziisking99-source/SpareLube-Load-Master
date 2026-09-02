@@ -32,6 +32,7 @@ import { CollapsibleSection } from "./ui/CollapsibleSection";
 import { EmptyState } from "./ui/EmptyState";
 import { FormField } from "./ui/FormField";
 import { StickyStepBar } from "./ui/StickyStepBar";
+import { ScreenShell } from "./ui/ScreenShell";
 import { AdminSearchInput, matchesQuery } from "./AdminSearchInput";
 import { cn } from "@/lib/utils";
 import { useRowHighlight } from "@/lib/useRowHighlight";
@@ -103,7 +104,8 @@ export function SetupScreen() {
   }
 
   return (
-    <div className="space-y-6">
+    <>
+      <ScreenShell className="space-y-6">
       {readOnly && (
         <div className="rounded-xl border border-warn/40 bg-warn/5 px-4 py-3 text-sm text-warn">
           This plan is locked. You can review setup but cannot change trips until you unlock on the
@@ -127,7 +129,7 @@ export function SetupScreen() {
         </FormField>
       </div>
 
-      <section className="panel p-4 sm:p-5">
+      <section className="glass-panel p-4 sm:p-5">
         <ScreenHeader
           title="Today's Trips"
           description="Select the runs for today. You'll pair trucks to these trips after entering invoices."
@@ -298,6 +300,7 @@ export function SetupScreen() {
           </div>
         )}
       </CollapsibleSection>
+      </ScreenShell>
 
       <StickyStepBar
         status={continueStatus}
@@ -308,7 +311,7 @@ export function SetupScreen() {
       />
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <AlertDialogContent className="panel border-border">
+        <AlertDialogContent className="glass-panel border-border">
           <AlertDialogHeader>
             <AlertDialogTitle>Delete plan {deleteTarget}?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -332,6 +335,6 @@ export function SetupScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   );
 }

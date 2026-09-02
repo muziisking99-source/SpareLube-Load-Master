@@ -58,6 +58,7 @@ import { EmptyState } from "./ui/EmptyState";
 import { StatTile } from "./ui/StatTile";
 import { FormField } from "./ui/FormField";
 import { StickyStepBar } from "./ui/StickyStepBar";
+import { ScreenShell } from "./ui/ScreenShell";
 import { TownCombobox } from "./TownCombobox";
 import { CustomerCombobox } from "./CustomerCombobox";
 import { cn } from "@/lib/utils";
@@ -405,14 +406,15 @@ export function ImportScreen() {
   }
 
   return (
-    <div className="space-y-6">
+    <>
+      <ScreenShell className="space-y-6">
       {readOnly && (
         <div className="rounded-xl border border-warn/40 bg-warn/5 px-4 py-3 text-sm text-warn">
           This plan is locked. Invoices are read-only until you unlock on the Lock step.
         </div>
       )}
 
-      <section className="panel p-4 sm:p-5">
+      <section className="glass-panel p-4 sm:p-5">
         <ScreenHeader
           title="Enter Invoice"
           description="Add invoices one by one, or upload Excel. Weights are entered manually. Re-upload hourly — duplicates are skipped."
@@ -476,7 +478,7 @@ export function ImportScreen() {
           </Button>
         </div>
 
-        <div className="sticky top-[6.5rem] z-10 -mx-1 rounded-xl border border-border/60 bg-panel/95 p-3 backdrop-blur-md sm:-mx-0 sm:p-4">
+        <div className="glass-chrome sticky top-[6.5rem] z-10 -mx-1 rounded-xl p-3 sm:-mx-0 sm:p-4">
         <form
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
           onSubmit={(e) => {
@@ -651,7 +653,7 @@ export function ImportScreen() {
       </CollapsibleSection>
 
       {collectionInvoices.length > 0 && (
-        <section className="panel p-4 sm:p-5">
+        <section className="glass-panel p-4 sm:p-5">
           <ScreenHeader
             title="Collections"
             description="Customer collects, or load on a truck. Mark Collection when entering an invoice — same as Hold for later."
@@ -741,7 +743,7 @@ export function ImportScreen() {
       )}
 
       {creditInvoices.length > 0 && (
-        <section className="panel p-4 sm:p-5">
+        <section className="glass-panel p-4 sm:p-5">
           <ScreenHeader
             title="Credit notes"
             description="Negative weights stay here until loaded on a truck. Unpicked credits remain in this section."
@@ -847,7 +849,7 @@ export function ImportScreen() {
         </section>
       )}
 
-      <section className="panel p-4 sm:p-5">
+      <section className="glass-panel p-4 sm:p-5">
         <ScreenHeader
           title="Today’s invoices"
           description="Deliveries for today’s selected trips. Set weights after Excel import."
@@ -921,7 +923,7 @@ export function ImportScreen() {
       </section>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="panel p-4">
+        <div className="glass-panel p-4">
           <div className="mb-2 text-xs uppercase tracking-wider text-muted-foreground">
             Validation
           </div>
@@ -954,6 +956,7 @@ export function ImportScreen() {
 
         <StatTile label="Total weight" value={`${totalWeight.toFixed(0)} kg`} />
       </div>
+      </ScreenShell>
 
       <StickyStepBar
         status={continueStatus}
@@ -967,7 +970,7 @@ export function ImportScreen() {
       />
 
       <AlertDialog open={!!pendingHold} onOpenChange={(o) => !o && setPendingHold(null)}>
-        <AlertDialogContent className="panel border-border">
+        <AlertDialogContent className="glass-panel border-border">
           <AlertDialogHeader>
             <AlertDialogTitle>Town not on today’s trips</AlertDialogTitle>
             <AlertDialogDescription>
@@ -1005,7 +1008,7 @@ export function ImportScreen() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   );
 }
 

@@ -43,77 +43,113 @@
 :root,
 .light {
   --radius: 0.75rem;
-  --background: #ecedef;
-  --foreground: #18181b;
+  --background: #f5f5f7;
+  --foreground: #1d1d1f;
   --panel: #ffffff;
-  --panel-2: #f8f8f9;
+  --panel-2: #f2f2f7;
   --panel-elevated: #ffffff;
   --card: #ffffff;
-  --card-foreground: #18181b;
+  --card-foreground: #1d1d1f;
   --popover: #ffffff;
-  --popover-foreground: #18181b;
-  --primary: #8b2d42;
+  --popover-foreground: #1d1d1f;
+  --primary: #942e3c;
   --primary-foreground: #ffffff;
-  --secondary: #e4e4e7;
-  --secondary-foreground: #18181b;
-  --muted: #f4f4f5;
-  --muted-foreground: #52525b;
+  --secondary: #e8e8ed;
+  --secondary-foreground: #1d1d1f;
+  --muted: #f2f2f7;
+  --muted-foreground: #636366;
   --accent: #ebebed;
-  --accent-foreground: #18181b;
-  --destructive: #7f1d2e;
+  --accent-foreground: #1d1d1f;
+  --destructive: #a83845;
   --destructive-foreground: #ffffff;
-  --border: #d4d4d8;
-  --input: #e4e4e7;
-  --ring: #8b2d42;
+  --border: color-mix(in oklab, black 10%, #c8c8cd);
+  --input: #e8e8ed;
+  --ring: #942e3c;
   --brand: #c8102e;
-  --good: #2f6b46;
-  --warn: #92650a;
-  --crit: #93312a;
-  --ambient-glow: radial-gradient(
-    ellipse 120% 70% at 50% -25%,
-    color-mix(in oklab, var(--primary) 7%, transparent),
-    transparent 58%
+  --good: #267346;
+  --warn: #8a5a08;
+  --crit: #8a2820;
+  --mesh-a: radial-gradient(
+    ellipse 90% 60% at 15% -10%,
+    color-mix(in oklab, var(--brand) 7%, transparent),
+    transparent 55%
   );
-  --shadow-panel: 0 12px 32px -14px rgba(24, 24, 27, 0.18);
-  --shadow-pop: 0 18px 44px -10px rgba(24, 24, 27, 0.22);
-  --shadow-primary: 0 2px 12px -2px color-mix(in oklab, var(--primary) 42%, transparent);
+  --mesh-b: radial-gradient(
+    ellipse 70% 50% at 85% 0%,
+    color-mix(in oklab, #86868b 5%, transparent),
+    transparent 50%
+  );
+  --mesh-c: radial-gradient(
+    ellipse 80% 50% at 50% 110%,
+    color-mix(in oklab, var(--brand) 3%, transparent),
+    transparent 55%
+  );
+  --ambient-glow: var(--mesh-a), var(--mesh-b), var(--mesh-c);
+  --glass-bg: color-mix(in oklab, var(--panel) 68%, transparent);
+  --glass-bg-chrome: color-mix(in oklab, var(--panel) 76%, transparent);
+  --glass-border: color-mix(in oklab, white 55%, var(--border));
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  --glass-glow: 0 8px 28px -10px color-mix(in oklab, var(--brand) 8%, transparent);
+  --glass-blur: 24px;
+  --glass-saturate: 1.25;
+  --shadow-panel: 0 14px 36px -12px rgba(24, 24, 27, 0.18);
+  --shadow-pop: 0 20px 48px -10px rgba(24, 24, 27, 0.22);
+  --shadow-primary: 0 2px 14px -2px color-mix(in oklab, var(--primary) 45%, transparent);
 }
 
 .dark {
-  --background: #09090b;
-  --foreground: #f4f4f5;
-  --panel: #1a1a1e;
-  --panel-2: #141418;
-  --panel-elevated: #222226;
-  --card: #1a1a1e;
-  --card-foreground: #f4f4f5;
-  --popover: #1c1c20;
-  --popover-foreground: #f4f4f5;
-  --primary: #b85266;
+  --background: #08080a;
+  --foreground: #f4f4f6;
+  --panel: #15151a;
+  --panel-2: #0d0d11;
+  --panel-elevated: #1e1e26;
+  --card: #15151a;
+  --card-foreground: #f4f4f6;
+  --popover: #1e1e26;
+  --popover-foreground: #f4f4f6;
+  --primary: #c0525e;
   --primary-foreground: #ffffff;
-  --secondary: #27272a;
-  --secondary-foreground: #f4f4f5;
-  --muted: #18181b;
-  --muted-foreground: #a1a1aa;
-  --accent: #2a2a2e;
-  --accent-foreground: #f4f4f5;
-  --destructive: #8b2635;
+  --secondary: #222228;
+  --secondary-foreground: #f4f4f6;
+  --muted: #15151a;
+  --muted-foreground: #a4a4ac;
+  --accent: #28282e;
+  --accent-foreground: #f4f4f6;
+  --destructive: #b84050;
   --destructive-foreground: #ffffff;
-  --border: #3f3f46;
-  --input: #27272a;
-  --ring: #b85266;
+  --border: color-mix(in oklab, white 14%, #2a2a32);
+  --input: #1c1c22;
+  --ring: #c0525e;
   --brand: #c8102e;
-  --good: #6b9080;
-  --warn: #c4915a;
-  --crit: #d4736a;
-  --ambient-glow: radial-gradient(
-    ellipse 120% 70% at 50% -25%,
-    color-mix(in oklab, var(--primary) 14%, transparent),
+  --good: #7ab896;
+  --warn: #ddb062;
+  --crit: #d86860;
+  --mesh-a: radial-gradient(
+    ellipse 90% 60% at 15% -10%,
+    color-mix(in oklab, var(--brand) 14%, transparent),
+    transparent 55%
+  );
+  --mesh-b: radial-gradient(
+    ellipse 70% 50% at 85% 0%,
+    color-mix(in oklab, white 7%, transparent),
+    transparent 50%
+  );
+  --mesh-c: radial-gradient(
+    ellipse 80% 45% at 50% 105%,
+    color-mix(in oklab, var(--brand) 5%, transparent),
     transparent 58%
   );
-  --shadow-panel: 0 20px 44px -16px rgba(0, 0, 0, 0.55);
-  --shadow-pop: 0 24px 52px -12px rgba(0, 0, 0, 0.62);
-  --shadow-primary: 0 2px 16px -2px color-mix(in oklab, var(--primary) 50%, transparent);
+  --ambient-glow: var(--mesh-a), var(--mesh-b), var(--mesh-c);
+  --glass-bg: color-mix(in oklab, var(--panel) 36%, transparent);
+  --glass-bg-chrome: color-mix(in oklab, var(--panel) 46%, transparent);
+  --glass-border: color-mix(in oklab, white 24%, var(--border));
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  --glass-glow: 0 0 48px -10px color-mix(in oklab, var(--brand) 12%, transparent);
+  --glass-blur: 24px;
+  --glass-saturate: 1.4;
+  --shadow-panel: 0 22px 48px -14px rgba(0, 0, 0, 0.58);
+  --shadow-pop: 0 28px 56px -12px rgba(0, 0, 0, 0.65);
+  --shadow-primary: 0 2px 20px -2px color-mix(in oklab, var(--primary) 52%, transparent);
 }
 
 @layer base {
@@ -136,8 +172,54 @@
   button {
     font-family: inherit;
   }
+  input[type="number"] {
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
   ::selection {
-    background: color-mix(in oklab, var(--primary) 28%, transparent);
+    background: color-mix(in oklab, var(--primary) 35%, transparent);
+  }
+}
+
+@utility glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-border);
+  border-radius: 1.25rem;
+  box-shadow: var(--shadow-panel), var(--glass-highlight), var(--glass-glow);
+}
+
+@utility glass-chrome {
+  background: var(--glass-bg-chrome);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border-bottom: 1px solid var(--glass-border);
+  box-shadow: var(--glass-highlight), var(--glass-glow);
+}
+
+@utility glass-popover {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-border);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-pop), var(--glass-highlight), var(--glass-glow);
+}
+
+@utility collapsible-grid {
+  display: grid;
+  transition: grid-template-rows 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .collapsible-grid {
+    transition: none;
   }
 }
 
@@ -169,11 +251,11 @@
 @utility btn-primary {
   background: linear-gradient(
     180deg,
-    color-mix(in oklab, var(--primary) 88%, white 12%) 0%,
+    color-mix(in oklab, var(--primary) 82%, white 18%) 0%,
     var(--primary) 100%
   );
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
     var(--shadow-primary);
 }
 

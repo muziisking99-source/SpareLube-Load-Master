@@ -58,6 +58,7 @@ import {
 import { EmptyState } from "./ui/EmptyState";
 import { FormField } from "./ui/FormField";
 import { ScreenHeader } from "./ui/ScreenHeader";
+import { ScreenShell } from "./ui/ScreenShell";
 import { cn } from "@/lib/utils";
 import { usePlanReadOnly } from "@/hooks/use-plan-read-only";
 import {
@@ -182,6 +183,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
 
   return (
     <>
+      <ScreenShell className="space-y-4">
       <ScreenHeader
         title={mode === "allocate" ? "Trucks & Allocation" : "Adjust loads"}
         description={
@@ -200,7 +202,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
 
       {mode === "allocate" && (
         <div className="mb-4 space-y-4">
-          <section className="panel p-4 sm:p-5">
+          <section className="glass-panel p-4 sm:p-5">
             <ScreenHeader
               title="Weight by area"
               description="Review how much weight each town and trip is carrying before choosing trucks."
@@ -292,7 +294,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
             )}
           </section>
 
-          <section className="panel p-4 sm:p-5">
+          <section className="glass-panel p-4 sm:p-5">
             <ScreenHeader
               title="Assign trucks to trips"
               description="Activate trucks for today and pair each one to a selected trip."
@@ -388,6 +390,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
         onUnallocate={(i) => moveInvoice(i.id, null)}
         onLock={() => setStep("lock")}
       />
+      </ScreenShell>
       {moveDialog}
     </>
   );
@@ -629,8 +632,8 @@ function TruckWorkbench({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="panel sticky top-[6.5rem] z-20 flex flex-col gap-2 p-3 no-print sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:p-4">
+    <ScreenShell className="space-y-4">
+      <div className="glass-chrome sticky top-[6.5rem] z-20 flex flex-col gap-2 p-3 no-print sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:p-4">
         {isAdjust ? (
           <>
             <Button
@@ -744,7 +747,7 @@ function TruckWorkbench({
           description="Activate trucks below, or add trucks in Admin → Trucks."
         />
       ) : (
-        <section className="panel overflow-hidden">
+        <section className="glass-panel overflow-hidden">
           <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <h3 className="font-semibold tracking-tight">{focusTruck.name}</h3>
@@ -857,7 +860,7 @@ function TruckWorkbench({
       )}
 
       {unallocated.length > 0 && (
-        <section className="panel overflow-hidden">
+        <section className="glass-panel overflow-hidden">
           <div className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-3">
             <h3 className="font-semibold tracking-tight text-crit">
               Unallocated ({unallocated.length})
@@ -988,7 +991,7 @@ function TruckWorkbench({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </ScreenShell>
   );
 }
 
@@ -1190,7 +1193,7 @@ function MoveDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="panel max-h-[90dvh] max-w-xl overflow-y-auto border-border">
+      <DialogContent className="glass-panel max-h-[90dvh] max-w-xl overflow-y-auto border-border">
         <DialogHeader>
           <DialogTitle>
             {bulk ? `Move ${selectedIds.length} invoices` : `Move ${invoice?.doc}`}

@@ -13,7 +13,7 @@ import { ImportScreen } from "./ImportScreen";
 import { AllocateScreen } from "./AllocateScreen";
 import { LockScreen } from "./LockScreen";
 import { PrintScreen } from "./PrintScreen";
-import { Assistant } from "./Assistant";
+import { AssistantDesktopPanel, AssistantDesktopReopen, AssistantMobile } from "./Assistant";
 import { TopBar } from "./TopBar";
 import { Stepper } from "./Stepper";
 import { PlannerSkeleton } from "./PlannerSkeleton";
@@ -133,6 +133,7 @@ export function Planner() {
   }
 
   const step = plan.step;
+  const currentIdx = stepList.indexOf(step);
 
   return (
     <div className="min-h-[100dvh]">
@@ -146,15 +147,14 @@ export function Planner() {
       />
       <Stepper current={step} onGo={setStep} locked={plan.locked} />
 
-      <main
-        className={
-          snapshotOpen
-            ? "mx-auto grid max-w-7xl gap-4 px-3 py-4 pb-24 sm:px-4 lg:grid-cols-[1fr_320px] lg:pb-4"
-            : "mx-auto max-w-7xl px-3 py-4 pb-24 sm:px-4 lg:pb-4"
-        }
-      >
-        <div className="min-w-0">
-          <StepTransition stepKey={step}>
+      <AssistantMobile />
+      {!snapshotOpen && (
+        <AssistantDesktopReopen onOpen={() => setSnapshotOpen(true)} />
+      )}
+
+      <div className="mx-auto flex w-full max-w-[1600px] items-start gap-4 px-3 py-4 pb-24 sm:px-4 lg:pb-4">
+        <div className="min-w-0 flex-1">
+          <StepTransition stepKey={step} stepIndex={currentIdx}>
             {step === "setup" && <SetupScreen />}
             {step === "import" && <ImportScreen />}
             {step === "allocate" && <AllocateScreen mode="allocate" />}
@@ -163,8 +163,10 @@ export function Planner() {
             {step === "print" && <PrintScreen />}
           </StepTransition>
         </div>
-        <Assistant desktopOpen={snapshotOpen} onDesktopOpenChange={setSnapshotOpen} />
-      </main>
+        {snapshotOpen && (
+          <AssistantDesktopPanel onClose={() => setSnapshotOpen(false)} />
+        )}
+      </div>
 
       <ResumeModal
         date={currentDate}
