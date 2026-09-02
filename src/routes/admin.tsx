@@ -25,6 +25,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EmptyState } from "@/components/planner/ui/EmptyState";
+import { usePagination } from "@/hooks/use-pagination";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { PlannerSkeleton } from "@/components/planner/PlannerSkeleton";
 import { CustomerAreaBoard } from "@/components/planner/CustomerAreaBoard";
 import { LoadingNumbersBoard } from "@/components/planner/LoadingNumbersBoard";
@@ -300,6 +308,9 @@ function AdminConsole({
         String(p.invoices.length).includes(q),
     );
   }, [plans, planSearch]);
+
+  const auditPagination = usePagination(filteredAudit, 100);
+  const plansPagination = usePagination(filteredPlans, 30);
 
   const emptyMessage = useMemo(() => {
     if (Object.keys(customers).length === 0) {
@@ -897,7 +908,7 @@ function AdminConsole({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredAudit.map((a) => (
+                      {auditPagination.slice.map((a) => (
                         <TableRow key={a.id} {...highlightProps(a.id)}>
                           <TableCell className="metric-mono text-xs">
                             {new Date(a.ts).toLocaleString()}
@@ -909,6 +920,9 @@ function AdminConsole({
                     </TableBody>
                   </Table>
                 </div>
+              )}
+              {auditPagination.totalPages > 1 && (
+                <AdminPaginationFooter pagination={auditPagination} className="mt-3" />
               )}
             </div>
           </TabsContent>
@@ -941,7 +955,7 @@ function AdminConsole({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredPlans.map((p) => (
+                      {plansPagination.slice.map((p) => (
                         <TableRow key={p.date} {...highlightProps(p.date)}>
                           <TableCell className="metric-mono">{p.date}</TableCell>
                           <TableCell>{p.invoices.length}</TableCell>
@@ -982,6 +996,9 @@ function AdminConsole({
                     </TableBody>
                   </Table>
                 </div>
+              )}
+              {plansPagination.totalPages > 1 && (
+                <AdminPaginationFooter pagination={plansPagination} className="mt-3" />
               )}
             </div>
           </TabsContent>
@@ -1088,6 +1105,57 @@ function AdminConsole({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+function AdminPaginationFooter({
+  pagination,
+  className,
+}: {
+  pagination: ReturnType<typeof usePagination<unknown>>;
+  className?: string;
+}) {
+  const start = (pagination.page - 1) * pagination.pageSize + 1;
+  const end = Math.min(pagination.page * pagination.pageSize, pagination.totalItems);
+  return (
+    <div
+      className={`flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground ${className ?? ""}`}
+    >
+      <span>
+        {start}–{end} of {pagination.totalItems}
+      </span>
+      <Pagination className="mx-0 w-auto">
+        <PaginationContent>
+          <PaginationItem>
+            <PaginationPrevious
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                pagination.prevPage();
+              }}
+              className={pagination.page <= 1 ? "pointer-events-none opacity-50" : undefined}
+            />
+          </PaginationItem>
+          <PaginationItem>
+            <span className="px-2">
+              Page {pagination.page} of {pagination.totalPages}
+            </span>
+          </PaginationItem>
+          <PaginationItem>
+            <PaginationNext
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                pagination.nextPage();
+              }}
+              className={
+                pagination.page >= pagination.totalPages ? "pointer-events-none opacity-50" : undefined
+              }
+            />
+          </PaginationItem>
+        </PaginationContent>
+      </Pagination>
     </div>
   );
 }

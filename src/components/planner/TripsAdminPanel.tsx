@@ -14,6 +14,14 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/planner/ui/EmptyState";
 import { FormField } from "@/components/planner/ui/FormField";
 import { AdminSearchInput, matchesQuery } from "@/components/planner/AdminSearchInput";
+import { usePagination } from "@/hooks/use-pagination";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { TownCombobox } from "@/components/planner/TownCombobox";
 import {
   AlertDialog,
@@ -56,6 +64,8 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
         t.towns.some((town) => matchesQuery(town, q)),
     );
   }, [trips, search]);
+
+  const tripsPagination = usePagination(filteredTrips, 30);
 
   function startEdit(trip: Trip) {
     setEditingId(trip.id);
@@ -226,8 +236,9 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
               description={`Nothing matched “${search.trim()}”.`}
             />
           ) : (
+            <>
             <ul className="space-y-3">
-              {filteredTrips.map((trip) => {
+              {tripsPagination.slice.map((trip) => {
                 const editing = editingId === trip.id;
                 const expanded = expandedId === trip.id || editing;
                 const tripCustomers = customersForTrip(customers, trip);
@@ -341,6 +352,54 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
                 );
               })}
             </ul>
+            {tripsPagination.totalPages > 1 && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+                <span>
+                  {(tripsPagination.page - 1) * tripsPagination.pageSize + 1}–
+                  {Math.min(
+                    tripsPagination.page * tripsPagination.pageSize,
+                    tripsPagination.totalItems,
+                  )}{" "}
+                  of {tripsPagination.totalItems}
+                </span>
+                <Pagination className="mx-0 w-auto">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          tripsPagination.prevPage();
+                        }}
+                        className={
+                          tripsPagination.page <= 1 ? "pointer-events-none opacity-50" : undefined
+                        }
+                      />
+                    </PaginationItem>
+                    <PaginationItem>
+                      <span className="px-2">
+                        Page {tripsPagination.page} of {tripsPagination.totalPages}
+                      </span>
+                    </PaginationItem>
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          tripsPagination.nextPage();
+                        }}
+                        className={
+                          tripsPagination.page >= tripsPagination.totalPages
+                            ? "pointer-events-none opacity-50"
+                            : undefined
+                        }
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
+            </>
           )}
         </>
       )}
@@ -387,6 +446,8 @@ function TripStopOrderEditor({
   onSetLoad: (customerKey: string, n: number) => void;
   onReorder: (orderedKeys: string[]) => void;
 }) {
+  const [showAllCustomers, setShowAllCustomers] = useState(false);
+
   if (trip.towns.length === 0) {
     return (
       <p className="mt-3 text-sm text-muted-foreground">
@@ -404,6 +465,8 @@ function TripStopOrderEditor({
   }
 
   const keys = list.map((c) => customerKey(c));
+  const visibleList = showAllCustomers ? list : list.slice(0, 50);
+  const hiddenCount = list.length - visibleList.length;
 
   function move(index: number, dir: -1 | 1) {
     const j = index + dir;
@@ -419,13 +482,14 @@ function TripStopOrderEditor({
         Load order for this trip
       </div>
       <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
-        {list.map((c, i) => {
+        {visibleList.map((c, i) => {
           const key = customerKey(c);
+          const globalIndex = showAllCustomers ? i : keys.indexOf(key);
           const tripLoad = loadingNumberFor(customers, c.name, c.defaultArea, trip.id, [trip]);
           const hasOverride = (trip.stopOrder?.[key] ?? 0) > 0;
           return (
             <li key={key} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
-              <span className="w-5 metric-mono text-muted-foreground">{i + 1}</span>
+              <span className="w-5 metric-mono text-muted-foreground">{globalIndex + 1}</span>
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{c.name}</div>
                 <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
@@ -454,8 +518,8 @@ function TripStopOrderEditor({
                 variant="ghost"
                 size="icon"
                 className="size-7"
-                disabled={i === 0}
-                onClick={() => move(i, -1)}
+                disabled={globalIndex === 0}
+                onClick={() => move(globalIndex, -1)}
                 aria-label="Move up"
               >
                 <ChevronUp className="size-4" />
@@ -465,8 +529,8 @@ function TripStopOrderEditor({
                 variant="ghost"
                 size="icon"
                 className="size-7"
-                disabled={i === list.length - 1}
-                onClick={() => move(i, 1)}
+                disabled={globalIndex === list.length - 1}
+                onClick={() => move(globalIndex, 1)}
                 aria-label="Move down"
               >
                 <ChevronDown className="size-4" />
@@ -475,6 +539,11 @@ function TripStopOrderEditor({
           );
         })}
       </ul>
+      {!showAllCustomers && hiddenCount > 0 && (
+        <Button type="button" variant="ghost" size="sm" onClick={() => setShowAllCustomers(true)}>
+          Show {hiddenCount} more customers
+        </Button>
+      )}
     </div>
   );
 }

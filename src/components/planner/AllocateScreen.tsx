@@ -61,6 +61,14 @@ import { ScreenHeader } from "./ui/ScreenHeader";
 import { ScreenShell } from "./ui/ScreenShell";
 import { cn } from "@/lib/utils";
 import { usePlanReadOnly } from "@/hooks/use-plan-read-only";
+import { usePagination } from "@/hooks/use-pagination";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import {
   Popover,
   PopoverContent,
@@ -461,6 +469,7 @@ function TruckWorkbench({
   const setDayTripStopSequence = useStore((s) => s.setDayTripStopSequence);
   const setDayTripCustomerLoadNumber = useStore((s) => s.setDayTripCustomerLoadNumber);
   const { highlightProps } = useRowHighlight(searchHighlightId);
+  const unallocatedPagination = usePagination(unallocated, 50);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -884,7 +893,7 @@ function TruckWorkbench({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {unallocated.map((i) => {
+                {unallocatedPagination.slice.map((i) => {
                   const checked = selected.includes(i.id);
                   return (
                     <TableRow
@@ -942,6 +951,53 @@ function TruckWorkbench({
               </TableBody>
             </Table>
           </div>
+          {unallocatedPagination.totalPages > 1 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-2 text-sm text-muted-foreground">
+              <span>
+                {(unallocatedPagination.page - 1) * unallocatedPagination.pageSize + 1}–
+                {Math.min(
+                  unallocatedPagination.page * unallocatedPagination.pageSize,
+                  unallocatedPagination.totalItems,
+                )}{" "}
+                of {unallocatedPagination.totalItems}
+              </span>
+              <Pagination className="mx-0 w-auto">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        unallocatedPagination.prevPage();
+                      }}
+                      className={
+                        unallocatedPagination.page <= 1 ? "pointer-events-none opacity-50" : undefined
+                      }
+                    />
+                  </PaginationItem>
+                  <PaginationItem>
+                    <span className="px-2">
+                      Page {unallocatedPagination.page} of {unallocatedPagination.totalPages}
+                    </span>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationNext
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        unallocatedPagination.nextPage();
+                      }}
+                      className={
+                        unallocatedPagination.page >= unallocatedPagination.totalPages
+                          ? "pointer-events-none opacity-50"
+                          : undefined
+                      }
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            </div>
+          )}
         </section>
       )}
 

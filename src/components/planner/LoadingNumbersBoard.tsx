@@ -6,7 +6,63 @@ import type { CustomerMemory } from "@/lib/types";
 import { customerKey } from "@/lib/customers";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+const LIST_CAP = 50;
+
+function CappedLoadingList({
+  items,
+  area,
+  onSetLoadingNumber,
+}: {
+  items: CustomerMemory[];
+  area: string;
+  onSetLoadingNumber: (key: string, area: string, n: number) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? items : items.slice(0, LIST_CAP);
+  const hidden = items.length - visible.length;
+  return (
+    <>
+      <ul className="divide-y divide-border">
+        {visible.map((c) => {
+          const key = customerKey(c);
+          return (
+            <li key={key} className="flex items-center gap-3 bg-panel px-3 py-2.5">
+              <Badge variant="outline" className="metric-mono w-10 shrink-0 justify-center px-1">
+                {c.loadingNumber > 0 ? c.loadingNumber : "—"}
+              </Badge>
+              <span className="min-w-0 flex-1 truncate text-sm">
+                {c.code ? (
+                  <>
+                    <span className="metric-mono text-muted-foreground">{c.code}</span>
+                    <span className="mx-1.5 text-muted-foreground/50">·</span>
+                  </>
+                ) : null}
+                <span className="font-medium">{c.name}</span>
+              </span>
+              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                Load #
+                <LoadingNumberInput
+                  value={c.loadingNumber || 0}
+                  onCommit={(n) => onSetLoadingNumber(key, area, n)}
+                />
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      {!showAll && hidden > 0 && (
+        <div className="border-t border-border px-3 py-2">
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowAll(true)}>
+            Show {hidden} more
+          </Button>
+        </div>
+      )}
+    </>
+  );
+}
 
 export function LoadingNumbersBoard({
   areas,
@@ -73,37 +129,11 @@ export function LoadingNumbersBoard({
                   No customers in this town.
                 </p>
               ) : (
-                <ul className="divide-y divide-border">
-                  {list.map((c) => {
-                    const key = customerKey(c);
-                    return (
-                      <li key={key} className="flex items-center gap-3 bg-panel px-3 py-2.5">
-                        <Badge
-                          variant="outline"
-                          className="metric-mono w-10 shrink-0 justify-center px-1"
-                        >
-                          {c.loadingNumber > 0 ? c.loadingNumber : "—"}
-                        </Badge>
-                        <span className="min-w-0 flex-1 truncate text-sm">
-                          {c.code ? (
-                            <>
-                              <span className="metric-mono text-muted-foreground">{c.code}</span>
-                              <span className="mx-1.5 text-muted-foreground/50">·</span>
-                            </>
-                          ) : null}
-                          <span className="font-medium">{c.name}</span>
-                        </span>
-                        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                          Load #
-                          <LoadingNumberInput
-                            value={c.loadingNumber || 0}
-                            onCommit={(n) => onSetLoadingNumber(key, area, n)}
-                          />
-                        </label>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <CappedLoadingList
+                  items={list}
+                  area={area}
+                  onSetLoadingNumber={onSetLoadingNumber}
+                />
               )}
             </div>
           </div>

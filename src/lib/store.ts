@@ -526,7 +526,10 @@ export const useStore = create<State>((set, get) => {
 
       try {
         const preferLocal = isWarehouseDirty();
-        const { snapshot, status } = await hydrateWarehouse({ preferLocal });
+        const { snapshot, status, runPhaseB } = await hydrateWarehouse({
+          preferLocal,
+          force,
+        });
         // If we preferred local because dirty, keep in-memory state (already newer)
         if (preferLocal && already) {
           applyPersistResult(status, { cloudAttempt: status === "cloud" });
@@ -548,7 +551,9 @@ export const useStore = create<State>((set, get) => {
         const showResume = !!existing && !existing.locked && existing.invoices.length > 0;
         const syncState: SyncState =
           status === "cloud"
-            ? "saved"
+            ? runPhaseB
+              ? "saving"
+              : "saved"
             : status === "offline"
               ? "offline"
               : status === "error"
@@ -558,8 +563,8 @@ export const useStore = create<State>((set, get) => {
           hydrated: true,
           cloudStatus: status,
           syncState,
-          lastSyncedAt: status === "cloud" ? new Date().toISOString() : get().lastSyncedAt,
-          pendingSummary: "",
+          lastSyncedAt: status === "cloud" && !runPhaseB ? new Date().toISOString() : get().lastSyncedAt,
+          pendingSummary: runPhaseB ? "Loading customers & history…" : "",
           trucks,
           trips: (trips ?? []).map((t) => normalizeTrip(t)),
           customers,
@@ -573,6 +578,30 @@ export const useStore = create<State>((set, get) => {
           adminPin,
           showResume,
         });
+
+        if (runPhaseB) {
+          void (async () => {
+            try {
+              const full = await runPhaseB();
+              const {
+                customers: c2,
+                audit: a2,
+                plans: p2,
+              } = full;
+              set({
+                customers: c2,
+                audit: a2,
+                plans: p2,
+                syncState: status === "cloud" ? "saved" : get().syncState,
+                lastSyncedAt: status === "cloud" ? new Date().toISOString() : get().lastSyncedAt,
+                pendingSummary: "",
+              });
+            } catch (err) {
+              console.error("Background hydrate phase B failed", err);
+              set({ pendingSummary: "" });
+            }
+          })();
+        }
       } catch {
         set({ hydrated: true, cloudStatus: "error", syncState: "error" });
       }

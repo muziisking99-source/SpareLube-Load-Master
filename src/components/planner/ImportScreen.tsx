@@ -53,6 +53,15 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ScreenHeader } from "./ui/ScreenHeader";
+import { usePagination } from "@/hooks/use-pagination";
+import { VirtualList } from "@/components/ui/virtual-list";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { CollapsibleSection } from "./ui/CollapsibleSection";
 import { EmptyState } from "./ui/EmptyState";
 import { StatTile } from "./ui/StatTile";
@@ -153,6 +162,11 @@ export function ImportScreen() {
   const deliveryInvoices = invoices.filter(
     (i) => !i.creditNote && !i.collection && !isCollectionCustomer(i.customer),
   );
+
+  const heldPagination = usePagination(sortedHeld, 50);
+  const collectionPagination = usePagination(collectionInvoices, 50);
+  const creditPagination = usePagination(creditInvoices, 50);
+  const useVirtualDelivery = deliveryInvoices.length > 100;
 
   const docCounts = useMemo(() => {
     const m = new Map<string, number>();
@@ -597,7 +611,7 @@ export function ImportScreen() {
         ) : (
           <>
             <div className="space-y-3 md:hidden">
-              {sortedHeld.map((h) => (
+              {heldPagination.slice.map((h) => (
                 <HeldCard
                   key={h.id}
                   held={h}
@@ -628,7 +642,7 @@ export function ImportScreen() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedHeld.map((h) => (
+                  {heldPagination.slice.map((h) => (
                     <HeldRow
                       key={h.id}
                       held={h}
@@ -648,6 +662,7 @@ export function ImportScreen() {
                 </tbody>
               </table>
             </div>
+            <TablePaginationFooter pagination={heldPagination} />
           </>
         )}
       </CollapsibleSection>
@@ -660,7 +675,7 @@ export function ImportScreen() {
             className="mb-4"
           />
           <div className="space-y-3 md:hidden">
-            {collectionInvoices.map((i) => (
+            {collectionPagination.slice.map((i) => (
               <CollectionCreditCard
                 key={i.id}
                 inv={i}
@@ -688,7 +703,7 @@ export function ImportScreen() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {collectionInvoices.map((i) => (
+                {collectionPagination.slice.map((i) => (
                   <TableRow key={i.id} {...highlightProps(i.id)}>
                     <TableCell className="metric-mono">{i.doc}</TableCell>
                     <TableCell>{i.customer}</TableCell>
@@ -739,6 +754,7 @@ export function ImportScreen() {
               </TableBody>
             </Table>
           </div>
+          <TablePaginationFooter pagination={collectionPagination} />
         </section>
       )}
 
@@ -750,7 +766,7 @@ export function ImportScreen() {
             className="mb-4"
           />
           <div className="space-y-3 md:hidden">
-            {creditInvoices.map((i) => (
+            {creditPagination.slice.map((i) => (
               <CollectionCreditCard
                 key={i.id}
                 inv={i}
@@ -778,7 +794,7 @@ export function ImportScreen() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {creditInvoices.map((i) => (
+                {creditPagination.slice.map((i) => (
                   <TableRow key={i.id} {...highlightProps(i.id)}>
                     <TableCell className="metric-mono">{i.doc}</TableCell>
                     <TableCell>{i.customer}</TableCell>
@@ -846,6 +862,7 @@ export function ImportScreen() {
               </TableBody>
             </Table>
           </div>
+          <TablePaginationFooter pagination={creditPagination} />
         </section>
       )}
 
@@ -883,7 +900,7 @@ export function ImportScreen() {
                 />
               ))}
             </div>
-            <div className="hidden max-h-[520px] overflow-auto rounded-xl border border-border md:block">
+            <div className="hidden rounded-xl border border-border md:block">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-panel-2">
                   <TableRow className="hover:bg-panel-2">
@@ -895,28 +912,64 @@ export function ImportScreen() {
                     <TableHead className="w-40" />
                   </TableRow>
                 </TableHeader>
-                <TableBody>
-                  {deliveryInvoices.map((i, idx) => (
-                    <InvoiceRow
-                      key={i.id}
-                      inv={i}
-                      areas={townOptions}
-                      known={!!findCustomer(customers, i.customer)}
-                      duplicate={(docCounts.get(i.doc) ?? 0) > 1}
-                      index={idx}
-                      loadNumber={
-                        (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
-                      }
-                      highlightProps={highlightProps(i.id)}
-                      onChange={(patch) => updateInvoice(i.id, patch)}
-                      onRemove={() => removeInvoice(i.id)}
-                      onHold={() => handleHold(i.id)}
-                      onCollect={() => handleCollect(i.id)}
-                      onCredit={() => handleCredit(i.id)}
-                    />
-                  ))}
-                </TableBody>
               </Table>
+              {useVirtualDelivery ? (
+                <VirtualList
+                  items={deliveryInvoices}
+                  height={480}
+                  estimateSize={52}
+                  getKey={(i) => i.id}
+                  className="border-t border-border"
+                  renderItem={(i, idx) => (
+                    <table className="w-full caption-bottom text-sm">
+                      <tbody>
+                        <InvoiceRow
+                          inv={i}
+                          areas={townOptions}
+                          known={!!findCustomer(customers, i.customer)}
+                          duplicate={(docCounts.get(i.doc) ?? 0) > 1}
+                          index={idx}
+                          loadNumber={
+                            (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
+                          }
+                          highlightProps={highlightProps(i.id)}
+                          onChange={(patch) => updateInvoice(i.id, patch)}
+                          onRemove={() => removeInvoice(i.id)}
+                          onHold={() => handleHold(i.id)}
+                          onCollect={() => handleCollect(i.id)}
+                          onCredit={() => handleCredit(i.id)}
+                        />
+                      </tbody>
+                    </table>
+                  )}
+                />
+              ) : (
+                <div className="max-h-[520px] overflow-auto border-t border-border">
+                  <Table>
+                    <TableBody>
+                      {deliveryInvoices.map((i, idx) => (
+                        <InvoiceRow
+                          key={i.id}
+                          inv={i}
+                          areas={townOptions}
+                          known={!!findCustomer(customers, i.customer)}
+                          duplicate={(docCounts.get(i.doc) ?? 0) > 1}
+                          index={idx}
+                          loadNumber={
+                            (i.area && loadingNumberFor(customers, i.customer, i.area)) || 0
+                          }
+                          highlightProps={highlightProps(i.id)}
+                          onChange={(patch) => updateInvoice(i.id, patch)}
+                          onRemove={() => removeInvoice(i.id)}
+                          onHold={() => handleHold(i.id)}
+                          onCollect={() => handleCollect(i.id)}
+                          onCredit={() => handleCredit(i.id)}
+                        />
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -1611,5 +1664,53 @@ function HeldRow({
         </div>
       </td>
     </tr>
+  );
+}
+
+function TablePaginationFooter({
+  pagination,
+}: {
+  pagination: ReturnType<typeof usePagination<unknown>>;
+}) {
+  if (pagination.totalPages <= 1) return null;
+  const start = (pagination.page - 1) * pagination.pageSize + 1;
+  const end = Math.min(pagination.page * pagination.pageSize, pagination.totalItems);
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+      <span>
+        {start}–{end} of {pagination.totalItems}
+      </span>
+      <Pagination className="mx-0 w-auto">
+        <PaginationContent>
+          <PaginationItem>
+            <PaginationPrevious
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                pagination.prevPage();
+              }}
+              className={pagination.page <= 1 ? "pointer-events-none opacity-50" : undefined}
+            />
+          </PaginationItem>
+          <PaginationItem>
+            <span className="px-2">
+              Page {pagination.page} of {pagination.totalPages}
+            </span>
+          </PaginationItem>
+          <PaginationItem>
+            <PaginationNext
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                pagination.nextPage();
+              }}
+              className={
+                pagination.page >= pagination.totalPages ? "pointer-events-none opacity-50" : undefined
+              }
+            />
+          </PaginationItem>
+        </PaginationContent>
+      </Pagination>
+    </div>
   );
 }

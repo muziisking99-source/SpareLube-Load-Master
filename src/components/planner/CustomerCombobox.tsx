@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronsUpDown, Plus } from "lucide-react";
 import type { CustomerMemory } from "@/lib/types";
 import { customerKey } from "@/lib/customers";
@@ -41,6 +41,12 @@ export function CustomerCombobox({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(query), 150);
+    return () => window.clearTimeout(t);
+  }, [query]);
 
   const list = useMemo(
     () =>
@@ -61,20 +67,22 @@ export function CustomerCombobox({
     );
   }, [list, value]);
 
-  const trimmedQuery = query.trim();
+  const trimmedQuery = debouncedQuery.trim();
   const q = trimmedQuery.toLowerCase();
-  const filtered = q
-    ? list.filter((c) =>
-        `${c.code} ${c.name} ${customerKey(c)}`.toLowerCase().includes(q),
-      )
-    : list;
+  const filtered = useMemo(() => {
+    if (!q) return list.slice(0, 50);
+    if (q.length < 2) return [];
+    return list
+      .filter((c) => `${c.code} ${c.name} ${customerKey(c)}`.toLowerCase().includes(q))
+      .slice(0, 50);
+  }, [list, q]);
   const canCreate =
     allowCreate &&
-    trimmedQuery.length > 0 &&
+    query.trim().length > 0 &&
     !list.some(
       (c) =>
-        c.name.toLowerCase() === q ||
-        c.code.toLowerCase() === q,
+        c.name.toLowerCase() === query.trim().toLowerCase() ||
+        c.code.toLowerCase() === query.trim().toLowerCase(),
     );
 
   const label = selected
@@ -84,7 +92,7 @@ export function CustomerCombobox({
     : value || placeholder;
 
   function createFromQuery() {
-    const name = trimmedQuery;
+    const name = query.trim();
     if (!name) return;
     onChange({
       code: "",
@@ -138,7 +146,9 @@ export function CustomerCombobox({
               <CommandEmpty>
                 {allowCreate
                   ? trimmedQuery
-                    ? "No matching customer."
+                    ? trimmedQuery.length < 2
+                      ? "Type at least 2 characters to search."
+                      : "No matching customer."
                     : "Type a name to add a customer."
                   : emptyLabel}
               </CommandEmpty>

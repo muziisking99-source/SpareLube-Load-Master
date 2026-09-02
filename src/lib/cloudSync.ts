@@ -15,7 +15,10 @@ import { loadKey, saveKey } from "./db";
 
 const MIGRATED_KEY = "lp:cloudMigrated";
 const DIRTY_KEY = "lp:cloudDirty";
+const LAST_SYNC_KEY = "lp:lastCloudSyncAt";
 const PLAN_HYDRATE_DAYS = 60;
+const PLAN_FULL_HYDRATE_DAYS = 7;
+const AUDIT_KEEP_COUNT = 5000;
 const UPSERT_CHUNK = 250;
 
 export type CloudSnapshot = {
@@ -248,6 +251,182 @@ function daysAgoISO(days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+async function loadLastSyncAt(): Promise<string | null> {
+  return loadKey<string | null>(LAST_SYNC_KEY, null);
+}
+
+async function saveLastSyncAt(iso: string): Promise<void> {
+  await saveKey(LAST_SYNC_KEY, iso);
+}
+
+async function clearLastSyncAt(): Promise<void> {
+  await saveKey(LAST_SYNC_KEY, null);
+}
+
+function planHasBody(p: Plan): boolean {
+  return p.invoices.length > 0 || p.areas.length > 0 || p.truckDay.length > 0;
+}
+
+function isPlanStub(p: Plan): boolean {
+  return !planHasBody(p);
+}
+
+function mergePlanSafe(local: Plan | undefined, remote: Plan): Plan {
+  if (local && planHasBody(local) && isPlanStub(remote)) return local;
+  return remote;
+}
+
+function shouldLoadFullPlan(date: string, currentDate: string, activeDate: string): boolean {
+  if (date === currentDate || date === activeDate) return true;
+  return date >= daysAgoISO(PLAN_FULL_HYDRATE_DAYS);
+}
+
+function planStubFromRow(row: {
+  date: string;
+  locked?: boolean;
+  created_at?: string;
+  step?: Plan["step"];
+}): Plan {
+  return {
+    date: row.date,
+    areas: [],
+    tripIds: [],
+    truckDay: [],
+    invoices: [],
+    dayStopOrder: {},
+    dayStopSequence: {},
+    locked: !!row.locked,
+    createdAt: row.created_at ?? new Date().toISOString(),
+    step: row.step ?? "setup",
+  };
+}
+
+function planFromFullRow(row: {
+  date: string;
+  areas?: string[];
+  trip_ids?: string[];
+  truck_day?: TruckDay[];
+  invoices?: Plan["invoices"];
+  locked?: boolean;
+  created_at?: string;
+  step?: Plan["step"];
+  day_stop_order?: unknown;
+  day_stop_sequence?: unknown;
+}): Plan {
+  return normalizePlans({
+    [row.date]: {
+      date: row.date,
+      areas: row.areas ?? [],
+      tripIds: Array.isArray(row.trip_ids) ? row.trip_ids ?? [] : [],
+      truckDay: row.truck_day ?? [],
+      invoices: row.invoices ?? [],
+      dayStopOrder: normalizeDayStopOrder(row.day_stop_order),
+      dayStopSequence: normalizeDayStopSequence(row.day_stop_sequence),
+      locked: !!row.locked,
+      createdAt: row.created_at ?? new Date().toISOString(),
+      step: row.step ?? "setup",
+    },
+  })[row.date];
+}
+
+function mergeTrucksById(
+  local: Truck[],
+  remote: Truck[],
+  remoteIds: Set<string>,
+): Truck[] {
+  const byId = new Map(local.map((t) => [t.id, t]));
+  for (const t of remote) byId.set(t.id, t);
+  return [...byId.values()].filter((t) => remoteIds.has(t.id));
+}
+
+function mergeTripsById(local: Trip[], remote: Trip[], remoteIds: Set<string>): Trip[] {
+  const byId = new Map(local.map((t) => [t.id, t]));
+  for (const t of remote) byId.set(t.id, normalizeTrip(t));
+  return [...byId.values()].filter((t) => remoteIds.has(t.id)).map((t) => normalizeTrip(t));
+}
+
+function mergeCustomersById(
+  local: Record<string, CustomerMemory>,
+  remote: Record<string, CustomerMemory>,
+  remoteIds: Set<string>,
+): Record<string, CustomerMemory> {
+  const out = { ...local };
+  for (const [id, c] of Object.entries(remote)) {
+    if (remoteIds.has(id)) out[id] = c;
+  }
+  for (const id of Object.keys(out)) {
+    if (!remoteIds.has(id)) delete out[id];
+  }
+  return out;
+}
+
+function mergePlansByDate(
+  local: Record<string, Plan>,
+  remote: Record<string, Plan>,
+  remoteIds: Set<string>,
+  cutoff: string,
+  currentDate: string,
+): Record<string, Plan> {
+  const out = { ...local };
+  for (const [date, p] of Object.entries(remote)) {
+    if (!remoteIds.has(date)) continue;
+    out[date] = mergePlanSafe(out[date], p);
+  }
+  for (const date of Object.keys(out)) {
+    if (date >= cutoff && date !== currentDate && !remoteIds.has(date)) {
+      delete out[date];
+    }
+  }
+  return out;
+}
+
+type PlanSelectTier = "full" | "stub";
+
+const PLAN_SELECT_FULL =
+  "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence";
+const PLAN_SELECT_MID = "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order";
+const PLAN_SELECT_TRIP = "date,areas,truck_day,invoices,locked,created_at,step,trip_ids";
+const PLAN_SELECT_BASE = "date,areas,truck_day,invoices,locked,created_at,step";
+const PLAN_SELECT_STUB = "date,locked,created_at,step";
+
+async function queryPlans(
+  tier: PlanSelectTier,
+  filters: {
+    gteDate?: string;
+    ltDate?: string;
+    eqDate?: string;
+    gtUpdatedAt?: string;
+  } = {},
+): Promise<unknown[]> {
+  const sb = getSupabase()!;
+  const selects =
+    tier === "stub"
+      ? [PLAN_SELECT_STUB]
+      : [PLAN_SELECT_FULL, PLAN_SELECT_MID, PLAN_SELECT_TRIP, PLAN_SELECT_BASE];
+  for (const sel of selects) {
+    let q = sb.from("plans").select(sel);
+    if (filters.gteDate) q = q.gte("date", filters.gteDate);
+    if (filters.ltDate) q = q.lt("date", filters.ltDate);
+    if (filters.eqDate) q = q.eq("date", filters.eqDate);
+    if (filters.gtUpdatedAt) q = q.gt("updated_at", filters.gtUpdatedAt);
+    const { data, error } = await q;
+    if (!error) return data ?? [];
+    if (!/day_stop_sequence|day_stop_order|trip_ids|schema cache|does not exist/i.test(error.message)) {
+      throw error;
+    }
+  }
+  return [];
+}
+
+function rowsToPlans(rows: unknown[], tier: PlanSelectTier): Record<string, Plan> {
+  const plans: Record<string, Plan> = {};
+  for (const row of rows) {
+    const r = row as Parameters<typeof planFromFullRow>[0];
+    plans[r.date] = tier === "stub" ? planStubFromRow(r) : planFromFullRow(r);
+  }
+  return plans;
+}
+
 function normalizePlans(raw: Record<string, Plan>): Record<string, Plan> {
   const plans: Record<string, Plan> = {};
   for (const [date, p] of Object.entries(raw ?? {})) {
@@ -475,77 +654,179 @@ export async function listPlanIndexFromCloud(): Promise<
   }));
 }
 
-/** Fetch full warehouse state from Lovable Cloud. */
-export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
+type HydratePhase = "A" | "B" | "all";
+
+type HydrateFromCloudOpts = {
+  force?: boolean;
+  phase?: HydratePhase;
+  base?: CloudSnapshot;
+  local?: CloudSnapshot;
+};
+
+async function fetchTripsFromCloud(lastSync: string | null, force: boolean) {
+  const sb = getSupabase()!;
+  let tripsRes = await sb.from("trips").select("id,name,towns,stop_order,updated_at");
+  if (tripsRes.error && /stop_order|schema cache|does not exist/i.test(tripsRes.error.message)) {
+    let q = sb.from("trips").select("id,name,towns,updated_at");
+    if (lastSync && !force) q = q.gt("updated_at", lastSync);
+    tripsRes = await q;
+  } else if (lastSync && !force) {
+    tripsRes = await sb
+      .from("trips")
+      .select("id,name,towns,stop_order,updated_at")
+      .gt("updated_at", lastSync);
+  }
+  return tripsRes;
+}
+
+async function fetchPlansForHydrate(
+  currentDate: string,
+  activeDate: string,
+  lastSync: string | null,
+  force: boolean,
+): Promise<Record<string, Plan>> {
+  const cutoff = daysAgoISO(PLAN_HYDRATE_DAYS);
+  const fullCutoff = daysAgoISO(PLAN_FULL_HYDRATE_DAYS);
+
+  if (lastSync && !force) {
+    const changed = await queryPlans("full", { gtUpdatedAt: lastSync });
+    const plans: Record<string, Plan> = {};
+    for (const row of changed) {
+      const r = row as Parameters<typeof planFromFullRow>[0];
+      if (shouldLoadFullPlan(r.date, currentDate, activeDate)) {
+        plans[r.date] = planFromFullRow(r);
+      } else if (r.date >= cutoff) {
+        plans[r.date] = planStubFromRow(r);
+      }
+    }
+    return plans;
+  }
+
+  const [fullRows, stubRows] = await Promise.all([
+    queryPlans("full", { gteDate: fullCutoff }),
+    queryPlans("stub", { gteDate: cutoff, ltDate: fullCutoff }),
+  ]);
+
+  const plans = {
+    ...rowsToPlans(stubRows, "stub"),
+    ...rowsToPlans(fullRows, "full"),
+  };
+
+  const needExtra = new Set<string>();
+  if (activeDate < cutoff || !plans[activeDate]) needExtra.add(activeDate);
+  if (!plans[currentDate]) needExtra.add(currentDate);
+
+  for (const date of needExtra) {
+    if (plans[date] && planHasBody(plans[date])) continue;
+    const extra = await queryPlans("full", { eqDate: date });
+    if (extra.length) {
+      plans[date] = planFromFullRow(extra[0] as Parameters<typeof planFromFullRow>[0]);
+    }
+  }
+
+  return plans;
+}
+
+async function fetchPlanStubsInWindow(existing: Record<string, Plan>): Promise<Record<string, Plan>> {
+  const cutoff = daysAgoISO(PLAN_HYDRATE_DAYS);
+  const stubRows = await queryPlans("stub", { gteDate: cutoff });
+  const stubs = rowsToPlans(stubRows, "stub");
+  for (const [date, stub] of Object.entries(stubs)) {
+    const existingPlan = existing[date];
+    if (existingPlan && planHasBody(existingPlan)) continue;
+    stubs[date] = mergePlanSafe(existingPlan, stub);
+  }
+  return stubs;
+}
+
+/** Fetch warehouse state from Lovable Cloud (full, or phased A/B). */
+export async function hydrateFromCloud(
+  opts?: HydrateFromCloudOpts,
+): Promise<CloudSnapshot | null> {
   const sb = getSupabase();
   if (!sb) return null;
 
+  const phase = opts?.phase ?? "all";
+  const force = !!opts?.force;
+  const local = opts?.local ?? emptySnapshot(tomorrowISO());
+  const lastSync = force ? null : await loadLastSyncAt();
   const cutoff = daysAgoISO(PLAN_HYDRATE_DAYS);
 
-  let tripsRes = await sb.from("trips").select("id,name,towns,stop_order");
-  if (tripsRes.error && /stop_order|schema cache|does not exist/i.test(tripsRes.error.message)) {
-    tripsRes = await sb.from("trips").select("id,name,towns");
+  if (phase === "B" && opts?.base) {
+    const base = opts.base;
+    const [customersRes, auditRes, stubPlans] = await Promise.all([
+      (async () => {
+        let q = sb
+          .from("customers")
+          .select("id,code,name,default_area,loading_number,first_seen,collection,updated_at");
+        if (lastSync && !force) q = q.gt("updated_at", lastSync);
+        let res = await q;
+        if (res.error && /collection|schema cache|does not exist/i.test(res.error.message)) {
+          let fq = sb
+            .from("customers")
+            .select("id,code,name,default_area,loading_number,first_seen,updated_at");
+          if (lastSync && !force) fq = fq.gt("updated_at", lastSync);
+          res = await fq;
+        }
+        return res;
+      })(),
+      sb
+        .from("audit_entries")
+        .select("id,ts,type,message")
+        .order("ts", { ascending: false })
+        .limit(AUDIT_KEEP_COUNT),
+      fetchPlanStubsInWindow(base.plans),
+    ]);
+
+    if (customersRes.error) throw customersRes.error;
+    if (auditRes.error) throw auditRes.error;
+
+    const remoteCustomers: Record<string, CustomerMemory> = {};
+    for (const row of customersRes.data ?? []) {
+      const c = normalizeCustomer({
+        code: row.code ?? "",
+        name: row.name,
+        defaultArea: row.default_area ?? "",
+        loadingNumber: row.loading_number ?? 0,
+        firstSeen: row.first_seen ?? new Date().toISOString(),
+        collection: !!(row as { collection?: boolean }).collection,
+      });
+      remoteCustomers[row.id || customerKey(c)] = c;
+    }
+
+    let customers = remoteCustomers;
+    if (lastSync && !force) {
+      const { data: idRows, error: idErr } = await sb.from("customers").select("id");
+      if (idErr) throw idErr;
+      const remoteIds = new Set((idRows ?? []).map((r) => r.id));
+      customers = mergeCustomersById(local.customers, remoteCustomers, remoteIds);
+    }
+
+    const audit: AuditEntry[] = (auditRes.data ?? []).map((a) => ({
+      id: a.id,
+      ts: a.ts,
+      type: a.type,
+      message: a.message,
+    }));
+
+    const plans = { ...base.plans, ...stubPlans };
+    for (const [date, p] of Object.entries(stubPlans)) {
+      plans[date] = mergePlanSafe(base.plans[date], p);
+    }
+
+    return { ...base, customers, audit, plans };
   }
 
-  const [areasRes, trucksRes, customersRes, plansRes, auditRes, settingsRes] = await Promise.all([
+  const tripsRes = await fetchTripsFromCloud(lastSync, force);
+
+  let trucksQuery = sb.from("trucks").select("id,name,max_weight,active,updated_at");
+  if (lastSync && !force) trucksQuery = trucksQuery.gt("updated_at", lastSync);
+
+  const [areasRes, trucksRes, settingsRes] = await Promise.all([
     sb.from("areas").select("name"),
-    sb.from("trucks").select("id,name,max_weight,active"),
-    sb.from("customers").select("id,code,name,default_area,loading_number,first_seen,collection"),
-    sb
-      .from("plans")
-      .select(
-        "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence",
-      )
-      .gte("date", cutoff),
-    sb
-      .from("audit_entries")
-      .select("id,ts,type,message")
-      .order("ts", { ascending: false })
-      .limit(5000),
+    trucksQuery,
     sb.from("app_settings").select("active_date,admin_pin,held_invoices").eq("id", 1).maybeSingle(),
   ]);
-
-  // Graceful fallbacks when migration 006 not applied yet
-  let customersData = customersRes.data;
-  let customersError = customersRes.error;
-  if (customersError && /collection|schema cache|does not exist/i.test(customersError.message)) {
-    const fallback = await sb
-      .from("customers")
-      .select("id,code,name,default_area,loading_number,first_seen");
-    customersData = fallback.data as typeof customersData;
-    customersError = fallback.error;
-  }
-
-  let plansData = plansRes.data;
-  let plansError = plansRes.error;
-  if (plansError && /day_stop_sequence|schema cache|does not exist/i.test(plansError.message)) {
-    const mid = await sb
-      .from("plans")
-      .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order")
-      .gte("date", cutoff);
-    plansData = mid.data as typeof plansData;
-    plansError = mid.error;
-  }
-  if (plansError && /day_stop_order|schema cache|does not exist/i.test(plansError.message)) {
-    const mid = await sb
-      .from("plans")
-      .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids")
-      .gte("date", cutoff);
-    plansData = mid.data as typeof plansData;
-    plansError = mid.error;
-  }
-  if (plansError && /trip_ids|schema cache|does not exist/i.test(plansError.message)) {
-    const fallback = await sb
-      .from("plans")
-      .select("date,areas,truck_day,invoices,locked,created_at,step")
-      .gte("date", cutoff);
-    plansData = fallback.data as typeof plansData;
-    plansError = fallback.error;
-  }
-
-  const tripsTableMissing =
-    !!tripsRes.error && /does not exist|schema cache/i.test(tripsRes.error.message);
-  const tripsError = tripsRes.error && !tripsTableMissing ? tripsRes.error : null;
 
   const settingsMissingHeldCol =
     !!settingsRes.error && /held_invoices|schema cache|does not exist/i.test(settingsRes.error.message);
@@ -566,102 +847,99 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
     throw settingsRes.error;
   }
 
-  const firstError =
-    areasRes.error ||
-    trucksRes.error ||
-    tripsError ||
-    customersError ||
-    plansError ||
-    auditRes.error;
+  const activeDate = settingsData?.active_date || tomorrowISO();
+  const currentDate = local.currentDate || activeDate;
+
+  let plans: Record<string, Plan> = {};
+  let customers: Record<string, CustomerMemory> = {};
+  let audit: AuditEntry[] = [];
+
+  if (phase === "all") {
+    const [customersRes, auditRes] = await Promise.all([
+      (async () => {
+        let res = await sb
+          .from("customers")
+          .select("id,code,name,default_area,loading_number,first_seen,collection");
+        if (lastSync && !force) {
+          let q = sb
+            .from("customers")
+            .select("id,code,name,default_area,loading_number,first_seen,collection,updated_at")
+            .gt("updated_at", lastSync);
+          res = await q;
+        }
+        if (res.error && /collection|schema cache|does not exist/i.test(res.error.message)) {
+          let fq = sb.from("customers").select("id,code,name,default_area,loading_number,first_seen");
+          if (lastSync && !force) fq = fq.gt("updated_at", lastSync);
+          res = await fq;
+        }
+        return res;
+      })(),
+      sb
+        .from("audit_entries")
+        .select("id,ts,type,message")
+        .order("ts", { ascending: false })
+        .limit(AUDIT_KEEP_COUNT),
+    ]);
+    if (customersRes.error) throw customersRes.error;
+    if (auditRes.error) throw auditRes.error;
+
+    for (const row of customersRes.data ?? []) {
+      const c = normalizeCustomer({
+        code: row.code ?? "",
+        name: row.name,
+        defaultArea: row.default_area ?? "",
+        loadingNumber: row.loading_number ?? 0,
+        firstSeen: row.first_seen ?? new Date().toISOString(),
+        collection: !!(row as { collection?: boolean }).collection,
+      });
+      customers[row.id || customerKey(c)] = c;
+    }
+    if (lastSync && !force) {
+      const { data: idRows, error: idErr } = await sb.from("customers").select("id");
+      if (idErr) throw idErr;
+      const remoteIds = new Set((idRows ?? []).map((r) => r.id));
+      customers = mergeCustomersById(local.customers, customers, remoteIds);
+    }
+
+    audit = (auditRes.data ?? []).map((a) => ({
+      id: a.id,
+      ts: a.ts,
+      type: a.type,
+      message: a.message,
+    }));
+  }
+
+  plans = await fetchPlansForHydrate(currentDate, activeDate, lastSync, force);
+
+  if (lastSync && !force) {
+    const { data: idRows, error: idErr } = await sb.from("plans").select("date").gte("date", cutoff);
+    if (idErr) throw idErr;
+    const remoteIds = new Set((idRows ?? []).map((r) => r.date));
+    plans = mergePlansByDate(local.plans, plans, remoteIds, cutoff, currentDate);
+  }
+
+  const tripsTableMissing =
+    !!tripsRes.error && /does not exist|schema cache/i.test(tripsRes.error.message);
+  const tripsError = tripsRes.error && !tripsTableMissing ? tripsRes.error : null;
+
+  const firstError = areasRes.error || trucksRes.error || tripsError;
   if (firstError) throw firstError;
 
-  const activeDate = settingsData?.active_date || tomorrowISO();
-  if (activeDate < cutoff) {
-    let extra = await sb
-      .from("plans")
-      .select(
-        "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence",
-      )
-      .eq("date", activeDate)
-      .maybeSingle();
-    if (extra.error && /day_stop_sequence|schema cache|does not exist/i.test(extra.error.message)) {
-      extra = await sb
-        .from("plans")
-        .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order")
-        .eq("date", activeDate)
-        .maybeSingle();
-    }
-    if (extra.error && /day_stop_order|schema cache|does not exist/i.test(extra.error.message)) {
-      extra = await sb
-        .from("plans")
-        .select("date,areas,truck_day,invoices,locked,created_at,step,trip_ids")
-        .eq("date", activeDate)
-        .maybeSingle();
-    }
-    if (extra.error && /trip_ids|schema cache|does not exist/i.test(extra.error.message)) {
-      extra = await sb
-        .from("plans")
-        .select("date,areas,truck_day,invoices,locked,created_at,step")
-        .eq("date", activeDate)
-        .maybeSingle();
-    }
-    if (!extra.error && extra.data) {
-      (plansData as typeof extra.data[] | null) ??= [];
-      (plansData as NonNullable<typeof plansData>).push(extra.data);
-    }
-  }
-
-  const customers: Record<string, CustomerMemory> = {};
-  for (const row of customersData ?? []) {
-    const c = normalizeCustomer({
-      code: row.code ?? "",
-      name: row.name,
-      defaultArea: row.default_area ?? "",
-      loadingNumber: row.loading_number ?? 0,
-      firstSeen: row.first_seen ?? new Date().toISOString(),
-      collection: !!(row as { collection?: boolean }).collection,
-    });
-    customers[row.id || customerKey(c)] = c;
-  }
-
-  const plans: Record<string, Plan> = {};
-  for (const row of plansData ?? []) {
-    const r = row as {
-      date: string;
-      areas?: string[];
-      trip_ids?: string[];
-      truck_day?: TruckDay[];
-      invoices?: Plan["invoices"];
-      locked?: boolean;
-      created_at?: string;
-      step?: Plan["step"];
-      day_stop_order?: unknown;
-      day_stop_sequence?: unknown;
-    };
-    plans[row.date] = normalizePlans({
-      [row.date]: {
-        date: r.date,
-        areas: r.areas ?? [],
-        tripIds: Array.isArray(r.trip_ids) ? r.trip_ids ?? [] : [],
-        truckDay: r.truck_day ?? [],
-        invoices: r.invoices ?? [],
-        dayStopOrder: normalizeDayStopOrder(r.day_stop_order),
-        dayStopSequence: normalizeDayStopSequence(r.day_stop_sequence),
-        locked: !!r.locked,
-        createdAt: r.created_at ?? new Date().toISOString(),
-        step: r.step ?? "setup",
-      },
-    })[row.date];
-  }
-
-  const trucks: Truck[] = (trucksRes.data ?? []).map((t) => ({
+  let trucks: Truck[] = (trucksRes.data ?? []).map((t) => ({
     id: t.id,
     name: t.name,
     maxWeight: Number(t.max_weight) || 0,
     active: !!t.active,
   }));
 
-  const trips: Trip[] = tripsTableMissing
+  if (lastSync && !force) {
+    const { data: idRows, error: idErr } = await sb.from("trucks").select("id");
+    if (idErr) throw idErr;
+    const remoteIds = new Set((idRows ?? []).map((r) => r.id));
+    trucks = mergeTrucksById(local.trucks, trucks, remoteIds);
+  }
+
+  let trips: Trip[] = tripsTableMissing
     ? []
     : (tripsRes.data ?? []).map((t) => {
         const row = t as { id: string; name: string; towns: unknown; stop_order?: unknown };
@@ -676,14 +954,14 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
         });
       });
 
-  const audit: AuditEntry[] = (auditRes.data ?? []).map((a) => ({
-    id: a.id,
-    ts: a.ts,
-    type: a.type,
-    message: a.message,
-  }));
+  if (lastSync && !force && !tripsTableMissing) {
+    const { data: idRows, error: idErr } = await sb.from("trips").select("id");
+    if (idErr) throw idErr;
+    const remoteIds = new Set((idRows ?? []).map((r) => r.id));
+    trips = mergeTripsById(local.trips, trips, remoteIds);
+  }
 
-  return {
+  const snapshot: CloudSnapshot = {
     trucks,
     trips,
     customers,
@@ -694,6 +972,16 @@ export async function hydrateFromCloud(): Promise<CloudSnapshot | null> {
     currentDate: activeDate,
     adminPin: settingsData?.admin_pin ?? "",
   };
+
+  if (phase === "A") {
+    return {
+      ...snapshot,
+      customers: local.customers,
+      audit: local.audit.length ? local.audit : snapshot.audit,
+    };
+  }
+
+  return snapshot;
 }
 
 async function syncAreas(s: CloudSnapshot): Promise<void> {
@@ -988,12 +1276,21 @@ async function syncAuditAppend(s: CloudSnapshot, flags: DirtyFlags): Promise<voi
   }
   if (!flags.pruneAudit) return;
 
+  const { error: rpcErr } = await sb.rpc("prune_audit_entries", {
+    keep_count: AUDIT_KEEP_COUNT,
+  });
+  if (!rpcErr) return;
+
+  if (!/prune_audit_entries|schema cache|does not exist|42883/i.test(rpcErr.message)) {
+    throw rpcErr;
+  }
+
   const { data: allAudit, error: listErr } = await sb
     .from("audit_entries")
     .select("id,ts")
     .order("ts", { ascending: false });
   if (listErr) throw listErr;
-  const keep = new Set((allAudit ?? []).slice(0, 5000).map((a) => a.id));
+  const keep = new Set((allAudit ?? []).slice(0, AUDIT_KEEP_COUNT).map((a) => a.id));
   const drop = (allAudit ?? []).map((a) => a.id).filter((id) => !keep.has(id));
   for (let i = 0; i < drop.length; i += UPSERT_CHUNK) {
     const chunk = drop.slice(i, i + UPSERT_CHUNK);
@@ -1081,10 +1378,12 @@ function mergeCloudWithLocal(cloud: CloudSnapshot, local: CloudSnapshot): CloudS
 
 export async function hydrateWarehouse(opts?: {
   preferLocal?: boolean;
+  force?: boolean;
 }): Promise<{
   snapshot: CloudSnapshot;
   status: CloudStatus;
   migrated: boolean;
+  runPhaseB?: () => Promise<CloudSnapshot>;
 }> {
   const local = await loadLocalSnapshot();
   const savedDirty = deserializeDirty(await loadKey<DirtyPersisted | null>(DIRTY_KEY, null));
@@ -1109,6 +1408,10 @@ export async function hydrateWarehouse(opts?: {
     return { snapshot: local, status: "offline", migrated: false };
   }
 
+  if (opts?.force) {
+    await clearLastSyncAt();
+  }
+
   // Pending local deletes/edits survived reload — push local first so cloud doesn't resurrect them.
   if (dirtyHasWork(dirty)) {
     const flags = takeDirty();
@@ -1119,6 +1422,7 @@ export async function hydrateWarehouse(opts?: {
       inFlightDirty = emptyDirty();
       await saveKey(DIRTY_KEY, null);
       await saveLocalSnapshot(local);
+      await saveLastSyncAt(new Date().toISOString());
       return { snapshot: local, status: "cloud", migrated: false };
     } catch (err) {
       console.error("Pending cloud sync failed on hydrate", err);
@@ -1130,12 +1434,16 @@ export async function hydrateWarehouse(opts?: {
   }
 
   try {
-    const fetched = await hydrateFromCloud();
-    if (!fetched) {
+    const fetchedA = await hydrateFromCloud({
+      force: opts?.force,
+      phase: "A",
+      local,
+    });
+    if (!fetchedA) {
       return { snapshot: local, status: "local", migrated: false };
     }
 
-    let cloud: CloudSnapshot = fetched;
+    let cloud: CloudSnapshot = fetchedA;
     const migratedFlag = await loadKey<boolean>(MIGRATED_KEY, false);
     let migrated = false;
 
@@ -1150,7 +1458,6 @@ export async function hydrateWarehouse(opts?: {
       await saveKey(MIGRATED_KEY, true);
     }
 
-    // Only recover when cloud wiped an entire collection — not when local has extras (deletes).
     const needsRecovery =
       (cloud.trips.length === 0 && local.trips.length > 0) ||
       (cloud.trucks.length === 0 && local.trucks.length > 0);
@@ -1168,7 +1475,22 @@ export async function hydrateWarehouse(opts?: {
     }
 
     await saveLocalSnapshot(cloud);
-    return { snapshot: cloud, status: "cloud", migrated };
+
+    const runPhaseB = async (): Promise<CloudSnapshot> => {
+      const fetchedB = await hydrateFromCloud({
+        force: opts?.force,
+        phase: "B",
+        base: cloud,
+        local,
+      });
+      if (!fetchedB) return cloud;
+      const full = mergeCloudWithLocal(fetchedB, local);
+      await saveLastSyncAt(new Date().toISOString());
+      await saveLocalSnapshot(full);
+      return full;
+    };
+
+    return { snapshot: cloud, status: "cloud", migrated, runPhaseB };
   } catch (err) {
     console.error("Cloud hydrate failed, using local cache", err);
     return { snapshot: local, status: "error", migrated: false };

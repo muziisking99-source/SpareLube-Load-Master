@@ -11,6 +11,40 @@ import { cn } from "@/lib/utils";
 import { TownCombobox } from "@/components/planner/TownCombobox";
 import { LoadingNumberInput } from "@/components/planner/LoadingNumbersBoard";
 
+const LIST_CAP = 50;
+
+function CappedCustomerList({
+  items,
+  liClassName,
+  renderItem,
+}: {
+  items: CustomerMemory[];
+  liClassName?: string;
+  renderItem: (c: CustomerMemory) => React.ReactNode;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? items : items.slice(0, LIST_CAP);
+  const hidden = items.length - visible.length;
+  return (
+    <>
+      <ul className="divide-y divide-border">
+        {visible.map((c) => (
+          <li key={customerKey(c)} className={liClassName}>
+            {renderItem(c)}
+          </li>
+        ))}
+      </ul>
+      {!showAll && hidden > 0 && (
+        <div className="border-t border-border px-3 py-2">
+          <Button type="button" variant="ghost" size="sm" onClick={() => setShowAll(true)}>
+            Show {hidden} more
+          </Button>
+        </div>
+      )}
+    </>
+  );
+}
+
 function CustomerLabel({ c }: { c: CustomerMemory }) {
   return (
     <span className="min-w-0 flex-1 truncate text-sm">
@@ -101,11 +135,13 @@ export function CustomerAreaBoard({
               No collection customers without a town.
             </p>
           ) : (
-            <ul className="divide-y divide-border">
-              {collections.map((c) => {
+            <CappedCustomerList
+              items={collections}
+              liClassName="flex flex-wrap items-center gap-2 px-3 py-2"
+              renderItem={(c) => {
                 const key = customerKey(c);
                 return (
-                  <li key={key} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                  <>
                     <CustomerLabel c={c} />
                     <Badge variant="secondary" className="shrink-0 text-[10px]">
                       Collection
@@ -138,10 +174,10 @@ export function CustomerAreaBoard({
                     >
                       <Trash2 className="size-4" />
                     </Button>
-                  </li>
+                  </>
                 );
-              })}
-            </ul>
+              }}
+            />
           )}
         </AreaSection>
       )}
@@ -156,11 +192,13 @@ export function CustomerAreaBoard({
           {unassigned.length === 0 ? (
             <p className="px-3 py-4 text-sm text-muted-foreground">No unassigned customers.</p>
           ) : (
-            <ul className="divide-y divide-border">
-              {unassigned.map((c) => {
+            <CappedCustomerList
+              items={unassigned}
+              liClassName="flex flex-wrap items-center gap-2 px-3 py-2"
+              renderItem={(c) => {
                 const key = customerKey(c);
                 return (
-                  <li key={key} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                  <>
                     <CustomerLabel c={c} />
                     <TownCombobox
                       value=""
@@ -205,10 +243,10 @@ export function CustomerAreaBoard({
                     >
                       <Trash2 className="size-4" />
                     </Button>
-                  </li>
+                  </>
                 );
-              })}
-            </ul>
+              }}
+            />
           )}
         </AreaSection>
       )}
@@ -226,11 +264,13 @@ export function CustomerAreaBoard({
             {list.length === 0 ? (
               <p className="px-3 py-4 text-sm text-muted-foreground">No customers in this town.</p>
             ) : (
-              <ul className="divide-y divide-border">
-                {list.map((c) => {
+              <CappedCustomerList
+                items={list}
+                liClassName="flex flex-wrap items-center gap-2 bg-panel px-3 py-2"
+                renderItem={(c) => {
                   const key = customerKey(c);
                   return (
-                    <li key={key} className="flex flex-wrap items-center gap-2 bg-panel px-3 py-2">
+                    <>
                       <CustomerLabel c={c} />
                       {c.loadingNumber > 0 && (
                         <Badge variant="outline" className="metric-mono shrink-0 px-1.5">
@@ -276,10 +316,10 @@ export function CustomerAreaBoard({
                       >
                         <Trash2 className="size-4" />
                       </Button>
-                    </li>
+                    </>
                   );
-                })}
-              </ul>
+                }}
+              />
             )}
           </AreaSection>
         );
