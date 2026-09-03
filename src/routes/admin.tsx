@@ -497,7 +497,8 @@ function AdminConsole({
                     <h3 className="font-semibold tracking-tight">Customers</h3>
                     <p className="mt-1 text-sm text-muted-foreground max-w-[65ch]">
                       Import Customer Code + Customer Name from Excel, then assign each to a town
-                      and set their load # here. The Load # tab is still available for bulk numbering.
+                      and set their load # here. Use Edit to change a name or code. The Load # tab
+                      is still available for bulk numbering.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">

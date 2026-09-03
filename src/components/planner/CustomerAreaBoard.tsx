@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Pencil, Trash2 } from "lucide-react";
+import { CustomerEditDialog } from "@/components/planner/CustomerEditDialog";
 import type { CustomerMemory } from "@/lib/types";
 import { customerKey } from "@/lib/customers";
 import { Button } from "@/components/ui/button";
@@ -89,6 +90,7 @@ export function CustomerAreaBoard({
     for (const a of areas) init[a] = true;
     return init;
   });
+  const [editKey, setEditKey] = useState<string | null>(null);
   /** Draft load # for unassigned customers, applied when a town is chosen */
   const [pendingLoad, setPendingLoad] = useState<Record<string, number>>({});
 
@@ -169,6 +171,16 @@ export function CustomerAreaBoard({
                     <Button
                       variant="ghost"
                       size="icon"
+                      className="size-8 text-muted-foreground"
+                      onClick={() => setEditKey(key)}
+                      aria-label={`Edit ${c.name}`}
+                      title="Edit"
+                    >
+                      <Pencil className="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       className="size-8 text-muted-foreground hover:text-destructive"
                       onClick={() => onDelete(key)}
                     >
@@ -235,6 +247,16 @@ export function CustomerAreaBoard({
                         Collection
                       </label>
                     )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-8 text-muted-foreground"
+                      onClick={() => setEditKey(key)}
+                      aria-label={`Edit ${c.name}`}
+                      title="Edit"
+                    >
+                      <Pencil className="size-4" />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -311,6 +333,16 @@ export function CustomerAreaBoard({
                       <Button
                         variant="ghost"
                         size="icon"
+                        className="size-8 text-muted-foreground"
+                        onClick={() => setEditKey(key)}
+                        aria-label={`Edit ${c.name}`}
+                        title="Edit"
+                      >
+                        <Pencil className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         className="size-8 text-muted-foreground hover:text-destructive"
                         onClick={() => onDelete(key)}
                       >
@@ -324,6 +356,15 @@ export function CustomerAreaBoard({
           </AreaSection>
         );
       })}
+
+      <CustomerEditDialog
+        customerKey={editKey}
+        areaOptions={areaOptions}
+        open={!!editKey}
+        onOpenChange={(o) => {
+          if (!o) setEditKey(null);
+        }}
+      />
     </div>
   );
 }

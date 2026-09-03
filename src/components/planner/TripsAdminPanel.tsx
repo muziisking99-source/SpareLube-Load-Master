@@ -1,5 +1,17 @@
 import { useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Download, FileSpreadsheet, Plus, Trash2, Upload } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, FileSpreadsheet, GripVertical, Pencil, Plus, Trash2, Upload } from "lucide-react";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  closestCenter,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
@@ -14,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/planner/ui/EmptyState";
 import { FormField } from "@/components/planner/ui/FormField";
 import { AdminSearchInput, matchesQuery } from "@/components/planner/AdminSearchInput";
+import { CustomerEditDialog } from "@/components/planner/CustomerEditDialog";
 import { usePagination } from "@/hooks/use-pagination";
 import {
   Pagination,
@@ -33,6 +46,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
 
 export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
   const trips = useStore((s) => s.trips);
@@ -42,7 +56,6 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
   const deleteTrip = useStore((s) => s.deleteTrip);
   const importTrips = useStore((s) => s.importTrips);
   const setTripCustomerLoadNumber = useStore((s) => s.setTripCustomerLoadNumber);
-  const reorderTripCustomers = useStore((s) => s.reorderTripCustomers);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
@@ -134,7 +147,8 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
           <h3 className="font-semibold tracking-tight">Trips</h3>
           <p className="mt-1 max-w-[65ch] text-sm text-muted-foreground">
             Import trip names from Excel, then add towns and set load order for customers on this
-            trip. Same customer can have a different load # on each trip.
+            trip. Drag a customer onto another to copy that load # — other numbers stay put, even
+            if two stops share the same #.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -345,8 +359,8 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
                           trip={trip}
                           list={tripCustomers}
                           customers={customers}
+                          townOptions={townOptions}
                           onSetLoad={(key, n) => setTripCustomerLoadNumber(trip.id, key, n)}
-                          onReorder={(keys) => reorderTripCustomers(trip.id, keys)}
                         />
                         <AddTripCustomerForm trip={trip} townOptions={townOptions} />
                       </>
@@ -440,16 +454,37 @@ function TripStopOrderEditor({
   trip,
   list,
   customers,
+  townOptions,
   onSetLoad,
-  onReorder,
 }: {
   trip: Trip;
   list: CustomerMemory[];
   customers: Record<string, CustomerMemory>;
+  townOptions: string[];
   onSetLoad: (customerKey: string, n: number) => void;
-  onReorder: (orderedKeys: string[]) => void;
 }) {
   const [showAllCustomers, setShowAllCustomers] = useState(false);
+  const [editKey, setEditKey] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
+
+  const loadByKey = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const c of list) {
+      map[customerKey(c)] = loadingNumberFor(customers, c.name, c.defaultArea, trip.id, [trip]);
+    }
+    return map;
+  }, [list, customers, trip]);
+
+  const duplicateLoads = useMemo(() => {
+    const counts: Record<number, number> = {};
+    for (const n of Object.values(loadByKey)) {
+      if (n > 0) counts[n] = (counts[n] ?? 0) + 1;
+    }
+    return new Set(Object.entries(counts).filter(([, n]) => n > 1).map(([k]) => Number(k)));
+  }, [loadByKey]);
 
   if (trip.towns.length === 0) {
     return (
@@ -467,87 +502,184 @@ function TripStopOrderEditor({
     );
   }
 
-  const keys = list.map((c) => customerKey(c));
   const visibleList = showAllCustomers ? list : list.slice(0, 50);
   const hiddenCount = list.length - visibleList.length;
+  const activeCustomer = activeId ? list.find((c) => customerKey(c) === activeId) : undefined;
 
-  function move(index: number, dir: -1 | 1) {
-    const j = index + dir;
-    if (j < 0 || j >= keys.length) return;
-    const next = [...keys];
-    [next[index], next[j]] = [next[j], next[index]];
-    onReorder(next);
+  function handleDragStart(event: DragStartEvent) {
+    setActiveId(String(event.active.id));
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const draggedKey = String(event.active.id);
+    const overId = event.over?.id != null ? String(event.over.id) : "";
+    setActiveId(null);
+    if (!overId || overId === draggedKey) return;
+    const targetLoad = loadByKey[overId] ?? 0;
+    const dragged = list.find((c) => customerKey(c) === draggedKey);
+    if (targetLoad <= 0) {
+      toast.message("Drop onto a customer that already has a load #, or type the number.");
+      return;
+    }
+    if ((loadByKey[draggedKey] ?? 0) === targetLoad) return;
+    onSetLoad(draggedKey, targetLoad);
+    toast.success(
+      dragged
+        ? `${dragged.name} set to load #${targetLoad}`
+        : `Set load #${targetLoad}`,
+    );
   }
 
   return (
     <div className="mt-4 space-y-2 border-t border-border pt-3">
-      <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Load order for this trip
+      <div>
+        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Load order for this trip
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Drag a customer onto another to copy that load #. Matching numbers are left as-is so you
+          can fix them yourself.
+        </p>
       </div>
-      <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
-        {visibleList.map((c, i) => {
-          const key = customerKey(c);
-          const globalIndex = showAllCustomers ? i : keys.indexOf(key);
-          const tripLoad = loadingNumberFor(customers, c.name, c.defaultArea, trip.id, [trip]);
-          const hasOverride = (trip.stopOrder?.[key] ?? 0) > 0;
-          return (
-            <li key={key} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
-              <span className="w-5 metric-mono text-muted-foreground">{globalIndex + 1}</span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-medium">{c.name}</div>
-                <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                  <span>{c.defaultArea}</span>
-                  {c.code ? <span className="metric-mono">{c.code}</span> : null}
-                  {!hasOverride && c.loadingNumber > 0 ? (
-                    <span>Town default #{c.loadingNumber}</span>
-                  ) : null}
-                </div>
-              </div>
-              <FormField label="Load #" className="w-20 gap-0.5">
-                <Input
-                  type="number"
-                  min={0}
-                  value={tripLoad > 0 ? tripLoad : ""}
-                  placeholder="—"
-                  className="metric-mono h-8"
-                  onChange={(e) => {
-                    const v = e.target.value === "" ? 0 : Number(e.target.value);
-                    onSetLoad(key, v);
-                  }}
-                />
-              </FormField>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-7"
-                disabled={globalIndex === 0}
-                onClick={() => move(globalIndex, -1)}
-                aria-label="Move up"
-              >
-                <ChevronUp className="size-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-7"
-                disabled={globalIndex === list.length - 1}
-                onClick={() => move(globalIndex, 1)}
-                aria-label="Move down"
-              >
-                <ChevronDown className="size-4" />
-              </Button>
-            </li>
-          );
-        })}
-      </ul>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setActiveId(null)}
+      >
+        <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+          {visibleList.map((c) => {
+            const key = customerKey(c);
+            const tripLoad = loadByKey[key] ?? 0;
+            return (
+              <TripCustomerRow
+                key={key}
+                id={key}
+                customer={c}
+                tripLoad={tripLoad}
+                hasOverride={(trip.stopOrder?.[key] ?? 0) > 0}
+                isDuplicate={tripLoad > 0 && duplicateLoads.has(tripLoad)}
+                isActive={activeId === key}
+                onSetLoad={onSetLoad}
+                onEdit={() => setEditKey(key)}
+              />
+            );
+          })}
+        </ul>
+        <DragOverlay dropAnimation={null}>
+          {activeCustomer ? (
+            <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm shadow-md">
+              <span className="font-medium">{activeCustomer.name}</span>
+              {(loadByKey[customerKey(activeCustomer)] ?? 0) > 0 ? (
+                <span className="ml-2 metric-mono text-muted-foreground">
+                  #{loadByKey[customerKey(activeCustomer)]}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
       {!showAllCustomers && hiddenCount > 0 && (
         <Button type="button" variant="ghost" size="sm" onClick={() => setShowAllCustomers(true)}>
           Show {hiddenCount} more customers
         </Button>
       )}
+      <CustomerEditDialog
+        customerKey={editKey}
+        areaOptions={townOptions}
+        open={!!editKey}
+        onOpenChange={(o) => {
+          if (!o) setEditKey(null);
+        }}
+      />
     </div>
+  );
+}
+
+function TripCustomerRow({
+  id,
+  customer,
+  tripLoad,
+  hasOverride,
+  isDuplicate,
+  isActive,
+  onSetLoad,
+  onEdit,
+}: {
+  id: string;
+  customer: CustomerMemory;
+  tripLoad: number;
+  hasOverride: boolean;
+  isDuplicate: boolean;
+  isActive: boolean;
+  onSetLoad: (customerKey: string, n: number) => void;
+  onEdit: () => void;
+}) {
+  const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
+    id,
+  });
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id });
+
+  return (
+    <li
+      ref={setDropRef}
+      className={cn(
+        "flex flex-wrap items-center gap-2 px-3 py-2 text-sm transition-colors",
+        isOver && !isDragging && "bg-secondary/70",
+        (isDragging || isActive) && "opacity-40",
+      )}
+    >
+      <button
+        type="button"
+        ref={setDragRef}
+        className="inline-flex size-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground hover:bg-muted active:cursor-grabbing"
+        aria-label={`Drag ${customer.name} onto a load number`}
+        title="Drag onto another customer to copy that load #"
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical className="size-3.5" />
+      </button>
+      <span className="w-8 shrink-0 metric-mono text-muted-foreground">
+        {tripLoad > 0 ? tripLoad : "—"}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-medium">{customer.name}</div>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+          <span>{customer.defaultArea}</span>
+          {customer.code ? <span className="metric-mono">{customer.code}</span> : null}
+          {!hasOverride && customer.loadingNumber > 0 ? (
+            <span>Town default #{customer.loadingNumber}</span>
+          ) : null}
+          {isDuplicate ? <span className="text-warn">Shared # — fix if needed</span> : null}
+        </div>
+      </div>
+      <FormField label="Load #" className="w-20 gap-0.5">
+        <Input
+          type="number"
+          min={0}
+          value={tripLoad > 0 ? tripLoad : ""}
+          placeholder="—"
+          className="metric-mono h-8"
+          onChange={(e) => {
+            const v = e.target.value === "" ? 0 : Number(e.target.value);
+            onSetLoad(id, v);
+          }}
+        />
+      </FormField>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-7 text-muted-foreground"
+        onClick={onEdit}
+        aria-label={`Edit ${customer.name}`}
+        title="Edit"
+      >
+        <Pencil className="size-3.5" />
+      </Button>
+    </li>
   );
 }
 

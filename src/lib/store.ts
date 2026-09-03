@@ -19,7 +19,16 @@ import {
   mergeDayStopSequence,
 } from "./loadingOrder";
 import type { ParsedRow } from "./parse";
-import { customerKey, findCustomer, findCustomerByCode, findCustomerKey } from "./customers";
+import {
+  customerAliases,
+  customerKey,
+  findCustomer,
+  findCustomerByCode,
+  findCustomerKey,
+  labelMatchesAliases,
+  remapSequenceKeys,
+  remapStopOrderKeys,
+} from "./customers";
 import { normalizeTrip, townsForTruckDay, townsFromTripIds, townsForPlan, tripById, tripIdsForTruckDay } from "./trips";
 import {
   hydrateWarehouse,
@@ -153,6 +162,17 @@ type State = {
   setCustomerArea: (name: string, area: string) => void;
   setCustomerLoadingNumber: (name: string, area: string, n: number) => void;
   setCustomerCollection: (key: string, collection: boolean) => void;
+  /** Edit name/code/town/load #/collection. Remaps keys in trips and plans when the identity changes. */
+  updateCustomer: (
+    key: string,
+    patch: {
+      name?: string;
+      code?: string;
+      defaultArea?: string;
+      loadingNumber?: number;
+      collection?: boolean;
+    },
+  ) => { ok: true } | { ok: false; error: string };
   reorderCustomersInArea: (area: string, orderedNames: string[]) => void;
   deleteCustomer: (name: string) => void;
 
@@ -686,6 +706,7 @@ export const useStore = create<State>((set, get) => {
       }));
       log("trip.load", `Set ${key} load #${n} on trip ${tripId}`);
     },
+    /** Assigns 1…n in list order. Prefer setTripCustomerLoadNumber so duplicate #s stay until edited. */
     reorderTripCustomers: (tripId, orderedKeys) => {
       mutate((s) => ({
         trips: s.trips.map((t) => {
@@ -1128,6 +1149,118 @@ export const useStore = create<State>((set, get) => {
         "customers.collection",
         collection ? `Marked ${key} as collection` : `Cleared collection on ${key}`,
       );
+    },
+    updateCustomer: (key, patch) => {
+      const s = get();
+      const id = findCustomerKey(s.customers, key) ?? key;
+      const prev = s.customers[id];
+      if (!prev) return { ok: false, error: "Customer not found" };
+
+      const name = (patch.name !== undefined ? patch.name : prev.name).trim();
+      if (!name) return { ok: false, error: "Customer name is required" };
+      const code = (patch.code !== undefined ? patch.code : prev.code).trim();
+      const nextIdentity = { ...prev, name, code };
+      const newId = customerKey(nextIdentity);
+
+      if (code) {
+        const other = findCustomerByCode(s.customers, code);
+        const otherId = other
+          ? (findCustomerKey(s.customers, customerKey(other)) ?? customerKey(other))
+          : undefined;
+        if (other && otherId && otherId !== id) {
+          return { ok: false, error: "Another customer already uses that code" };
+        }
+      } else {
+        const clash = Object.entries(s.customers).find(
+          ([k, c]) => k !== id && !c.code && c.name.trim().toLowerCase() === name.toLowerCase(),
+        );
+        if (clash) return { ok: false, error: "Another customer already uses that name" };
+      }
+      if (newId !== id && s.customers[newId]) {
+        return { ok: false, error: "Another customer already uses that code or name" };
+      }
+
+      const nameChanged = name !== prev.name;
+      const keyChanged = newId !== id;
+      const aliases = customerAliases(id, prev);
+
+      mutate((state) => {
+        const current = state.customers[id];
+        if (!current) return {};
+
+        let customers: Record<string, CustomerMemory> = { ...state.customers };
+        if (keyChanged) delete customers[id];
+        customers[newId] = {
+          ...current,
+          name,
+          code,
+          collection:
+            patch.collection !== undefined ? !!patch.collection : current.collection,
+        };
+
+        if (patch.defaultArea !== undefined) {
+          customers = assignCustomerArea(customers, newId, patch.defaultArea.trim());
+        }
+        const areaNow = customers[newId]?.defaultArea ?? "";
+        if (patch.loadingNumber !== undefined && areaNow) {
+          customers = applyLoadingNumber(customers, newId, areaNow, patch.loadingNumber);
+        }
+
+        const history =
+          areaNow && !state.areaHistory.includes(areaNow)
+            ? [...state.areaHistory, areaNow]
+            : state.areaHistory;
+
+        if (!keyChanged && !nameChanged) {
+          return { customers, areaHistory: history };
+        }
+
+        const trips = state.trips.map((t) =>
+          normalizeTrip({
+            ...t,
+            stopOrder: remapStopOrderKeys(t.stopOrder ?? {}, aliases, newId),
+          }),
+        );
+
+        const heldInvoices = nameChanged
+          ? state.heldInvoices.map((h) =>
+              labelMatchesAliases(h.customer, aliases) ? { ...h, customer: name } : h,
+            )
+          : state.heldInvoices;
+
+        const plans: typeof state.plans = {};
+        for (const [date, p] of Object.entries(state.plans)) {
+          plans[date] = {
+            ...p,
+            invoices: nameChanged
+              ? p.invoices.map((inv) =>
+                  labelMatchesAliases(inv.customer, aliases) ? { ...inv, customer: name } : inv,
+                )
+              : p.invoices,
+            dayStopOrder: Object.fromEntries(
+              Object.entries(p.dayStopOrder ?? {}).map(([tripId, map]) => [
+                tripId,
+                remapStopOrderKeys(map, aliases, newId),
+              ]),
+            ),
+            dayStopSequence: Object.fromEntries(
+              Object.entries(p.dayStopSequence ?? {}).map(([tripId, seq]) => [
+                tripId,
+                remapSequenceKeys(seq, aliases, newId),
+              ]),
+            ),
+          };
+        }
+
+        return { customers, areaHistory: history, trips, plans, heldInvoices };
+      });
+
+      log(
+        "customers.update",
+        code ? `Updated ${name} (${code})` : `Updated ${name}`,
+      );
+      if (keyChanged) void flushSaveNow();
+      return { ok: true };
     },
     reorderCustomersInArea: (area, orderedNames) => {
       mutate((s) => {
