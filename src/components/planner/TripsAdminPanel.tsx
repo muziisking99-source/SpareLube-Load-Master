@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Download, FileSpreadsheet, Plus, Trash2, Upload
 import { toast } from "sonner";
 import { useStore } from "@/lib/store";
 import { areaColor } from "@/lib/colors";
-import { customerKey } from "@/lib/customers";
+import { customerKey, findCustomer, findCustomerByCode } from "@/lib/customers";
 import { customersForTrip, loadingNumberFor } from "@/lib/loadingOrder";
 import { parseTripExcelFile } from "@/lib/parse";
 import { downloadTripTemplate } from "@/lib/excelTemplates";
@@ -340,13 +340,16 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
                     )}
 
                     {expanded && !editing && (
-                      <TripStopOrderEditor
-                        trip={trip}
-                        list={tripCustomers}
-                        customers={customers}
-                        onSetLoad={(key, n) => setTripCustomerLoadNumber(trip.id, key, n)}
-                        onReorder={(keys) => reorderTripCustomers(trip.id, keys)}
-                      />
+                      <>
+                        <TripStopOrderEditor
+                          trip={trip}
+                          list={tripCustomers}
+                          customers={customers}
+                          onSetLoad={(key, n) => setTripCustomerLoadNumber(trip.id, key, n)}
+                          onReorder={(keys) => reorderTripCustomers(trip.id, keys)}
+                        />
+                        <AddTripCustomerForm trip={trip} townOptions={townOptions} />
+                      </>
                     )}
                   </li>
                 );
@@ -545,6 +548,134 @@ function TripStopOrderEditor({
         </Button>
       )}
     </div>
+  );
+}
+
+function AddTripCustomerForm({ trip, townOptions }: { trip: Trip; townOptions: string[] }) {
+  const customers = useStore((s) => s.customers);
+  const ensureCustomer = useStore((s) => s.ensureCustomer);
+  const setTripCustomerLoadNumber = useStore((s) => s.setTripCustomerLoadNumber);
+
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [town, setTown] = useState(trip.towns[0] ?? "");
+  const [load, setLoad] = useState("");
+
+  const offTrip = !!town && !trip.towns.includes(town);
+
+  function reset() {
+    setName("");
+    setCode("");
+    setTown(trip.towns[0] ?? "");
+    setLoad("");
+  }
+
+  function submit() {
+    const cleanName = name.trim();
+    const cleanCode = code.trim();
+    const cleanTown = town.trim();
+    if (!cleanName) {
+      toast.error("Enter a customer name");
+      return;
+    }
+    if (!cleanTown) {
+      toast.error("Select a town");
+      return;
+    }
+    const existing =
+      (cleanCode ? findCustomerByCode(customers, cleanCode) : undefined) ??
+      findCustomer(customers, cleanName);
+    if (existing?.defaultArea) {
+      toast.error(`${existing.name} already exists in ${existing.defaultArea}`);
+      return;
+    }
+    const saved = ensureCustomer({
+      name: cleanName,
+      code: cleanCode,
+      defaultArea: cleanTown,
+    });
+    if (!saved) {
+      toast.error("Could not add that customer");
+      return;
+    }
+    const n = Number(load);
+    if (Number.isFinite(n) && n > 0) {
+      setTripCustomerLoadNumber(trip.id, customerKey(saved), Math.floor(n));
+    }
+    toast.success(
+      offTrip
+        ? `${saved.name} added to ${cleanTown} — add that town to this trip to see it here`
+        : `${saved.name} added to ${cleanTown}`,
+    );
+    reset();
+  }
+
+  return (
+    <form
+      className="mt-4 space-y-3 rounded-lg border border-border bg-panel-2/40 p-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+    >
+      <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Add a new customer
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <FormField label="Customer name" className="lg:col-span-2">
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Spare Lube Depot"
+            className="h-9"
+            autoComplete="off"
+          />
+        </FormField>
+        <FormField label="Code (optional)">
+          <Input
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="Account #"
+            className="metric-mono h-9"
+            autoComplete="off"
+          />
+        </FormField>
+        <FormField label="Town">
+          <TownCombobox
+            value={town}
+            options={townOptions}
+            priorityOptions={trip.towns}
+            priorityLabel="On this trip"
+            placeholder="Search towns…"
+            searchPlaceholder="Search towns…"
+            emptyLabel="No matching town."
+            onChange={setTown}
+            buttonClassName="h-9 w-full"
+          />
+        </FormField>
+        <FormField label="Load # (optional)">
+          <Input
+            type="number"
+            min={0}
+            value={load}
+            onChange={(e) => setLoad(e.target.value)}
+            placeholder="—"
+            className="metric-mono h-9"
+          />
+        </FormField>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="submit" size="sm" variant="secondary">
+          <Plus className="size-4" />
+          Add customer
+        </Button>
+        {offTrip && (
+          <Badge variant="warn" className="text-[10px]">
+            {town} isn’t on this trip
+          </Badge>
+        )}
+      </div>
+    </form>
   );
 }
 

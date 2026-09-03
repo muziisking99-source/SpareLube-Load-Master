@@ -53,6 +53,8 @@ export type HeldInvoice = {
   collection?: boolean;
   /** Credit note waiting in the held pool */
   creditNote?: boolean;
+  /** Free-text note kept with the invoice until it is picked into a plan */
+  comment?: string;
 };
 
 export type Trip = {
@@ -236,5 +238,6 @@ export function normalizeHeldInvoice(
     reason,
     collection: reason === "collection" || !!raw.collection,
     creditNote: reason === "credit_note" || creditNote,
+    comment: typeof raw.comment === "string" ? raw.comment : "",
   };
 }

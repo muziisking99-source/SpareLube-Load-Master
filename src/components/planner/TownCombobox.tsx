@@ -26,6 +26,9 @@ export function TownCombobox({
   disabled = false,
   className,
   buttonClassName,
+  priorityOptions,
+  priorityLabel = "Suggested",
+  optionsLabel = "All towns",
 }: {
   value: string;
   options: string[];
@@ -38,13 +41,23 @@ export function TownCombobox({
   disabled?: boolean;
   className?: string;
   buttonClassName?: string;
+  /** Towns to list first under their own heading (still searchable) */
+  priorityOptions?: string[];
+  priorityLabel?: string;
+  optionsLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
 
-  const sorted = useMemo(
-    () => [...options].sort((a, b) => a.localeCompare(b)),
-    [options],
-  );
+  const priority = useMemo(() => {
+    if (!priorityOptions?.length) return [];
+    const available = new Set(options);
+    return [...new Set(priorityOptions)].filter((t) => available.has(t));
+  }, [priorityOptions, options]);
+
+  const sorted = useMemo(() => {
+    const promoted = new Set(priority);
+    return options.filter((t) => !promoted.has(t)).sort((a, b) => a.localeCompare(b));
+  }, [options, priority]);
 
   const label = value || placeholder;
 
@@ -56,7 +69,7 @@ export function TownCombobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          disabled={disabled || (sorted.length === 0 && !allowEmpty)}
+          disabled={disabled || (sorted.length === 0 && priority.length === 0 && !allowEmpty)}
           className={cn(
             "h-8 justify-between gap-2 font-normal",
             !value && "text-muted-foreground",
@@ -75,8 +88,8 @@ export function TownCombobox({
           <CommandInput placeholder={searchPlaceholder} />
           <CommandList>
             <CommandEmpty>{emptyLabel ?? "No town found."}</CommandEmpty>
-            <CommandGroup>
-              {allowEmpty && (
+            {allowEmpty && (
+              <CommandGroup>
                 <CommandItem
                   value="__empty__"
                   onSelect={() => {
@@ -89,29 +102,56 @@ export function TownCombobox({
                   />
                   <span className="text-muted-foreground">{emptyOptionLabel}</span>
                 </CommandItem>
-              )}
+              </CommandGroup>
+            )}
+            {priority.length > 0 && (
+              <CommandGroup heading={priorityLabel}>
+                {priority.map((town) => (
+                  <TownOption
+                    key={town}
+                    town={town}
+                    value={value}
+                    onSelect={(t) => {
+                      onChange(t);
+                      setOpen(false);
+                    }}
+                  />
+                ))}
+              </CommandGroup>
+            )}
+            <CommandGroup heading={priority.length > 0 ? optionsLabel : undefined}>
               {sorted.map((town) => (
-                <CommandItem
+                <TownOption
                   key={town}
-                  value={town}
-                  onSelect={() => {
-                    onChange(town);
+                  town={town}
+                  value={value}
+                  onSelect={(t) => {
+                    onChange(t);
                     setOpen(false);
                   }}
-                >
-                  <Check
-                    className={cn(
-                      "size-4",
-                      value === town ? "opacity-100" : "opacity-0",
-                    )}
-                  />
-                  {town}
-                </CommandItem>
+                />
               ))}
             </CommandGroup>
           </CommandList>
         </Command>
       </PopoverContent>
     </Popover>
+  );
+}
+
+function TownOption({
+  town,
+  value,
+  onSelect,
+}: {
+  town: string;
+  value: string;
+  onSelect: (town: string) => void;
+}) {
+  return (
+    <CommandItem value={town} onSelect={() => onSelect(town)}>
+      <Check className={cn("size-4", value === town ? "opacity-100" : "opacity-0")} />
+      {town}
+    </CommandItem>
   );
 }

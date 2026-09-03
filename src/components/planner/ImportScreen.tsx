@@ -118,6 +118,7 @@ export function ImportScreen() {
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerMemory | null>(null);
   const [area, setArea] = useState("");
   const [weight, setWeight] = useState("");
+  const [comment, setComment] = useState("");
   const [excelParsing, setExcelParsing] = useState(false);
   const [excelDragOver, setExcelDragOver] = useState(false);
   const [pendingHold, setPendingHold] = useState<{
@@ -125,6 +126,7 @@ export function ImportScreen() {
     customer: string;
     weight: number;
     area: string;
+    comment: string;
     collection: boolean;
     creditNote: boolean;
   } | null>(null);
@@ -219,6 +221,7 @@ export function ImportScreen() {
     setSelectedCustomer(null);
     setArea("");
     setWeight("");
+    setComment("");
     requestAnimationFrame(() => docRef.current?.focus());
   }
 
@@ -247,6 +250,7 @@ export function ImportScreen() {
     const cleanCustomer = (selectedCustomer?.name || customerName).trim();
     const w = Number(weight);
     const cleanArea = area.trim();
+    const cleanComment = comment.trim();
 
     if (!cleanDoc) {
       toast.error("Enter a doc number");
@@ -293,6 +297,7 @@ export function ImportScreen() {
           customer: cleanCustomer,
           weight: w,
           area: cleanArea,
+          comment: cleanComment,
           collection: isCollection,
           creditNote: asCredit,
         });
@@ -306,6 +311,7 @@ export function ImportScreen() {
             weight: w,
             area: cleanArea,
             source: "ADHOC",
+            comment: cleanComment,
           },
         ],
         asCredit
@@ -332,6 +338,7 @@ export function ImportScreen() {
         source: "ADHOC",
         collection: isCollection,
         creditNote: asCredit,
+        comment: cleanComment,
       },
     ]);
     toast.success(
@@ -494,7 +501,7 @@ export function ImportScreen() {
 
         <div className="glass-chrome sticky top-[6.5rem] z-10 -mx-1 rounded-xl p-3 sm:-mx-0 sm:p-4">
         <form
-          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6"
           onSubmit={(e) => {
             e.preventDefault();
             if (!readOnly) submitEntry();
@@ -546,7 +553,17 @@ export function ImportScreen() {
               disabled={readOnly}
             />
           </FormField>
-          <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-5">
+          <FormField label="Comment (optional)">
+            <Input
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="Note…"
+              className="h-11"
+              autoComplete="off"
+              disabled={readOnly}
+            />
+          </FormField>
+          <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-6">
             <Button type="submit" className="min-w-[8rem]" disabled={readOnly}>
               Add invoice
             </Button>
@@ -1043,6 +1060,7 @@ export function ImportScreen() {
                       weight: pendingHold.weight,
                       area: pendingHold.area,
                       source: "ADHOC",
+                      comment: pendingHold.comment,
                     },
                   ],
                   pendingHold.creditNote
