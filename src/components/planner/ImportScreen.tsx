@@ -70,7 +70,7 @@ import { StickyStepBar } from "./ui/StickyStepBar";
 import { ScreenShell } from "./ui/ScreenShell";
 import { TownCombobox } from "./TownCombobox";
 import { CustomerCombobox } from "./CustomerCombobox";
-import { cn } from "@/lib/utils";
+import { cn, compareDocNumbers } from "@/lib/utils";
 import { useRowHighlight } from "@/lib/useRowHighlight";
 import { usePlanReadOnly } from "@/hooks/use-plan-read-only";
 import { scrollToSearchTarget } from "@/lib/searchNavigation";
@@ -118,7 +118,6 @@ export function ImportScreen() {
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerMemory | null>(null);
   const [area, setArea] = useState("");
   const [weight, setWeight] = useState("");
-  const [comment, setComment] = useState("");
   const [excelParsing, setExcelParsing] = useState(false);
   const [excelDragOver, setExcelDragOver] = useState(false);
   const [pendingHold, setPendingHold] = useState<{
@@ -126,7 +125,6 @@ export function ImportScreen() {
     customer: string;
     weight: number;
     area: string;
-    comment: string;
     collection: boolean;
     creditNote: boolean;
   } | null>(null);
@@ -143,26 +141,35 @@ export function ImportScreen() {
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [areaHistory, heldInvoices]);
 
-  const sortedHeld = useMemo(() => {
-    const today = new Set(areas);
-    return [...heldInvoices].sort((a, b) => {
-      const aOk = !a.area || today.has(a.area);
-      const bOk = !b.area || today.has(b.area);
-      if (aOk !== bOk) return aOk ? -1 : 1;
-      return (a.heldAt || "").localeCompare(b.heldAt || "");
-    });
-  }, [heldInvoices, areas]);
+  const sortedHeld = useMemo(
+    () => [...heldInvoices].sort((a, b) => compareDocNumbers(a.doc, b.doc)),
+    [heldInvoices],
+  );
 
   const invoices = plan.invoices;
 
   const isCollectionCustomer = (name: string) => !!findCustomer(customers, name)?.collection;
 
-  const creditInvoices = invoices.filter((i) => !!i.creditNote);
-  const collectionInvoices = invoices.filter(
-    (i) => !i.creditNote && (i.collection || isCollectionCustomer(i.customer)),
+  const creditInvoices = useMemo(
+    () =>
+      invoices
+        .filter((i) => !!i.creditNote)
+        .sort((a, b) => compareDocNumbers(a.doc, b.doc)),
+    [invoices],
   );
-  const deliveryInvoices = invoices.filter(
-    (i) => !i.creditNote && !i.collection && !isCollectionCustomer(i.customer),
+  const collectionInvoices = useMemo(
+    () =>
+      invoices
+        .filter((i) => !i.creditNote && (i.collection || isCollectionCustomer(i.customer)))
+        .sort((a, b) => compareDocNumbers(a.doc, b.doc)),
+    [invoices, customers],
+  );
+  const deliveryInvoices = useMemo(
+    () =>
+      invoices
+        .filter((i) => !i.creditNote && !i.collection && !isCollectionCustomer(i.customer))
+        .sort((a, b) => compareDocNumbers(a.doc, b.doc)),
+    [invoices, customers],
   );
 
   const heldPagination = usePagination(sortedHeld, 50);
@@ -221,7 +228,6 @@ export function ImportScreen() {
     setSelectedCustomer(null);
     setArea("");
     setWeight("");
-    setComment("");
     requestAnimationFrame(() => docRef.current?.focus());
   }
 
@@ -250,7 +256,6 @@ export function ImportScreen() {
     const cleanCustomer = (selectedCustomer?.name || customerName).trim();
     const w = Number(weight);
     const cleanArea = area.trim();
-    const cleanComment = comment.trim();
 
     if (!cleanDoc) {
       toast.error("Enter a doc number");
@@ -297,7 +302,6 @@ export function ImportScreen() {
           customer: cleanCustomer,
           weight: w,
           area: cleanArea,
-          comment: cleanComment,
           collection: isCollection,
           creditNote: asCredit,
         });
@@ -311,7 +315,6 @@ export function ImportScreen() {
             weight: w,
             area: cleanArea,
             source: "ADHOC",
-            comment: cleanComment,
           },
         ],
         asCredit
@@ -338,7 +341,6 @@ export function ImportScreen() {
         source: "ADHOC",
         collection: isCollection,
         creditNote: asCredit,
-        comment: cleanComment,
       },
     ]);
     toast.success(
@@ -501,7 +503,7 @@ export function ImportScreen() {
 
         <div className="glass-chrome sticky top-[6.5rem] z-10 -mx-1 rounded-xl p-3 sm:-mx-0 sm:p-4">
         <form
-          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
           onSubmit={(e) => {
             e.preventDefault();
             if (!readOnly) submitEntry();
@@ -553,17 +555,7 @@ export function ImportScreen() {
               disabled={readOnly}
             />
           </FormField>
-          <FormField label="Comment (optional)">
-            <Input
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              placeholder="Note…"
-              className="h-11"
-              autoComplete="off"
-              disabled={readOnly}
-            />
-          </FormField>
-          <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-6">
+          <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-5">
             <Button type="submit" className="min-w-[8rem]" disabled={readOnly}>
               Add invoice
             </Button>
@@ -647,13 +639,14 @@ export function ImportScreen() {
               ))}
             </div>
             <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
-              <table className="w-full min-w-[820px] border-collapse text-sm">
+              <table className="w-full min-w-[980px] border-collapse text-sm">
                 <thead className="bg-panel-2">
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
                     <th className="w-[8rem] px-3 py-2.5 font-medium">Doc</th>
                     <th className="px-3 py-2.5 font-medium">Customer</th>
                     <th className="w-[7rem] px-3 py-2.5 font-medium">Weight</th>
                     <th className="w-[11rem] px-3 py-2.5 font-medium">Town</th>
+                    <th className="min-w-[9rem] px-3 py-2.5 font-medium">Comment</th>
                     <th className="w-[8rem] px-3 py-2.5 font-medium">Type</th>
                     <th className="w-[14rem] px-3 py-2.5 font-medium" />
                   </tr>
@@ -715,6 +708,7 @@ export function ImportScreen() {
                   <TableHead>Town</TableHead>
                   <TableHead>Weight</TableHead>
                   <TableHead>Load #</TableHead>
+                  <TableHead className="min-w-[9rem]">Comment</TableHead>
                   <TableHead>Handling</TableHead>
                   <TableHead />
                 </TableRow>
@@ -728,6 +722,13 @@ export function ImportScreen() {
                     <TableCell className="metric-mono">{i.weight || "—"}</TableCell>
                     <TableCell className="metric-mono text-muted-foreground">
                       {(i.area && loadingNumberFor(customers, i.customer, i.area)) || "—"}
+                    </TableCell>
+                    <TableCell>
+                      <InvoiceCommentInput
+                        value={i.comment}
+                        disabled={readOnly}
+                        onChange={(comment) => updateInvoice(i.id, { comment })}
+                      />
                     </TableCell>
                     <TableCell>
                       <HandlingSelect
@@ -806,6 +807,7 @@ export function ImportScreen() {
                   <TableHead>Town</TableHead>
                   <TableHead>Weight</TableHead>
                   <TableHead>Load #</TableHead>
+                  <TableHead className="min-w-[9rem]">Comment</TableHead>
                   <TableHead>Handling</TableHead>
                   <TableHead />
                 </TableRow>
@@ -836,6 +838,13 @@ export function ImportScreen() {
                     </TableCell>
                     <TableCell className="metric-mono text-muted-foreground">
                       {(i.area && loadingNumberFor(customers, i.customer, i.area)) || "—"}
+                    </TableCell>
+                    <TableCell>
+                      <InvoiceCommentInput
+                        value={i.comment}
+                        disabled={readOnly}
+                        onChange={(comment) => updateInvoice(i.id, { comment })}
+                      />
                     </TableCell>
                     <TableCell>
                       <HandlingSelect
@@ -886,7 +895,7 @@ export function ImportScreen() {
       <section className="glass-panel p-4 sm:p-5">
         <ScreenHeader
           title="Today’s invoices"
-          description="Deliveries for today’s selected trips. Set weights after Excel import."
+          description="Deliveries for today’s selected trips. Set weights and comments after Excel import."
           className="mb-4"
         />
         {deliveryInvoices.length === 0 ? (
@@ -926,6 +935,7 @@ export function ImportScreen() {
                     <TableHead>Customer</TableHead>
                     <TableHead className="w-28">Weight (kg)</TableHead>
                     <TableHead className="w-40">Town</TableHead>
+                    <TableHead className="min-w-[9rem]">Comment</TableHead>
                     <TableHead className="w-40" />
                   </TableRow>
                 </TableHeader>
@@ -1060,7 +1070,6 @@ export function ImportScreen() {
                       weight: pendingHold.weight,
                       area: pendingHold.area,
                       source: "ADHOC",
-                      comment: pendingHold.comment,
                     },
                   ],
                   pendingHold.creditNote
@@ -1080,6 +1089,29 @@ export function ImportScreen() {
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+function InvoiceCommentInput({
+  value,
+  disabled,
+  onChange,
+  className,
+}: {
+  value?: string;
+  disabled?: boolean;
+  onChange: (comment: string) => void;
+  className?: string;
+}) {
+  return (
+    <Input
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="Note…"
+      disabled={disabled}
+      className={cn("h-8 min-w-[8rem] text-sm", className)}
+      autoComplete="off"
+    />
   );
 }
 
@@ -1150,6 +1182,14 @@ function CollectionCreditCard({
       <div className="metric-mono text-sm font-medium">{inv.doc}</div>
       <div className="text-sm">{inv.customer}</div>
       <div className="text-sm text-muted-foreground">{inv.area || "—"}</div>
+      <FormField label="Comment">
+        <InvoiceCommentInput
+          value={inv.comment}
+          disabled={readOnly}
+          onChange={(comment) => onUpdate({ comment })}
+          className="h-9 w-full"
+        />
+      </FormField>
       {mode === "credit" && (
         <Input
           type="number"
@@ -1296,6 +1336,14 @@ function InvoiceCard({
         />
       </FormField>
 
+      <FormField label="Comment">
+        <InvoiceCommentInput
+          value={inv.comment}
+          onChange={(comment) => onChange({ comment })}
+          className="h-11 w-full"
+        />
+      </FormField>
+
       <div className="grid grid-cols-2 gap-2">
         <Button type="button" variant="secondary" className="w-full" onClick={onHold} disabled={!inv.doc}>
           <Pause className="size-4" />
@@ -1412,6 +1460,12 @@ function InvoiceRow({
         />
       </TableCell>
       <TableCell>
+        <InvoiceCommentInput
+          value={inv.comment}
+          onChange={(comment) => onChange({ comment })}
+        />
+      </TableCell>
+      <TableCell>
         <div className="flex items-center justify-end gap-1">
           <Button
             type="button"
@@ -1498,7 +1552,7 @@ function HeldCard({
     "data-state"?: "selected";
     onClick: (e: React.MouseEvent) => void;
   };
-  onChange: (p: Partial<Pick<HeldInvoice, "weight" | "area" | "doc" | "customer">>) => void;
+  onChange: (p: Partial<Pick<HeldInvoice, "weight" | "area" | "doc" | "customer" | "comment">>) => void;
   onToggleCollection: (v: boolean) => void;
   onPick: () => void;
   onPickException: () => void;
@@ -1545,6 +1599,13 @@ function HeldCard({
           searchPlaceholder="Search towns…"
           onChange={(town) => onChange({ area: town })}
           buttonClassName="h-11 w-full"
+        />
+      </FormField>
+      <FormField label="Comment">
+        <InvoiceCommentInput
+          value={held.comment}
+          onChange={(comment) => onChange({ comment })}
+          className="h-11 w-full"
         />
       </FormField>
       <label className="flex items-center gap-2 text-sm">
@@ -1597,7 +1658,7 @@ function HeldRow({
     "data-state"?: "selected";
     onClick: (e: React.MouseEvent) => void;
   };
-  onChange: (p: Partial<Pick<HeldInvoice, "weight" | "area" | "doc" | "customer">>) => void;
+  onChange: (p: Partial<Pick<HeldInvoice, "weight" | "area" | "doc" | "customer" | "comment">>) => void;
   onToggleCollection: (v: boolean) => void;
   onPick: () => void;
   onPickException: () => void;
@@ -1645,6 +1706,12 @@ function HeldRow({
         {!pickable && held.area && (
           <p className="mt-1 text-[11px] text-muted-foreground">Off today’s trips</p>
         )}
+      </td>
+      <td className="px-3 py-2 align-middle">
+        <InvoiceCommentInput
+          value={held.comment}
+          onChange={(comment) => onChange({ comment })}
+        />
       </td>
       <td className="px-3 py-2 align-middle">
         <div className="flex flex-col gap-2">

@@ -206,7 +206,7 @@ type State = {
     patch: Partial<
       Pick<
         HeldInvoice,
-        "doc" | "customer" | "weight" | "area" | "collection" | "creditNote" | "reason"
+        "doc" | "customer" | "weight" | "area" | "collection" | "creditNote" | "reason" | "comment"
       >
     >,
   ) => void;
