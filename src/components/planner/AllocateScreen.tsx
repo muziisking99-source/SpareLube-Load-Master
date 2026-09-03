@@ -109,7 +109,9 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
     plan.truckDay.map((td) => [td.truckId, tripNamesForTruckDay(td, trips)] as const),
   );
   const inv = plan.invoices;
-  const allocatable = inv.filter((i) => !i.collection && !i.creditNote);
+  // Collections are excluded from auto-allocation (customer collects).
+  // Credit notes are now allocatable too (auto-loaded onto trucks).
+  const allocatable = inv.filter((i) => !i.collection);
   const allocated = allocatable.filter((i) => i.truckId);
   const unallocated = allocatable.filter((i) => !i.truckId);
   const collections = inv.filter((i) => i.collection);
@@ -296,8 +298,8 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
             {creditNotes.length > 0 && (
               <p className="mt-3 text-sm text-muted-foreground">
                 {creditNotes.length} credit note
-                {creditNotes.length === 1 ? "" : "s"} excluded until marked Load on truck
-                on Enter.
+                {creditNotes.length === 1 ? "" : "s"} included in auto allocation
+                (assigns onto trucks).
               </p>
             )}
           </section>
@@ -572,11 +574,12 @@ function TruckWorkbench({
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || assignedTripIds.length === 0 || active.id === over.id) return;
-    const oldIndex = truckInvoices.findIndex((i) => i.id === active.id);
-    const newIndex = truckInvoices.findIndex((i) => i.id === over.id);
+    // Day stop reorder is Round 1 only.
+    const oldIndex = round1.findIndex((i) => i.id === active.id);
+    const newIndex = round1.findIndex((i) => i.id === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
-    const reordered = arrayMove(truckInvoices, oldIndex, newIndex);
-    const activeInv = truckInvoices.find((i) => i.id === active.id);
+    const reordered = arrayMove(round1, oldIndex, newIndex);
+    const activeInv = round1.find((i) => i.id === active.id);
     const sequenceTripId = activeInv
       ? tripIdForInvoice(activeInv, focusTruckDay, trips)
       : assignedTripIds[0];
@@ -826,38 +829,78 @@ function TruckWorkbench({
                     </TableRow>
                   </TableHeader>
                   <SortableContext
-                    items={truckInvoices.map((i) => i.id)}
+                    items={round1.map((i) => i.id)}
                     strategy={verticalListSortingStrategy}
-                    disabled={!isAdjust || assignedTripIds.length === 0}
+                    disabled={!isAdjust || assignedTripIds.length === 0 || round1.length === 0}
                   >
                     <TableBody>
-                      {truckInvoices.map((i) => {
+                      {round1.map((i) => {
                         const invoiceTripId = tripIdForInvoice(i, focusTruckDay, trips);
                         return (
-                        <SortableTruckInvoiceRow
-                          key={i.id}
-                          inv={i}
-                          isAdjust={isAdjust}
-                          tripId={invoiceTripId}
-                          customers={customers}
-                          trips={trips}
-                          dayStopOrder={dayStopOrder}
-                          checked={selected.includes(i.id)}
-                          highlightProps={highlightProps(i.id)}
-                          onToggleSelect={() => onToggleSelect(i.id)}
-                          onSetLoad={(key, n) =>
-                            invoiceTripId &&
-                            setDayTripCustomerLoadNumber(invoiceTripId, key, n)
-                          }
-                          onSetComment={(comment) => updateInvoice(i.id, { comment })}
-                          customerKeyFor={customerKeyFor}
-                          onMoveInvoice={() => onMoveInvoice(i)}
-                          onUnallocate={() => onUnallocate(i)}
-                        />
+                          <SortableTruckInvoiceRow
+                            key={i.id}
+                            inv={i}
+                            isAdjust={isAdjust}
+                            tripId={invoiceTripId}
+                            customers={customers}
+                            trips={trips}
+                            dayStopOrder={dayStopOrder}
+                            checked={selected.includes(i.id)}
+                            highlightProps={highlightProps(i.id)}
+                            draggable
+                            onToggleSelect={() => onToggleSelect(i.id)}
+                            onSetLoad={(key, n) =>
+                              invoiceTripId &&
+                              setDayTripCustomerLoadNumber(invoiceTripId, key, n)
+                            }
+                            onSetComment={(comment) => updateInvoice(i.id, { comment })}
+                            customerKeyFor={customerKeyFor}
+                            onMoveInvoice={() => onMoveInvoice(i)}
+                            onUnallocate={() => onUnallocate(i)}
+                          />
                         );
                       })}
                     </TableBody>
                   </SortableContext>
+
+                  {round2.length > 0 && (
+                    <TableBody>
+                      <TableRow className="bg-panel-2/30 hover:bg-panel-2/30">
+                        <TableCell
+                          colSpan={isAdjust ? 9 : 6}
+                          className="py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground"
+                        >
+                          Round 2 ({round2.length})
+                        </TableCell>
+                      </TableRow>
+                      {round2.map((i) => {
+                        const invoiceTripId = tripIdForInvoice(i, focusTruckDay, trips);
+                        return (
+                          <SortableTruckInvoiceRow
+                            key={i.id}
+                            inv={i}
+                            isAdjust={isAdjust}
+                            tripId={invoiceTripId}
+                            customers={customers}
+                            trips={trips}
+                            dayStopOrder={dayStopOrder}
+                            checked={selected.includes(i.id)}
+                            highlightProps={highlightProps(i.id)}
+                            draggable={false}
+                            onToggleSelect={() => onToggleSelect(i.id)}
+                            onSetLoad={(key, n) =>
+                              invoiceTripId &&
+                              setDayTripCustomerLoadNumber(invoiceTripId, key, n)
+                            }
+                            onSetComment={(comment) => updateInvoice(i.id, { comment })}
+                            customerKeyFor={customerKeyFor}
+                            onMoveInvoice={() => onMoveInvoice(i)}
+                            onUnallocate={() => onUnallocate(i)}
+                          />
+                        );
+                      })}
+                    </TableBody>
+                  )}
                 </Table>
               </DndContext>
             </div>
@@ -1069,6 +1112,7 @@ function SortableTruckInvoiceRow({
   customerKeyFor,
   onMoveInvoice,
   onUnallocate,
+  draggable,
 }: {
   inv: Invoice;
   isAdjust: boolean;
@@ -1081,6 +1125,7 @@ function SortableTruckInvoiceRow({
     "data-state"?: "selected";
     onClick: (e: React.MouseEvent) => void;
   };
+  draggable: boolean;
   onToggleSelect: () => void;
   onSetLoad: (key: string, n: number) => void;
   onSetComment: (comment: string) => void;
@@ -1095,7 +1140,7 @@ function SortableTruckInvoiceRow({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: inv.id, disabled: !isAdjust || !tripId });
+  } = useSortable({ id: inv.id, disabled: !isAdjust || !tripId || !draggable });
 
   const key = customerKeyFor(inv);
   const loadNo = loadingNumberFor(
@@ -1128,7 +1173,11 @@ function SortableTruckInvoiceRow({
           <div className="flex items-center gap-1">
             <button
               type="button"
-              className="inline-flex size-7 cursor-grab items-center justify-center rounded-md text-muted-foreground hover:bg-muted active:cursor-grabbing"
+              disabled={!draggable}
+              className={cn(
+                "inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted active:cursor-grabbing",
+                draggable ? "cursor-grab" : "cursor-not-allowed opacity-50",
+              )}
               aria-label="Drag to reorder"
               data-no-row-highlight
               {...attributes}
@@ -1196,7 +1245,7 @@ function SortableTruckInvoiceRow({
             (inv.round ?? 1) === 2 ? "text-warn" : "text-muted-foreground",
           )}
         >
-          R{inv.round ?? 1}
+          {(inv.round ?? 1) === 2 ? "R2" : "—"}
         </span>
       </TableCell>
       {isAdjust && (

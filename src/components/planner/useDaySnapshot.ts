@@ -47,7 +47,8 @@ export function useDaySnapshot() {
     return townsForTruckDay(td, trips).length > 0;
   }).length;
 
-  const needsTruck = plan.invoices.filter((i) => !i.truckId && !i.collection && !i.creditNote);
+  // Credit notes are now treated like normal invoices during auto allocation.
+  const needsTruck = plan.invoices.filter((i) => !i.truckId && !i.collection);
 
   return {
     plan,

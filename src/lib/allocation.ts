@@ -90,8 +90,9 @@ export function allocate(
 
   const byArea = new Map<string, Invoice[]>();
   for (const inv of invoices) {
-    // Customer-collects and credit notes stay on the plan but are never auto-allocated
-    if (inv.collection || inv.creditNote) continue;
+    // Customer-collects stay on the plan (they are not loaded onto trucks by auto allocation).
+    // Credit notes are allocatable too.
+    if (inv.collection) continue;
     const key = inv.area || "__NONE__";
     if (!byArea.has(key)) byArea.set(key, []);
     byArea.get(key)!.push(inv);
@@ -129,6 +130,8 @@ export function allocate(
       });
       const chosen = candidates[0];
       inv.truckId = chosen.id;
+      // Once on a truck, the invoice is loaded — no longer a "pending credit note".
+      if (inv.creditNote) inv.creditNote = false;
       weights.set(chosen.id, (weights.get(chosen.id) ?? 0) + inv.weight);
     }
   }
