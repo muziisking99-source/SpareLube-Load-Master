@@ -351,12 +351,26 @@ function TruckSheetsContent({
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1.4fr 1fr",
-                  gap: 20,
+                  gridTemplateColumns: "1.2fr 1.4fr 1fr 1fr",
+                  gap: 16,
                   marginTop: 10,
                   fontSize: 11,
                 }}
               >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 8,
+                      letterSpacing: "0.05em",
+                      textTransform: "uppercase",
+                      color: "#555",
+                      marginBottom: 1,
+                    }}
+                  >
+                    Loader name
+                  </div>
+                  <div style={{ borderBottom: "1px solid #222", minHeight: 14 }} />
+                </div>
                 <div>
                   <div
                     style={{
@@ -382,6 +396,20 @@ function TruckSheetsContent({
                     }}
                   >
                     Time departed
+                  </div>
+                  <div style={{ borderBottom: "1px solid #222", minHeight: 14 }} />
+                </div>
+                <div>
+                  <div
+                    style={{
+                      fontSize: 8,
+                      letterSpacing: "0.05em",
+                      textTransform: "uppercase",
+                      color: "#555",
+                      marginBottom: 1,
+                    }}
+                  >
+                    Time arrived
                   </div>
                   <div style={{ borderBottom: "1px solid #222", minHeight: 14 }} />
                 </div>
