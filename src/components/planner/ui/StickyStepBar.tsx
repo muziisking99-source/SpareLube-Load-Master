@@ -26,7 +26,7 @@ export function StickyStepBar({
   return (
     <div
       className={cn(
-        "sticky bottom-0 z-20 -mx-3 glass-chrome px-3 py-3 no-print sm:-mx-0 sm:rounded-xl sm:px-4 lg:static lg:mx-0 lg:mt-4",
+        "sticky bottom-0 z-20 -mx-3 glass-chrome px-3 py-3 no-print sm:-mx-0 sm:rounded-xl sm:border sm:border-[color:var(--glass-border-chrome)] sm:px-4 lg:static lg:mx-0 lg:mt-4",
         "mb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] lg:mb-0",
         className,
       )}
@@ -48,7 +48,7 @@ export function StickyStepBar({
         )}
         <Button
           type="button"
-          className="w-full sm:ml-auto sm:w-auto"
+          className="btn-primary w-full sm:ml-auto sm:w-auto"
           size="lg"
           disabled={primaryDisabled}
           onClick={onPrimary}

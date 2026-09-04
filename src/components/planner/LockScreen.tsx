@@ -314,7 +314,7 @@ export function LockScreen() {
                 <h4 className="mb-2 text-sm font-medium text-warn">
                   In Excel, not entered
                 </h4>
-                <div className="overflow-x-auto rounded-xl border border-border">
+                <div className="panel overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-panel-2 hover:bg-panel-2">
@@ -352,7 +352,7 @@ export function LockScreen() {
                 <h4 className="mb-2 text-sm font-medium text-muted-foreground">
                   Entered, not in Excel
                 </h4>
-                <div className="overflow-x-auto rounded-xl border border-border">
+                <div className="panel overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-panel-2 hover:bg-panel-2">
@@ -440,7 +440,7 @@ export function LockScreen() {
           )}
         </div>
 
-        <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
+        <div className="hidden panel overflow-x-auto md:block">
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">

@@ -8,16 +8,19 @@ import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 const containerVariants = {
   hidden: {},
   show: {
-    transition: { staggerChildren: 0.06 },
+    transition: { staggerChildren: 0.03 },
   },
 };
 
 const itemVariants = {
-  hidden: { opacity: 0, y: 8 },
+  hidden: { opacity: 0, y: 6 },
   show: {
     opacity: 1,
     y: 0,
-    transition: { type: "spring" as const, stiffness: 100, damping: 20 },
+    transition: {
+      duration: 0.2,
+      ease: [0.2, 0, 0, 1] as const,
+    },
   },
 };
 

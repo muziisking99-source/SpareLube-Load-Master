@@ -219,7 +219,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
               className="mb-4"
             />
             <div className="grid gap-4 lg:grid-cols-2">
-              <div className="overflow-hidden rounded-xl border border-border">
+              <div className="panel overflow-hidden">
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-panel-2 hover:bg-panel-2">
@@ -247,7 +247,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                   </TableBody>
                 </Table>
               </div>
-              <div className="overflow-hidden rounded-xl border border-border">
+              <div className="panel overflow-hidden">
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-panel-2 hover:bg-panel-2">
@@ -316,7 +316,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                 description="Add trucks in Admin → Trucks, then return here."
               />
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-border">
+              <div className="panel overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-panel-2 hover:bg-panel-2">
@@ -760,7 +760,7 @@ function TruckWorkbench({
           description="Activate trucks below, or add trucks in Admin → Trucks."
         />
       ) : (
-        <section className="glass-panel overflow-hidden">
+        <section className="panel overflow-hidden">
           <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <h3 className="font-semibold tracking-tight">{focusTruck.name}</h3>
@@ -915,7 +915,7 @@ function TruckWorkbench({
       )}
 
       {unallocated.length > 0 && (
-        <section className="glass-panel overflow-hidden">
+        <section className="panel overflow-hidden">
           <div className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-3">
             <h3 className="font-semibold tracking-tight text-crit">
               Unallocated ({unallocated.length})

@@ -638,7 +638,7 @@ export function ImportScreen() {
                 />
               ))}
             </div>
-            <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
+            <div className="hidden panel overflow-x-auto md:block">
               <table className="w-full min-w-[980px] border-collapse text-sm">
                 <thead className="bg-panel-2">
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wider text-muted-foreground">
@@ -699,7 +699,7 @@ export function ImportScreen() {
               />
             ))}
           </div>
-          <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
+          <div className="hidden panel overflow-x-auto md:block">
             <Table>
               <TableHeader>
                 <TableRow className="bg-panel-2 hover:bg-panel-2">
@@ -798,7 +798,7 @@ export function ImportScreen() {
               />
             ))}
           </div>
-          <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
+          <div className="hidden panel overflow-x-auto md:block">
             <Table>
               <TableHeader>
                 <TableRow className="bg-panel-2 hover:bg-panel-2">
@@ -926,7 +926,7 @@ export function ImportScreen() {
                 />
               ))}
             </div>
-            <div className="hidden rounded-xl border border-border md:block">
+            <div className="hidden panel md:block">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-panel-2">
                   <TableRow className="hover:bg-panel-2">

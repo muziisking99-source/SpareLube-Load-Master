@@ -30,9 +30,9 @@ export function ResumeModal({
     <AlertDialog open={open}>
       <AlertDialogContent className="max-w-md border-border">
         <motion.div
-          initial={reducedMotion ? false : { opacity: 0, y: 8, filter: "blur(4px)" }}
-          animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-          transition={{ type: "spring", stiffness: 100, damping: 20 }}
+          initial={reducedMotion ? false : { opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2, ease: [0.2, 0, 0, 1] }}
         >
           <AlertDialogHeader>
             <AlertDialogTitle>Resume today&apos;s plan?</AlertDialogTitle>

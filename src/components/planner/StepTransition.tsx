@@ -22,17 +22,17 @@ export function StepTransition({
     return <div key={stepKey}>{children}</div>;
   }
 
-  const enterX = forward ? 12 : -12;
-  const exitX = forward ? -8 : 8;
+  const enterX = forward ? 10 : -10;
+  const exitX = forward ? -6 : 6;
 
   return (
     <AnimatePresence mode="wait">
       <motion.div
         key={stepKey}
-        initial={{ opacity: 0, x: enterX, filter: "blur(4px)" }}
-        animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
-        exit={{ opacity: 0, x: exitX, filter: "blur(4px)" }}
-        transition={{ type: "spring", stiffness: 100, damping: 20 }}
+        initial={{ opacity: 0, x: enterX }}
+        animate={{ opacity: 1, x: 0 }}
+        exit={{ opacity: 0, x: exitX }}
+        transition={{ duration: 0.2, ease: [0.2, 0, 0, 1] }}
       >
         {children}
       </motion.div>

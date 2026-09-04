@@ -99,12 +99,20 @@ export function TopBar({
   );
 
   return (
-    <header className="glass-chrome sticky top-0 z-40 border-b border-border/50 no-print">
+    <header
+      className="glass-chrome sticky top-0 z-40 no-print"
+      style={{ borderBottomColor: "var(--rail-line)" }}
+    >
       <div className="mx-auto flex h-12 w-full max-w-[1600px] items-center gap-2 px-3 sm:gap-3 sm:px-4">
-        <div className="flex min-w-0 shrink-0 items-center gap-2">
+        <div className="flex min-w-0 shrink-0 items-center gap-2.5">
           <Logo className="h-8 w-auto shrink-0 sm:h-9" />
           <div className="hidden min-w-0 sm:block">
-            <div className="truncate text-sm font-semibold tracking-tight">Load Planner</div>
+            <div className="truncate text-[15px] font-semibold tracking-tight text-foreground">
+              Load Planner
+            </div>
+            <div className="truncate text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+              SpareLube
+            </div>
           </div>
         </div>
 

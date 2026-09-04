@@ -27,12 +27,14 @@ export function StatTile({
       className={cn(
         "glass-panel relative overflow-hidden p-4",
         !tone &&
-          "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-primary/50 before:to-transparent",
+          "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-foreground/15 before:to-transparent",
         className,
       )}
     >
-      <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={cn("mt-1 text-2xl font-semibold metric-mono tracking-tight", color)}>
+      <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        {label}
+      </div>
+      <div className={cn("mt-1.5 text-2xl font-semibold metric-mono tracking-tight", color)}>
         {value}
       </div>
     </div>
