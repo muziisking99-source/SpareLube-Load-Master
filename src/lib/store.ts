@@ -29,7 +29,7 @@ import {
   remapSequenceKeys,
   remapStopOrderKeys,
 } from "./customers";
-import { normalizeTrip, townsForTruckDay, townsFromTripIds, townsForPlan, tripById, tripIdsForTruckDay } from "./trips";
+import { normalizeTrip, townsForTruckDay, townsFromTripIds, townsForPlan, tripById, tripIdsForTruckDay, TOWN_FILTER_NONE } from "./trips";
 import {
   hydrateWarehouse,
   persistWarehouse,
@@ -932,22 +932,54 @@ export const useStore = create<State>((set, get) => {
     },
     setTruckDayTrips: (truckId, tripIds) => {
       patchPlan((p) => {
+        const s = get();
         const planTripSet = new Set(p.tripIds ?? []);
         const clean = [...new Set(tripIds.filter((id) => planTripSet.has(id)))];
         const exists = p.truckDay.find((t) => t.truckId === truckId);
+
+        // Prune areas to towns still on the truck's assigned trips
+        const validTowns = new Set(townsFromTripIds(clean, s.trips));
+        const rawAreas = exists?.areas ?? [];
+        const hadNone = rawAreas.includes(TOWN_FILTER_NONE);
+        const prunedAreas = rawAreas.filter((a) => validTowns.has(a));
+        const areasForNext =
+          prunedAreas.length > 0
+            ? prunedAreas
+            : hadNone && clean.length > 0
+              ? [TOWN_FILTER_NONE]
+              : [];
+
         const next = normalizeTruckDay({
           truckId,
           tripIds: clean,
           tripId: clean[0] ?? null,
-          areas: exists?.areas,
+          areas: areasForNext,
         });
-        const truckDay = exists
+        let truckDay = exists
           ? p.truckDay.map((t) => (t.truckId === truckId ? next : t))
           : [...p.truckDay, next];
+
+        // Clear town filters on trucks that no longer share any trip
+        const activeIds = new Set(s.trucks.filter((t) => t.active).map((t) => t.id));
+        const shareCount = new Map<string, number>();
+        for (const td of truckDay) {
+          if (!activeIds.has(td.truckId)) continue;
+          for (const id of tripIdsForTruckDay(td)) {
+            shareCount.set(id, (shareCount.get(id) ?? 0) + 1);
+          }
+        }
+        truckDay = truckDay.map((td) => {
+          const ids = tripIdsForTruckDay(td);
+          const sharesAny = ids.some((id) => (shareCount.get(id) ?? 0) >= 2);
+          if (!sharesAny && (td.areas?.length ?? 0) > 0 && ids.length > 0) {
+            return { ...td, areas: [] };
+          }
+          return td;
+        });
+
         if ((p.tripIds ?? []).length > 0) {
           return { ...p, truckDay };
         }
-        const s = get();
         const areas = [
           ...new Set(truckDay.flatMap((td) => townsForTruckDay(td, s.trips))),
         ].sort((a, b) => a.localeCompare(b));

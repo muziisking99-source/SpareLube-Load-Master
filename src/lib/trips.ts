@@ -1,5 +1,8 @@
 import type { Plan, Trip, TruckDay } from "./types";
 
+/** Stored in TruckDay.areas when the truck explicitly covers no towns (empty [] = all). */
+export const TOWN_FILTER_NONE = "__none__";
+
 /** Trip ids assigned to a truck today (supports legacy single tripId). */
 export function tripIdsForTruckDay(td: TruckDay | undefined): string[] {
   if (!td) return [];
@@ -8,7 +11,11 @@ export function tripIdsForTruckDay(td: TruckDay | undefined): string[] {
   return [];
 }
 
-/** Towns for a truck today: union of all assigned trips, else legacy areas[]. */
+/** Towns for a truck today: union of all assigned trips, else legacy areas[].
+ * When trips are assigned and areas[] is non-empty, areas acts as an optional
+ * town filter (intersection) — used to split a shared trip across trucks.
+ * areas containing only TOWN_FILTER_NONE means intentionally no towns.
+ */
 export function townsForTruckDay(
   td: TruckDay | undefined,
   trips: Trip[],
@@ -16,14 +23,40 @@ export function townsForTruckDay(
   if (!td) return [];
   const ids = tripIdsForTruckDay(td);
   if (ids.length > 0) {
-    const set = new Set<string>();
+    const fromTrips: string[] = [];
+    const seen = new Set<string>();
     for (const id of ids) {
       const trip = trips.find((t) => t.id === id);
-      if (trip) for (const town of trip.towns) if (town) set.add(town);
+      if (!trip) continue;
+      for (const town of trip.towns) {
+        if (!town || seen.has(town)) continue;
+        seen.add(town);
+        fromTrips.push(town);
+      }
     }
-    return [...set];
+    const filter = (td.areas ?? []).filter(Boolean);
+    if (filter.length === 0) return fromTrips;
+    if (filter.length === 1 && filter[0] === TOWN_FILTER_NONE) return [];
+    const allow = new Set(filter.filter((a) => a !== TOWN_FILTER_NONE));
+    return fromTrips.filter((t) => allow.has(t));
   }
-  return [...(td.areas ?? [])].filter(Boolean);
+  return [...(td.areas ?? [])].filter((a) => a && a !== TOWN_FILTER_NONE);
+}
+
+/** Trip ids that have 2+ active trucks assigned today. */
+export function sharedTripIds(
+  truckDay: TruckDay[],
+  trucks: { id: string; active: boolean }[],
+): string[] {
+  const active = new Set(trucks.filter((t) => t.active).map((t) => t.id));
+  const count = new Map<string, number>();
+  for (const td of truckDay) {
+    if (!active.has(td.truckId)) continue;
+    for (const id of tripIdsForTruckDay(td)) {
+      count.set(id, (count.get(id) ?? 0) + 1);
+    }
+  }
+  return [...count.entries()].filter(([, n]) => n >= 2).map(([id]) => id);
 }
 
 /** Comma-separated trip names for a truck today. */

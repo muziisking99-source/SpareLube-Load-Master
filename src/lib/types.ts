@@ -75,8 +75,9 @@ export type TruckDay = {
   /** Which trip this truck's Round 2 run is for (from today's selected trips) */
   round2TripId?: string | null;
   /**
-   * Legacy multi-select towns. Used only when no trips are assigned.
-   * @deprecated prefer tripIds
+   * Legacy multi-select towns when no trips are assigned.
+   * When tripIds are set, a non-empty areas list filters which trip towns
+   * this truck covers (shared-trip split). Empty areas = all trip towns.
    */
   areas?: string[];
 };

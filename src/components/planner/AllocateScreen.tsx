@@ -33,8 +33,8 @@ import {
   compareByLoadingNumber,
   loadingNumberFor,
 } from "@/lib/loadingOrder";
-import { townsForTruckDay, tripById, tripIdForInvoice, tripIdsForTruckDay, tripNamesForTruckDay } from "@/lib/trips";
-import type { Invoice, Truck, TruckDay } from "@/lib/types";
+import { townsForTruckDay, tripById, tripIdForInvoice, tripIdsForTruckDay, tripNamesForTruckDay, sharedTripIds, townsFromTripIds, TOWN_FILTER_NONE } from "@/lib/trips";
+import type { Invoice, Truck, TruckDay, Trip } from "@/lib/types";
 import { useRowHighlight } from "@/lib/useRowHighlight";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -89,6 +89,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const readOnly = usePlanReadOnly();
   const updateTruck = useStore((s) => s.updateTruck);
   const setTruckDayTrips = useStore((s) => s.setTruckDayTrips);
+  const setTruckDayAreas = useStore((s) => s.setTruckDayAreas);
   const ensureTruckDay = useStore((s) => s.ensureTruckDay);
 
   const [selected, setSelected] = useState<string[]>([]);
@@ -159,6 +160,74 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
       const td = plan.truckDay.find((d) => d.truckId === t.id);
       return tripIdsForTruckDay(td).length > 0;
     });
+
+  const sharedTripIdSet = useMemo(
+    () => new Set(sharedTripIds(plan.truckDay, trucks)),
+    [plan.truckDay, trucks],
+  );
+
+  /** Exclusive split: picker gets selected towns; remainder goes to the other truck(s) on that trip. */
+  function setSharedTripTownsExclusive(
+    truckId: string,
+    trip: Trip,
+    selectedOnTrip: string[],
+  ) {
+    const tripTowns = trip.towns.filter(Boolean);
+    const selected = [...new Set(selectedOnTrip.filter((t) => tripTowns.includes(t)))];
+    const remainder = tripTowns.filter((t) => !selected.includes(t));
+    const tripTownSet = new Set(tripTowns);
+
+    const others = activeTrucks.filter((t) => {
+      if (t.id === truckId) return false;
+      const td = plan.truckDay.find((d) => d.truckId === t.id);
+      return tripIdsForTruckDay(td).includes(trip.id);
+    });
+
+    function areasForTruck(
+      id: string,
+      townsOnThisTrip: string[],
+    ): string[] {
+      const td = plan.truckDay.find((d) => d.truckId === id);
+      const assignedIds = tripIdsForTruckDay(td);
+      const otherIds = assignedIds.filter((tid) => tid !== trip.id);
+      const otherTowns = townsFromTripIds(otherIds, trips);
+      const filter = (td?.areas ?? []).filter(Boolean);
+      const hadExplicit =
+        filter.length > 0 &&
+        !(filter.length === 1 && filter[0] === TOWN_FILTER_NONE);
+      const keptFromOther = hadExplicit
+        ? filter.filter((a) => a !== TOWN_FILTER_NONE && !tripTownSet.has(a))
+        : otherTowns;
+      const next = [...new Set([...keptFromOther, ...townsOnThisTrip])];
+      const allAssigned = townsFromTripIds(assignedIds, trips);
+      if (next.length === 0) return [TOWN_FILTER_NONE];
+      if (
+        next.length === allAssigned.length &&
+        allAssigned.every((t) => next.includes(t))
+      ) {
+        return [];
+      }
+      return next;
+    }
+
+    setTruckDayAreas(truckId, areasForTruck(truckId, selected));
+
+    if (others.length === 0) return;
+
+    // Primary "other" truck gets all unpicked towns; any further trucks get none of this trip
+    others.forEach((other, idx) => {
+      const towns = idx === 0 ? remainder : [];
+      setTruckDayAreas(other.id, areasForTruck(other.id, towns));
+    });
+  }
+
+  function selectedTownsForSharedTrip(td: TruckDay | undefined, trip: Trip): string[] {
+    const tripTowns = trip.towns.filter(Boolean);
+    const filter = (td?.areas ?? []).filter(Boolean);
+    if (filter.length === 1 && filter[0] === TOWN_FILTER_NONE) return [];
+    if (filter.length === 0) return []; // not split yet — show empty until they pick
+    return tripTowns.filter((town) => filter.includes(town));
+  }
 
   function toggleSelect(id: string) {
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -307,7 +376,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
           <section className="glass-panel p-4 sm:p-5">
             <ScreenHeader
               title="Assign trucks to trips"
-              description="Activate trucks for today and pair each one to a selected trip."
+              description="Activate trucks for today and pair each one to a selected trip. When two trucks share a trip, pick towns in the Towns column — leftovers go to the other truck."
               className="mb-4"
             />
             {trucks.length === 0 ? (
@@ -324,11 +393,26 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                       <TableHead>Truck</TableHead>
                       <TableHead className="w-28">Max kg</TableHead>
                       <TableHead>Today&apos;s trips</TableHead>
+                      <TableHead>Towns</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {trucks.map((t) => {
                       const td = truckDayById.get(t.id);
+                      const assignedIds = tripIdsForTruckDay(td);
+                      const sharedAssigned = assignedIds
+                        .map((id) => tripById(trips, id))
+                        .filter((tr): tr is Trip => !!tr && sharedTripIdSet.has(tr.id));
+                      // One shared trip at a time for the towns column (first shared)
+                      const sharedTrip = sharedAssigned[0] ?? null;
+                      const townOptions = sharedTrip?.towns.filter(Boolean) ?? [];
+                      const selectedTowns = sharedTrip
+                        ? selectedTownsForSharedTrip(td, sharedTrip)
+                        : [];
+                      const splitActive =
+                        !!sharedTrip &&
+                        ((td?.areas?.length ?? 0) > 0);
+
                       return (
                         <TableRow key={t.id} className={cn(!t.active && "opacity-50")}>
                           <TableCell>
@@ -341,11 +425,32 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                           <TableCell className="metric-mono">{t.maxWeight}</TableCell>
                           <TableCell>
                             <TruckTripMultiSelect
-                              disabled={!t.active || planTrips.length === 0}
+                              disabled={!t.active || planTrips.length === 0 || readOnly}
                               planTrips={planTrips}
-                              selectedIds={tripIdsForTruckDay(td)}
+                              selectedIds={assignedIds}
                               onChange={(ids) => setTruckDayTrips(t.id, ids)}
                             />
+                          </TableCell>
+                          <TableCell>
+                            {sharedTrip && t.active ? (
+                              <TruckTownMultiSelect
+                                disabled={readOnly || townOptions.length === 0}
+                                towns={townOptions}
+                                selected={selectedTowns}
+                                placeholder={
+                                  splitActive
+                                    ? selectedTowns.length === 0
+                                      ? "No towns"
+                                      : undefined
+                                    : "Pick towns…"
+                                }
+                                onChange={(next) =>
+                                  setSharedTripTownsExclusive(t.id, sharedTrip, next)
+                                }
+                              />
+                            ) : (
+                              <span className="text-sm text-muted-foreground">—</span>
+                            )}
                           </TableCell>
                         </TableRow>
                       );
@@ -358,6 +463,12 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
               <p className="mt-3 text-sm text-warn">
                 Assign at least one active truck to:{" "}
                 {tripsMissingTrucks.map((r) => r.trip.name).join(", ")}
+              </p>
+            )}
+            {sharedTripIdSet.size > 0 && (
+              <p className="mt-3 text-sm text-muted-foreground">
+                Shared trip: pick towns for one truck — the rest go to the other truck on that
+                trip.
               </p>
             )}
           </section>
@@ -1478,6 +1589,64 @@ function TruckTripMultiSelect({
                 }}
               />
               <span className="truncate">{tr.name}</span>
+            </label>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function TruckTownMultiSelect({
+  towns,
+  selected,
+  disabled,
+  placeholder,
+  onChange,
+}: {
+  towns: string[];
+  selected: string[];
+  disabled?: boolean;
+  placeholder?: string;
+  onChange: (towns: string[]) => void;
+}) {
+  const label =
+    selected.length === 0
+      ? placeholder ?? "Pick towns…"
+      : selected.length <= 2
+        ? selected.join(", ")
+        : `${selected.length} towns`;
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          className="h-9 w-full max-w-xs justify-between gap-2 px-2 font-normal"
+        >
+          <span className="truncate">{label}</span>
+          <ChevronDown className="size-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-2" align="start">
+        <div className="max-h-64 space-y-1 overflow-y-auto">
+          {towns.map((town) => (
+            <label
+              key={town}
+              className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted"
+            >
+              <Checkbox
+                checked={selected.includes(town)}
+                onCheckedChange={(v) => {
+                  const next = v
+                    ? [...selected, town]
+                    : selected.filter((t) => t !== town);
+                  onChange(next);
+                }}
+              />
+              <span className="truncate">{town}</span>
             </label>
           ))}
         </div>
