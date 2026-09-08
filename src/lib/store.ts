@@ -668,6 +668,8 @@ export const useStore = create<State>((set, get) => {
             : t,
         ),
       }));
+      log("trip.update", `Updated trip ${id}`);
+      void flushSaveNow();
     },
     deleteTrip: (id) => {
       mutate((s) => {

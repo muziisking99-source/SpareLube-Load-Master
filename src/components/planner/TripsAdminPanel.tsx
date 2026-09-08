@@ -147,8 +147,8 @@ export function TripsAdminPanel({ townOptions }: { townOptions: string[] }) {
           <h3 className="font-semibold tracking-tight">Trips</h3>
           <p className="mt-1 max-w-[65ch] text-sm text-muted-foreground">
             Import trip names from Excel, then add towns and set load order for customers on this
-            trip. Drag a customer onto another to copy that load # — other numbers stay put, even
-            if two stops share the same #.
+            trip. Trip load #s are stored on the trip only — they do not use or change customer town
+            defaults. Drag a customer onto another to copy that load #.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -537,8 +537,8 @@ function TripStopOrderEditor({
           Load order for this trip
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          Drag a customer onto another to copy that load #. Matching numbers are left as-is so you
-          can fix them yourself.
+          Load # on this trip is separate from the customer town default. Drag onto another
+          customer to copy that load #.
         </p>
       </div>
       <DndContext
@@ -558,7 +558,6 @@ function TripStopOrderEditor({
                 id={key}
                 customer={c}
                 tripLoad={tripLoad}
-                hasOverride={(trip.stopOrder?.[key] ?? 0) > 0}
                 isDuplicate={tripLoad > 0 && duplicateLoads.has(tripLoad)}
                 isActive={activeId === key}
                 onSetLoad={onSetLoad}
@@ -601,7 +600,6 @@ function TripCustomerRow({
   id,
   customer,
   tripLoad,
-  hasOverride,
   isDuplicate,
   isActive,
   onSetLoad,
@@ -610,7 +608,6 @@ function TripCustomerRow({
   id: string;
   customer: CustomerMemory;
   tripLoad: number;
-  hasOverride: boolean;
   isDuplicate: boolean;
   isActive: boolean;
   onSetLoad: (customerKey: string, n: number) => void;
@@ -620,6 +617,20 @@ function TripCustomerRow({
     id,
   });
   const { setNodeRef: setDropRef, isOver } = useDroppable({ id });
+  /** Local draft so clearing the field stays blank while retyping (commit on blur). */
+  const [draft, setDraft] = useState<string | null>(null);
+  const display = draft !== null ? draft : tripLoad > 0 ? String(tripLoad) : "";
+
+  function commitDraft(raw: string) {
+    const trimmed = raw.trim();
+    if (trimmed === "") {
+      onSetLoad(id, 0);
+      return;
+    }
+    const v = Number(trimmed);
+    if (!Number.isFinite(v)) return;
+    onSetLoad(id, Math.floor(v));
+  }
 
   return (
     <li
@@ -649,22 +660,28 @@ function TripCustomerRow({
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
           <span>{customer.defaultArea}</span>
           {customer.code ? <span className="metric-mono">{customer.code}</span> : null}
-          {!hasOverride && customer.loadingNumber > 0 ? (
-            <span>Town default #{customer.loadingNumber}</span>
-          ) : null}
           {isDuplicate ? <span className="text-warn">Shared # — fix if needed</span> : null}
         </div>
       </div>
       <FormField label="Load #" className="w-20 gap-0.5">
         <Input
-          type="number"
-          min={0}
-          value={tripLoad > 0 ? tripLoad : ""}
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          value={display}
           placeholder="—"
           className="metric-mono h-8"
-          onChange={(e) => {
-            const v = e.target.value === "" ? 0 : Number(e.target.value);
-            onSetLoad(id, v);
+          onFocus={() => setDraft(tripLoad > 0 ? String(tripLoad) : "")}
+          onChange={(e) => setDraft(e.target.value.replace(/[^\d]/g, ""))}
+          onBlur={() => {
+            if (draft === null) return;
+            commitDraft(draft);
+            setDraft(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.currentTarget.blur();
+            }
           }}
         />
       </FormField>

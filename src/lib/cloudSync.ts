@@ -341,7 +341,20 @@ function mergeTrucksById(
 
 function mergeTripsById(local: Trip[], remote: Trip[], remoteIds: Set<string>): Trip[] {
   const byId = new Map(local.map((t) => [t.id, t]));
-  for (const t of remote) byId.set(t.id, normalizeTrip(t));
+  for (const t of remote) {
+    const prev = byId.get(t.id);
+    const merged = normalizeTrip(t);
+    // If cloud row has no stop_order (missing column / failed upsert), keep local load #s
+    if (
+      prev &&
+      Object.keys(merged.stopOrder ?? {}).length === 0 &&
+      Object.keys(prev.stopOrder ?? {}).length > 0
+    ) {
+      byId.set(t.id, normalizeTrip({ ...merged, stopOrder: prev.stopOrder }));
+    } else {
+      byId.set(t.id, merged);
+    }
+  }
   return [...byId.values()].filter((t) => remoteIds.has(t.id)).map((t) => normalizeTrip(t));
 }
 

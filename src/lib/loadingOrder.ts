@@ -90,7 +90,9 @@ export function setCustomerLoadingNumber(
 }
 
 /**
- * Resolve load #: day plan override → trip stopOrder → town defaultArea loadingNumber.
+ * Resolve load # for sorting / sheets.
+ * With a trip: day plan override → trip stopOrder only (never customer town default).
+ * Without a trip: town defaultArea loadingNumber.
  */
 export function loadingNumberFor(
   customers: Record<string, CustomerMemory>,
@@ -113,12 +115,16 @@ export function loadingNumberFor(
     }
   }
 
-  if (tripId && trips?.length) {
-    const trip = tripById(trips, tripId);
-    if (trip) {
-      const fromTrip = trip.stopOrder?.[key] ?? trip.stopOrder?.[c.name];
-      if (typeof fromTrip === "number" && fromTrip > 0) return fromTrip;
+  if (tripId) {
+    if (trips?.length) {
+      const trip = tripById(trips, tripId);
+      if (trip) {
+        const fromTrip = trip.stopOrder?.[key] ?? trip.stopOrder?.[c.name];
+        if (typeof fromTrip === "number" && fromTrip > 0) return fromTrip;
+      }
     }
+    // Trip context: do not fall back to customer town default
+    return 0;
   }
 
   if (!area || c.defaultArea !== area) return 0;
