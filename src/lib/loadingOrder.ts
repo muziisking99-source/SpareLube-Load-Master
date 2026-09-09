@@ -197,6 +197,7 @@ export function customersForTrip(
 /**
  * Compare invoices for truck sheets.
  * Prefers day drag sequence when set; else load # (day → trip → town).
+ * `sequenceKey` overrides which dayStopSequence entry is used (e.g. Round 2: `r2:${tripId}`).
  */
 export function compareByLoadingNumber(
   customers: Record<string, CustomerMemory>,
@@ -206,10 +207,12 @@ export function compareByLoadingNumber(
   trips?: Trip[],
   dayStopOrder?: Record<string, Record<string, number>>,
   dayStopSequence?: Record<string, string[]>,
+  sequenceKey?: string | null,
 ): number {
-  if (tripId && dayStopSequence?.[tripId]?.length) {
-    const ia = daySequenceIndex(customers, a.customer, tripId, dayStopSequence);
-    const ib = daySequenceIndex(customers, b.customer, tripId, dayStopSequence);
+  const seqKey = sequenceKey || tripId;
+  if (seqKey && dayStopSequence?.[seqKey]?.length) {
+    const ia = daySequenceIndex(customers, a.customer, seqKey, dayStopSequence);
+    const ib = daySequenceIndex(customers, b.customer, seqKey, dayStopSequence);
     if (ia >= 0 || ib >= 0) {
       const aUnset = ia < 0 ? 1 : 0;
       const bUnset = ib < 0 ? 1 : 0;
@@ -226,6 +229,11 @@ export function compareByLoadingNumber(
   if (aUnset !== bUnset) return aUnset - bUnset;
   if (la !== lb) return la - lb;
   return a.doc.localeCompare(b.doc);
+}
+
+/** Day sequence storage key for Round 2 (keeps R1 order independent). */
+export function round2DaySequenceKey(tripId: string): string {
+  return `r2:${tripId}`;
 }
 
 /**

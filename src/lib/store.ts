@@ -220,8 +220,13 @@ type State = {
   reorderTripStopsPartial: (tripId: string, orderedKeys: string[]) => void;
   /**
    * Day-only drag sequence for Adjust — writes plan.dayStopSequence, does not renumber Load #.
+   * Pass round: 2 to store under a Round-2-only key so it doesn't affect Round 1 order.
    */
-  setDayTripStopSequence: (tripId: string, orderedKeys: string[]) => void;
+  setDayTripStopSequence: (
+    tripId: string,
+    orderedKeys: string[],
+    opts?: { round?: 1 | 2 },
+  ) => void;
   /** Day-only load # for Adjust. */
   setDayTripCustomerLoadNumber: (tripId: string, customerKey: string, n: number) => void;
 
@@ -732,11 +737,24 @@ export const useStore = create<State>((set, get) => {
       }));
       log("trip.reorder", `Adjusted stop order on trip ${tripId}`);
     },
-    setDayTripStopSequence: (tripId, orderedKeys) => {
+    setDayTripStopSequence: (tripId, orderedKeys, opts) => {
+      const round = opts?.round ?? 1;
+      const storageKey = round === 2 ? `r2:${tripId}` : tripId;
       patchPlan((p) => {
         const trip = tripById(get().trips, tripId);
         if (!trip) return p;
-        const existing = p.dayStopSequence?.[tripId];
+        // Round 2: keep only the dragged subset order (R2 sheet is its own list).
+        if (round === 2) {
+          const sequence = [...new Set(orderedKeys.filter(Boolean))];
+          return {
+            ...p,
+            dayStopSequence: {
+              ...(p.dayStopSequence ?? {}),
+              [storageKey]: sequence,
+            },
+          };
+        }
+        const existing = p.dayStopSequence?.[storageKey];
         const sequence = mergeDayStopSequence(
           get().customers,
           trip,
@@ -747,11 +765,14 @@ export const useStore = create<State>((set, get) => {
           ...p,
           dayStopSequence: {
             ...(p.dayStopSequence ?? {}),
-            [tripId]: sequence,
+            [storageKey]: sequence,
           },
         };
       });
-      log("plan.day_sequence", `Day stop sequence adjusted for trip ${tripId}`);
+      log(
+        "plan.day_sequence",
+        `Day stop sequence adjusted for trip ${tripId}${round === 2 ? " (round 2)" : ""}`,
+      );
     },
     setDayTripCustomerLoadNumber: (tripId, key, n) => {
       patchPlan((p) => {

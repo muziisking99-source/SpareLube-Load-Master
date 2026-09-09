@@ -32,6 +32,7 @@ import { customerKey, findCustomerKey } from "@/lib/customers";
 import {
   compareByLoadingNumber,
   loadingNumberFor,
+  round2DaySequenceKey,
 } from "@/lib/loadingOrder";
 import { townsForTruckDay, tripById, tripIdForInvoice, tripIdsForTruckDay, tripNamesForTruckDay, sharedTripIds, townsFromTripIds, TOWN_FILTER_NONE } from "@/lib/trips";
 import type { Invoice, Truck, TruckDay, Trip } from "@/lib/types";
@@ -633,8 +634,12 @@ function TruckWorkbench({
 
   const truckInvoices = useMemo(() => {
     if (!focusTruck) return [];
-    return planInvoices
-      .filter((i) => i.truckId === focusTruck.id)
+    return planInvoices.filter((i) => i.truckId === focusTruck.id);
+  }, [planInvoices, focusTruck]);
+
+  const round1 = useMemo(() => {
+    return truckInvoices
+      .filter((i) => (i.round ?? 1) === 1)
       .sort((a, b) => {
         const tripA = tripIdForInvoice(a, focusTruckDay, trips);
         const tripB = tripIdForInvoice(b, focusTruckDay, trips);
@@ -649,8 +654,7 @@ function TruckWorkbench({
         );
       });
   }, [
-    planInvoices,
-    focusTruck,
+    truckInvoices,
     focusTruckDay,
     customers,
     trips,
@@ -658,8 +662,44 @@ function TruckWorkbench({
     dayStopSequence,
   ]);
 
-  const round1 = truckInvoices.filter((i) => (i.round ?? 1) === 1);
-  const round2 = truckInvoices.filter((i) => (i.round ?? 1) === 2);
+  const round2TripId =
+    focusTruckDay?.round2TripId ??
+    (truckInvoices.find((i) => (i.round ?? 1) === 2)
+      ? tripIdForInvoice(
+          truckInvoices.find((i) => (i.round ?? 1) === 2)!,
+          focusTruckDay,
+          trips,
+        )
+      : null);
+
+  const round2 = useMemo(() => {
+    return truckInvoices
+      .filter((i) => (i.round ?? 1) === 2)
+      .sort((a, b) => {
+        const tripA = round2TripId ?? tripIdForInvoice(a, focusTruckDay, trips);
+        const tripB = round2TripId ?? tripIdForInvoice(b, focusTruckDay, trips);
+        const seqKey = tripA ? round2DaySequenceKey(tripA) : null;
+        return compareByLoadingNumber(
+          customers,
+          a,
+          b,
+          tripA,
+          trips,
+          dayStopOrder,
+          dayStopSequence,
+          seqKey,
+        );
+      });
+  }, [
+    truckInvoices,
+    focusTruckDay,
+    customers,
+    trips,
+    dayStopOrder,
+    dayStopSequence,
+    round2TripId,
+  ]);
+
   const weight = round1.reduce((s, i) => s + i.weight, 0);
   const pct = focusTruck?.maxWeight ? (weight / focusTruck.maxWeight) * 100 : 0;
   const barTone = pct >= 95 ? "bg-crit" : pct >= 80 ? "bg-warn" : "bg-good";
@@ -685,16 +725,26 @@ function TruckWorkbench({
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || assignedTripIds.length === 0 || active.id === over.id) return;
-    // Day stop reorder is Round 1 only.
-    const oldIndex = round1.findIndex((i) => i.id === active.id);
-    const newIndex = round1.findIndex((i) => i.id === over.id);
+
+    const inRound1 = round1.some((i) => i.id === active.id);
+    const inRound2 = round2.some((i) => i.id === active.id);
+    if (!inRound1 && !inRound2) return;
+
+    const list = inRound2 ? round2 : round1;
+    const oldIndex = list.findIndex((i) => i.id === active.id);
+    const newIndex = list.findIndex((i) => i.id === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
-    const reordered = arrayMove(round1, oldIndex, newIndex);
-    const activeInv = round1.find((i) => i.id === active.id);
-    const sequenceTripId = activeInv
-      ? tripIdForInvoice(activeInv, focusTruckDay, trips)
-      : assignedTripIds[0];
+
+    const reordered = arrayMove(list, oldIndex, newIndex);
+    const activeInv = list.find((i) => i.id === active.id);
+    const sequenceTripId = inRound2
+      ? round2TripId ??
+        (activeInv ? tripIdForInvoice(activeInv, focusTruckDay, trips) : null)
+      : activeInv
+        ? tripIdForInvoice(activeInv, focusTruckDay, trips)
+        : assignedTripIds[0];
     if (!sequenceTripId) return;
+
     const nextKeys: string[] = [];
     const seen = new Set<string>();
     for (const inv of reordered) {
@@ -703,7 +753,9 @@ function TruckWorkbench({
       seen.add(key);
       nextKeys.push(key);
     }
-    setDayTripStopSequence(sequenceTripId, nextKeys);
+    setDayTripStopSequence(sequenceTripId, nextKeys, {
+      round: inRound2 ? 2 : 1,
+    });
   }
 
   function confirmSecondRound(tripId: string) {
@@ -975,42 +1027,49 @@ function TruckWorkbench({
                   </SortableContext>
 
                   {round2.length > 0 && (
-                    <TableBody>
-                      <TableRow className="bg-panel-2/30 hover:bg-panel-2/30">
-                        <TableCell
-                          colSpan={isAdjust ? 9 : 6}
-                          className="py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground"
-                        >
-                          Round 2 ({round2.length})
-                        </TableCell>
-                      </TableRow>
-                      {round2.map((i) => {
-                        const invoiceTripId = tripIdForInvoice(i, focusTruckDay, trips);
-                        return (
-                          <SortableTruckInvoiceRow
-                            key={i.id}
-                            inv={i}
-                            isAdjust={isAdjust}
-                            tripId={invoiceTripId}
-                            customers={customers}
-                            trips={trips}
-                            dayStopOrder={dayStopOrder}
-                            checked={selected.includes(i.id)}
-                            highlightProps={highlightProps(i.id)}
-                            draggable={false}
-                            onToggleSelect={() => onToggleSelect(i.id)}
-                            onSetLoad={(key, n) =>
-                              invoiceTripId &&
-                              setDayTripCustomerLoadNumber(invoiceTripId, key, n)
-                            }
-                            onSetComment={(comment) => updateInvoice(i.id, { comment })}
-                            customerKeyFor={customerKeyFor}
-                            onMoveInvoice={() => onMoveInvoice(i)}
-                            onUnallocate={() => onUnallocate(i)}
-                          />
-                        );
-                      })}
-                    </TableBody>
+                    <SortableContext
+                      items={round2.map((i) => i.id)}
+                      strategy={verticalListSortingStrategy}
+                      disabled={!isAdjust || assignedTripIds.length === 0}
+                    >
+                      <TableBody>
+                        <TableRow className="bg-panel-2/30 hover:bg-panel-2/30">
+                          <TableCell
+                            colSpan={isAdjust ? 9 : 6}
+                            className="py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground"
+                          >
+                            Round 2 ({round2.length})
+                          </TableCell>
+                        </TableRow>
+                        {round2.map((i) => {
+                          const invoiceTripId =
+                            round2TripId ?? tripIdForInvoice(i, focusTruckDay, trips);
+                          return (
+                            <SortableTruckInvoiceRow
+                              key={i.id}
+                              inv={i}
+                              isAdjust={isAdjust}
+                              tripId={invoiceTripId}
+                              customers={customers}
+                              trips={trips}
+                              dayStopOrder={dayStopOrder}
+                              checked={selected.includes(i.id)}
+                              highlightProps={highlightProps(i.id)}
+                              draggable={isAdjust}
+                              onToggleSelect={() => onToggleSelect(i.id)}
+                              onSetLoad={(key, n) =>
+                                invoiceTripId &&
+                                setDayTripCustomerLoadNumber(invoiceTripId, key, n)
+                              }
+                              onSetComment={(comment) => updateInvoice(i.id, { comment })}
+                              customerKeyFor={customerKeyFor}
+                              onMoveInvoice={() => onMoveInvoice(i)}
+                              onUnallocate={() => onUnallocate(i)}
+                            />
+                          );
+                        })}
+                      </TableBody>
+                    </SortableContext>
                   )}
                 </Table>
               </DndContext>
@@ -1018,8 +1077,8 @@ function TruckWorkbench({
           )}
           {isAdjust && assignedTripIds.length > 0 && truckInvoices.length > 0 && (
             <p className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
-              Drag rows to reorder this day only (Load # stays as typed). Admin → Trips is
-              unchanged.
+              Drag Round 1 or Round 2 rows to reorder this day only (Load # stays as typed).
+              Admin → Trips is unchanged.
             </p>
           )}
         </section>

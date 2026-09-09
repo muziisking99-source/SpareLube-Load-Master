@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ArrowLeft, Printer } from "lucide-react";
 import { useStore } from "@/lib/store";
-import { compareByLoadingNumber, loadingNumberFor } from "@/lib/loadingOrder";
+import { compareByLoadingNumber, loadingNumberFor, round2DaySequenceKey } from "@/lib/loadingOrder";
 import {
   tripById,
   tripIdForInvoice,
@@ -524,19 +524,19 @@ export function PrintScreen() {
     });
   }
 
-  /** Truck sheets: load # lowest → highest; invoices without a load # last. */
+  /** Truck sheets: day drag sequence (per round) → load #; invoices without a load # last. */
   function sortInvoices(
     list: typeof plan.invoices,
     truckDay?: (typeof plan.truckDay)[number],
     fixedTripId?: string | null,
+    round: 1 | 2 = 1,
   ) {
     return [...list].sort((a, b) => {
       const tripA =
         fixedTripId ??
         (truckDay ? tripIdForInvoice(a, truckDay, trips) : null);
-      const tripB =
-        fixedTripId ??
-        (truckDay ? tripIdForInvoice(b, truckDay, trips) : null);
+      const seqKey =
+        round === 2 && tripA ? round2DaySequenceKey(tripA) : undefined;
       return compareByLoadingNumber(
         customers,
         a,
@@ -545,6 +545,7 @@ export function PrintScreen() {
         trips,
         plan.dayStopOrder,
         plan.dayStopSequence,
+        seqKey,
       );
     });
   }
@@ -556,12 +557,15 @@ export function PrintScreen() {
     const r1 = sortInvoices(
       onTruck.filter((i) => (i.round ?? 1) === 1),
       truckDay,
+      null,
+      1,
     );
     const r2TripId = truckDay?.round2TripId ?? null;
     const r2 = sortInvoices(
       onTruck.filter((i) => (i.round ?? 1) === 2),
       truckDay,
       r2TripId,
+      2,
     );
     return {
       truck: t,
