@@ -107,6 +107,11 @@ export type Plan = {
   locked: boolean;
   createdAt: string;
   step: PlanStep;
+  /**
+   * Optimistic lock — must match cloud before save; bumped after successful push.
+   * Missing/legacy plans default to 1.
+   */
+  version?: number;
 };
 
 /** Normalize plan.dayStopOrder from JSON / legacy plans. */

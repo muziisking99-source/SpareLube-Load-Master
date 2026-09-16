@@ -89,7 +89,7 @@ function AdminPage() {
 
   useEffect(() => {
     const flushPending = () => {
-      void useStore.getState().flushSave();
+      void useStore.getState().flushSave({ keepalive: true });
     };
     const onVisibility = () => {
       if (document.visibilityState === "hidden") flushPending();

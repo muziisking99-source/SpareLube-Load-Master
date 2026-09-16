@@ -135,7 +135,7 @@ export function TopBar({
             }
             className="h-8 focus-visible:ring-primary/40"
             aria-label="Search doc, customer, or town"
-            aria-expanded={showDropdown}
+            aria-expanded={!!showDropdown}
             aria-controls="search-results-list"
             aria-autocomplete="list"
             role="combobox"

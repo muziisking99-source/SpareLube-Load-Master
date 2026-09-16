@@ -11,7 +11,62 @@ import { normalizeCustomer, normalizeDayStopOrder, normalizeDayStopSequence, nor
 import { customerKey } from "./customers";
 import { normalizeTrip } from "./trips";
 import { getSupabase, isCloudConfigured } from "./supabase";
-import { loadKey, saveKey } from "./db";
+import { loadKey, saveKey, saveKeySoft } from "./db";
+
+/** Thrown when cloud rejects a plan write because another client saved first. */
+export class PlanSyncConflictError extends Error {
+  dates: string[];
+  remotes: Record<string, Plan>;
+  constructor(dates: string[], remotes: Record<string, Plan>) {
+    super(`Plan conflict on ${dates.join(", ")}`);
+    this.name = "PlanSyncConflictError";
+    this.dates = dates;
+    this.remotes = remotes;
+  }
+}
+
+/** Thrown when upsert would silently drop columns — keep dirty, do not claim Saved. */
+export class SchemaOutdatedError extends Error {
+  constructor(detail?: string) {
+    super(
+      detail
+        ? `Cloud schema outdated — run migrations (${detail})`
+        : "Cloud schema outdated — run migrations",
+    );
+    this.name = "SchemaOutdatedError";
+  }
+}
+
+/** Dates the user confirmed may overwrite a newer cloud plan. */
+const forceOverwritePlanDates = new Set<string>();
+let lastPlanConflict: { dates: string[]; remotes: Record<string, Plan> } | null = null;
+let lastSyncedPlanVersions: Record<string, number> = {};
+let lastPersistErrorMessage = "";
+
+export function forcePlanOverwrite(dates: string[]): void {
+  for (const d of dates) forceOverwritePlanDates.add(d);
+}
+
+export function takePlanConflict(): {
+  dates: string[];
+  remotes: Record<string, Plan>;
+} | null {
+  const c = lastPlanConflict;
+  lastPlanConflict = null;
+  return c;
+}
+
+export function takeSyncedPlanVersions(): Record<string, number> {
+  const v = lastSyncedPlanVersions;
+  lastSyncedPlanVersions = {};
+  return v;
+}
+
+export function takePersistErrorMessage(): string {
+  const m = lastPersistErrorMessage;
+  lastPersistErrorMessage = "";
+  return m;
+}
 
 const MIGRATED_KEY = "lp:cloudMigrated";
 const DIRTY_KEY = "lp:cloudDirty";
@@ -33,7 +88,7 @@ export type CloudSnapshot = {
   adminPin: string;
 };
 
-export type CloudStatus = "offline" | "local" | "cloud" | "error";
+export type CloudStatus = "offline" | "local" | "cloud" | "error" | "conflict";
 
 export type DirtySlice =
   | "trucks"
@@ -51,6 +106,7 @@ type DirtyFlags = {
   deletedTruckIds: Set<string>;
   deletedTripIds: Set<string>;
   deletedCustomerIds: Set<string>;
+  deletedAreaNames: Set<string>;
   pendingAuditIds: Set<string>;
   pruneAudit: boolean;
 };
@@ -62,6 +118,7 @@ type DirtyPersisted = {
   deletedTruckIds: string[];
   deletedTripIds: string[];
   deletedCustomerIds: string[];
+  deletedAreaNames: string[];
   pendingAuditIds: string[];
   pruneAudit: boolean;
 };
@@ -74,6 +131,7 @@ function emptyDirty(): DirtyFlags {
     deletedTruckIds: new Set(),
     deletedTripIds: new Set(),
     deletedCustomerIds: new Set(),
+    deletedAreaNames: new Set(),
     pendingAuditIds: new Set(),
     pruneAudit: false,
   };
@@ -86,6 +144,7 @@ function dirtyHasWork(f: DirtyFlags): boolean {
     f.deletedTruckIds.size > 0 ||
     f.deletedTripIds.size > 0 ||
     f.deletedCustomerIds.size > 0 ||
+    f.deletedAreaNames.size > 0 ||
     f.pendingAuditIds.size > 0 ||
     f.pruneAudit
   );
@@ -99,6 +158,7 @@ function serializeDirty(f: DirtyFlags): DirtyPersisted {
     deletedTruckIds: [...f.deletedTruckIds],
     deletedTripIds: [...f.deletedTripIds],
     deletedCustomerIds: [...f.deletedCustomerIds],
+    deletedAreaNames: [...f.deletedAreaNames],
     pendingAuditIds: [...f.pendingAuditIds],
     pruneAudit: f.pruneAudit,
   };
@@ -113,6 +173,7 @@ function deserializeDirty(raw: DirtyPersisted | null | undefined): DirtyFlags {
   for (const id of raw.deletedTruckIds ?? []) f.deletedTruckIds.add(id);
   for (const id of raw.deletedTripIds ?? []) f.deletedTripIds.add(id);
   for (const id of raw.deletedCustomerIds ?? []) f.deletedCustomerIds.add(id);
+  for (const n of raw.deletedAreaNames ?? []) f.deletedAreaNames.add(n);
   for (const id of raw.pendingAuditIds ?? []) f.pendingAuditIds.add(id);
   f.pruneAudit = !!raw.pruneAudit;
   return f;
@@ -129,18 +190,23 @@ function scheduleDirtyPersist(): void {
     mergeDirty(mergeDirty(dirty, queuedDirty), inFlightDirty),
   );
   dirtyPersistTail = dirtyPersistTail.then(async () => {
-    if (
-      snapshot.slices.length === 0 &&
-      snapshot.deletedPlanDates.length === 0 &&
-      snapshot.deletedTruckIds.length === 0 &&
-      snapshot.deletedTripIds.length === 0 &&
-      snapshot.deletedCustomerIds.length === 0 &&
-      snapshot.pendingAuditIds.length === 0 &&
-      !snapshot.pruneAudit
-    ) {
-      await saveKey(DIRTY_KEY, null);
-    } else {
-      await saveKey(DIRTY_KEY, snapshot);
+    try {
+      if (
+        snapshot.slices.length === 0 &&
+        snapshot.deletedPlanDates.length === 0 &&
+        snapshot.deletedTruckIds.length === 0 &&
+        snapshot.deletedTripIds.length === 0 &&
+        snapshot.deletedCustomerIds.length === 0 &&
+        snapshot.deletedAreaNames.length === 0 &&
+        snapshot.pendingAuditIds.length === 0 &&
+        !snapshot.pruneAudit
+      ) {
+        await saveKey(DIRTY_KEY, null);
+      } else {
+        await saveKey(DIRTY_KEY, snapshot);
+      }
+    } catch (err) {
+      console.error("Failed to persist dirty flags to IndexedDB", err);
     }
   });
 }
@@ -154,6 +220,7 @@ export function markDirty(
     deletedTruckId?: string;
     deletedTripId?: string;
     deletedCustomerId?: string;
+    deletedAreaName?: string;
     auditId?: string;
     pruneAudit?: boolean;
   },
@@ -165,6 +232,7 @@ export function markDirty(
   if (opts?.deletedTruckId) dirty.deletedTruckIds.add(opts.deletedTruckId);
   if (opts?.deletedTripId) dirty.deletedTripIds.add(opts.deletedTripId);
   if (opts?.deletedCustomerId) dirty.deletedCustomerIds.add(opts.deletedCustomerId);
+  if (opts?.deletedAreaName) dirty.deletedAreaNames.add(opts.deletedAreaName);
   if (opts?.auditId) dirty.pendingAuditIds.add(opts.auditId);
   if (opts?.pruneAudit) dirty.pruneAudit = true;
   scheduleDirtyPersist();
@@ -219,6 +287,8 @@ function mergeDirty(a: DirtyFlags, b: DirtyFlags): DirtyFlags {
   for (const id of b.deletedTripIds) out.deletedTripIds.add(id);
   for (const id of a.deletedCustomerIds) out.deletedCustomerIds.add(id);
   for (const id of b.deletedCustomerIds) out.deletedCustomerIds.add(id);
+  for (const n of a.deletedAreaNames) out.deletedAreaNames.add(n);
+  for (const n of b.deletedAreaNames) out.deletedAreaNames.add(n);
   for (const id of a.pendingAuditIds) out.pendingAuditIds.add(id);
   for (const id of b.pendingAuditIds) out.pendingAuditIds.add(id);
   out.pruneAudit = a.pruneAudit || b.pruneAudit;
@@ -256,11 +326,11 @@ async function loadLastSyncAt(): Promise<string | null> {
 }
 
 async function saveLastSyncAt(iso: string): Promise<void> {
-  await saveKey(LAST_SYNC_KEY, iso);
+  await saveKeySoft(LAST_SYNC_KEY, iso);
 }
 
 async function clearLastSyncAt(): Promise<void> {
-  await saveKey(LAST_SYNC_KEY, null);
+  await saveKeySoft(LAST_SYNC_KEY, null);
 }
 
 function planHasBody(p: Plan): boolean {
@@ -286,6 +356,7 @@ function planStubFromRow(row: {
   locked?: boolean;
   created_at?: string;
   step?: Plan["step"];
+  version?: number;
 }): Plan {
   return {
     date: row.date,
@@ -298,6 +369,7 @@ function planStubFromRow(row: {
     locked: !!row.locked,
     createdAt: row.created_at ?? new Date().toISOString(),
     step: row.step ?? "setup",
+    version: typeof row.version === "number" && row.version >= 1 ? row.version : 1,
   };
 }
 
@@ -312,6 +384,7 @@ function planFromFullRow(row: {
   step?: Plan["step"];
   day_stop_order?: unknown;
   day_stop_sequence?: unknown;
+  version?: number;
 }): Plan {
   return normalizePlans({
     [row.date]: {
@@ -325,6 +398,7 @@ function planFromFullRow(row: {
       locked: !!row.locked,
       createdAt: row.created_at ?? new Date().toISOString(),
       step: row.step ?? "setup",
+      version: typeof row.version === "number" && row.version >= 1 ? row.version : 1,
     },
   })[row.date];
 }
@@ -404,11 +478,14 @@ function mergePlansByDate(
 type PlanSelectTier = "full" | "stub";
 
 const PLAN_SELECT_FULL =
+  "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence,version,updated_at";
+const PLAN_SELECT_FULL_NO_VER =
   "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence";
 const PLAN_SELECT_MID = "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order";
 const PLAN_SELECT_TRIP = "date,areas,truck_day,invoices,locked,created_at,step,trip_ids";
 const PLAN_SELECT_BASE = "date,areas,truck_day,invoices,locked,created_at,step";
-const PLAN_SELECT_STUB = "date,locked,created_at,step";
+const PLAN_SELECT_STUB = "date,locked,created_at,step,version";
+const PLAN_SELECT_STUB_BASE = "date,locked,created_at,step";
 
 async function queryPlans(
   tier: PlanSelectTier,
@@ -422,8 +499,8 @@ async function queryPlans(
   const sb = getSupabase()!;
   const selects =
     tier === "stub"
-      ? [PLAN_SELECT_STUB]
-      : [PLAN_SELECT_FULL, PLAN_SELECT_MID, PLAN_SELECT_TRIP, PLAN_SELECT_BASE];
+      ? [PLAN_SELECT_STUB, PLAN_SELECT_STUB_BASE]
+      : [PLAN_SELECT_FULL, PLAN_SELECT_FULL_NO_VER, PLAN_SELECT_MID, PLAN_SELECT_TRIP, PLAN_SELECT_BASE];
   for (const sel of selects) {
     let q = sb.from("plans").select(sel);
     if (filters.gteDate) q = q.gte("date", filters.gteDate);
@@ -432,7 +509,11 @@ async function queryPlans(
     if (filters.gtUpdatedAt) q = q.gt("updated_at", filters.gtUpdatedAt);
     const { data, error } = await q;
     if (!error) return data ?? [];
-    if (!/day_stop_sequence|day_stop_order|trip_ids|schema cache|does not exist/i.test(error.message)) {
+    if (
+      !/day_stop_sequence|day_stop_order|trip_ids|version|updated_at|schema cache|does not exist/i.test(
+        error.message,
+      )
+    ) {
       throw error;
     }
   }
@@ -473,6 +554,8 @@ function normalizePlans(raw: Record<string, Plan>): Record<string, Plan> {
         (p as Plan & { day_stop_sequence?: unknown }).dayStopSequence ??
           (p as Plan & { day_stop_sequence?: unknown }).day_stop_sequence,
       ),
+      version:
+        typeof p.version === "number" && p.version >= 1 ? Math.floor(p.version) : 1,
     };
   }
   return plans;
@@ -596,10 +679,21 @@ export async function fetchPlanFromCloud(date: string): Promise<Plan | null> {
   let { data, error } = await sb
     .from("plans")
     .select(
-      "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence",
+      "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence,version",
     )
     .eq("date", date)
     .maybeSingle();
+  if (error && /version|schema cache|does not exist/i.test(error.message)) {
+    const noVer = await sb
+      .from("plans")
+      .select(
+        "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence",
+      )
+      .eq("date", date)
+      .maybeSingle();
+    data = noVer.data as typeof data;
+    error = noVer.error;
+  }
   if (error && /day_stop_sequence|schema cache|does not exist/i.test(error.message)) {
     const mid = await sb
       .from("plans")
@@ -639,6 +733,7 @@ export async function fetchPlanFromCloud(date: string): Promise<Plan | null> {
     step?: Plan["step"];
     day_stop_order?: unknown;
     day_stop_sequence?: unknown;
+    version?: number;
   };
   return normalizePlans({
     [date]: {
@@ -652,6 +747,7 @@ export async function fetchPlanFromCloud(date: string): Promise<Plan | null> {
       locked: !!row.locked,
       createdAt: row.created_at ?? new Date().toISOString(),
       step: row.step ?? "setup",
+      version: typeof row.version === "number" && row.version >= 1 ? row.version : 1,
     },
   })[date];
 }
@@ -690,7 +786,7 @@ async function fetchTripsFromCloud(lastSync: string | null, force: boolean) {
   if (tripsRes.error && /stop_order|schema cache|does not exist/i.test(tripsRes.error.message)) {
     let q = sb.from("trips").select("id,name,towns,updated_at");
     if (lastSync && !force) q = q.gt("updated_at", lastSync);
-    tripsRes = await q;
+    tripsRes = (await q) as typeof tripsRes;
   } else if (lastSync && !force) {
     tripsRes = await sb
       .from("trips")
@@ -787,7 +883,7 @@ export async function hydrateFromCloud(
             .from("customers")
             .select("id,code,name,default_area,loading_number,first_seen,updated_at");
           if (lastSync && !force) fq = fq.gt("updated_at", lastSync);
-          res = await fq;
+          res = (await fq) as typeof res;
         }
         return res;
       })(),
@@ -918,7 +1014,7 @@ export async function hydrateFromCloud(
         if (res.error && /collection|schema cache|does not exist/i.test(res.error.message)) {
           let fq = sb.from("customers").select("id,code,name,default_area,loading_number,first_seen");
           if (lastSync && !force) fq = fq.gt("updated_at", lastSync);
-          res = await fq;
+          res = (await fq) as typeof res;
         }
         return res;
       })(),
@@ -1042,22 +1138,21 @@ export async function hydrateFromCloud(
   return snapshot;
 }
 
-async function syncAreas(s: CloudSnapshot): Promise<void> {
+async function syncAreas(s: CloudSnapshot, flags: DirtyFlags): Promise<void> {
   const sb = getSupabase()!;
-  const { data: existingAreas, error: areasReadErr } = await sb.from("areas").select("name");
-  if (areasReadErr) throw areasReadErr;
-  const wantAreas = new Set(s.areaHistory.filter(Boolean));
-  if (wantAreas.size === 0 && (existingAreas?.length ?? 0) > 0) return;
-  const haveAreas = new Set((existingAreas ?? []).map((a) => a.name));
-  const areasToDelete = [...haveAreas].filter((n) => !wantAreas.has(n));
-  if (areasToDelete.length) {
-    const { error } = await sb.from("areas").delete().in("name", areasToDelete);
+  const explicitDeletes = [...flags.deletedAreaNames];
+  if (explicitDeletes.length) {
+    const { error } = await sb.from("areas").delete().in("name", explicitDeletes);
     if (error) throw error;
   }
-  if (wantAreas.size) {
+  const wantAreas = [...new Set(s.areaHistory.filter(Boolean))];
+  if (wantAreas.length) {
     const { error } = await sb
       .from("areas")
-      .upsert([...wantAreas].map((name) => ({ name })), { onConflict: "name" });
+      .upsert(
+        wantAreas.map((name) => ({ name })),
+        { onConflict: "name" },
+      );
     if (error) throw error;
   }
 }
@@ -1066,28 +1161,13 @@ async function syncTrucks(s: CloudSnapshot, now: string, flags: DirtyFlags): Pro
   const sb = getSupabase()!;
   const explicitDeletes = [...flags.deletedTruckIds];
 
-  if (s.trucks.length === 0) {
-    // Never wipe the whole table — only honor explicit deletes (e.g. last truck removed).
-    if (explicitDeletes.length) {
-      const { error } = await sb.from("trucks").delete().in("id", explicitDeletes);
-      if (error) throw error;
-    }
-    return;
-  }
-
-  const { data: existingTrucks, error: trucksReadErr } = await sb.from("trucks").select("id");
-  if (trucksReadErr) throw trucksReadErr;
-  const wantTruckIds = new Set(s.trucks.map((t) => t.id));
-  const trucksToDelete = [
-    ...new Set([
-      ...explicitDeletes,
-      ...(existingTrucks ?? []).map((t) => t.id).filter((id) => !wantTruckIds.has(id)),
-    ]),
-  ];
-  if (trucksToDelete.length) {
-    const { error } = await sb.from("trucks").delete().in("id", trucksToDelete);
+  if (explicitDeletes.length) {
+    const { error } = await sb.from("trucks").delete().in("id", explicitDeletes);
     if (error) throw error;
   }
+
+  if (s.trucks.length === 0) return;
+
   try {
     await upsertInChunks(
       "trucks",
@@ -1103,18 +1183,10 @@ async function syncTrucks(s: CloudSnapshot, now: string, flags: DirtyFlags): Pro
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (!/sheet_letter|schema cache|does not exist/i.test(msg)) throw err;
-    await upsertInChunks(
-      "trucks",
-      s.trucks.map((t) => ({
-        id: t.id,
-        name: t.name,
-        max_weight: t.maxWeight,
-        active: t.active,
-        updated_at: now,
-      })),
-      "id",
-    );
+    if (/sheet_letter|schema cache|does not exist/i.test(msg)) {
+      throw new SchemaOutdatedError("trucks.sheet_letter");
+    }
+    throw err;
   }
 }
 
@@ -1122,30 +1194,14 @@ async function syncTrips(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
   const sb = getSupabase()!;
   const explicitDeletes = [...flags.deletedTripIds];
 
-  if (s.trips.length === 0) {
-    if (explicitDeletes.length) {
-      const { error } = await sb.from("trips").delete().in("id", explicitDeletes);
-      if (error && !/does not exist|schema cache/i.test(error.message)) throw error;
-      // Schema-cache / missing table: don't pretend the delete succeeded
-      if (error) throw error;
-    }
-    return;
-  }
-
-  const { data: existingTrips, error: tripsReadErr } = await sb.from("trips").select("id");
-  // Never treat "can't read trips" as a successful sync — that clears dirty and resurrects deletes
-  if (tripsReadErr) throw tripsReadErr;
-  const wantTripIds = new Set(s.trips.map((t) => t.id));
-  const tripsToDelete = [
-    ...new Set([
-      ...explicitDeletes,
-      ...(existingTrips ?? []).map((t) => t.id).filter((id) => !wantTripIds.has(id)),
-    ]),
-  ];
-  if (tripsToDelete.length) {
-    const { error } = await sb.from("trips").delete().in("id", tripsToDelete);
+  if (explicitDeletes.length) {
+    const { error } = await sb.from("trips").delete().in("id", explicitDeletes);
+    if (error && !/does not exist|schema cache/i.test(error.message)) throw error;
     if (error) throw error;
   }
+
+  if (s.trips.length === 0) return;
+
   try {
     await upsertInChunks(
       "trips",
@@ -1161,19 +1217,9 @@ async function syncTrips(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (/stop_order|schema cache|does not exist/i.test(msg)) {
-      await upsertInChunks(
-        "trips",
-        s.trips.map((t) => ({
-          id: t.id,
-          name: t.name,
-          towns: t.towns,
-          updated_at: now,
-        })),
-        "id",
-      );
-    } else {
-      throw err;
+      throw new SchemaOutdatedError("trips.stop_order");
     }
+    throw err;
   }
 }
 
@@ -1182,31 +1228,16 @@ async function syncCustomers(s: CloudSnapshot, now: string, flags: DirtyFlags): 
   const ids = Object.keys(s.customers);
   const explicitDeletes = [...flags.deletedCustomerIds];
 
-  if (ids.length === 0) {
-    if (explicitDeletes.length) {
-      for (let i = 0; i < explicitDeletes.length; i += UPSERT_CHUNK) {
-        const chunk = explicitDeletes.slice(i, i + UPSERT_CHUNK);
-        const { error } = await sb.from("customers").delete().in("id", chunk);
-        if (error) throw error;
-      }
+  if (explicitDeletes.length) {
+    for (let i = 0; i < explicitDeletes.length; i += UPSERT_CHUNK) {
+      const chunk = explicitDeletes.slice(i, i + UPSERT_CHUNK);
+      const { error } = await sb.from("customers").delete().in("id", chunk);
+      if (error) throw error;
     }
-    return;
   }
 
-  const { data: existingCustomers, error: custReadErr } = await sb.from("customers").select("id");
-  if (custReadErr) throw custReadErr;
-  const wantCustIds = new Set(ids);
-  const custToDelete = [
-    ...new Set([
-      ...explicitDeletes,
-      ...(existingCustomers ?? []).map((c) => c.id).filter((id) => !wantCustIds.has(id)),
-    ]),
-  ];
-  for (let i = 0; i < custToDelete.length; i += UPSERT_CHUNK) {
-    const chunk = custToDelete.slice(i, i + UPSERT_CHUNK);
-    const { error } = await sb.from("customers").delete().in("id", chunk);
-    if (error) throw error;
-  }
+  if (ids.length === 0) return;
+
   const withCollection = Object.entries(s.customers).map(([id, c]) => ({
     id,
     code: c.code ?? "",
@@ -1221,13 +1252,28 @@ async function syncCustomers(s: CloudSnapshot, now: string, flags: DirtyFlags): 
     await upsertInChunks("customers", withCollection, "id");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (!/collection|schema cache|does not exist/i.test(msg)) throw err;
-    await upsertInChunks(
-      "customers",
-      withCollection.map(({ collection: _c, ...rest }) => rest),
-      "id",
-    );
+    if (/collection|schema cache|does not exist/i.test(msg)) {
+      throw new SchemaOutdatedError("customers.collection");
+    }
+    throw err;
   }
+}
+
+function planRowPayload(p: Plan, now: string, version: number) {
+  return {
+    date: p.date,
+    areas: p.areas ?? [],
+    trip_ids: p.tripIds ?? [],
+    day_stop_order: p.dayStopOrder ?? {},
+    day_stop_sequence: p.dayStopSequence ?? {},
+    truck_day: p.truckDay ?? [],
+    invoices: p.invoices ?? [],
+    locked: !!p.locked,
+    created_at: p.createdAt || now,
+    step: p.step || "setup",
+    updated_at: now,
+    version,
+  };
 }
 
 async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Promise<void> {
@@ -1240,96 +1286,123 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
     if (error) throw error;
   }
 
-  const planRows = dates
-    .map((d) => s.plans[d])
-    .filter(Boolean)
-    .map((p) => ({
-      date: p.date,
-      areas: p.areas ?? [],
-      trip_ids: p.tripIds ?? [],
-      day_stop_order: p.dayStopOrder ?? {},
-      day_stop_sequence: p.dayStopSequence ?? {},
-      truck_day: p.truckDay ?? [],
-      invoices: p.invoices ?? [],
-      locked: !!p.locked,
-      created_at: p.createdAt || now,
-      step: p.step || "setup",
-      updated_at: now,
-    }));
-  if (planRows.length) {
-    try {
-      await upsertInChunks("plans", planRows, "date");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/day_stop_sequence|schema cache|does not exist/i.test(msg)) {
-        try {
-          await upsertInChunks(
-            "plans",
-            planRows.map(({ day_stop_sequence: _s, ...rest }) => rest),
-            "date",
-          );
-        } catch (err2) {
-          const msg2 = err2 instanceof Error ? err2.message : String(err2);
-          if (/day_stop_order|schema cache|does not exist/i.test(msg2)) {
-            try {
-              await upsertInChunks(
-                "plans",
-                planRows.map(({ day_stop_sequence: _s, day_stop_order: _d, ...rest }) => rest),
-                "date",
-              );
-            } catch (err3) {
-              const msg3 = err3 instanceof Error ? err3.message : String(err3);
-              if (!/trip_ids|schema cache|does not exist/i.test(msg3)) throw err3;
-              await upsertInChunks(
-                "plans",
-                planRows.map(
-                  ({ day_stop_sequence: _s, day_stop_order: _d, trip_ids: _t, ...rest }) => rest,
-                ),
-                "date",
-              );
-            }
-          } else if (!/trip_ids|schema cache|does not exist/i.test(msg2)) {
-            throw err2;
-          } else {
-            await upsertInChunks(
-              "plans",
-              planRows.map(
-                ({ day_stop_sequence: _s, day_stop_order: _d, trip_ids: _t, ...rest }) => rest,
-              ),
-              "date",
-            );
-          }
-        }
-      } else if (/day_stop_order|schema cache|does not exist/i.test(msg)) {
-        try {
-          await upsertInChunks(
-            "plans",
-            planRows.map(({ day_stop_order: _d, day_stop_sequence: _s, ...rest }) => rest),
-            "date",
-          );
-        } catch (err2) {
-          const msg2 = err2 instanceof Error ? err2.message : String(err2);
-          if (!/trip_ids|schema cache|does not exist/i.test(msg2)) throw err2;
-          await upsertInChunks(
-            "plans",
-            planRows.map(
-              ({ day_stop_order: _d, day_stop_sequence: _s, trip_ids: _t, ...rest }) => rest,
-            ),
-            "date",
-          );
-        }
-      } else if (!/trip_ids|schema cache|does not exist/i.test(msg)) {
-        throw err;
-      } else {
-        await upsertInChunks(
-          "plans",
-          planRows.map(
-            ({ trip_ids: _t, day_stop_order: _d, day_stop_sequence: _s, ...rest }) => rest,
-          ),
-          "date",
-        );
+  const conflictDates: string[] = [];
+  const conflictRemotes: Record<string, Plan> = {};
+
+  for (const date of dates) {
+    const p = s.plans[date];
+    if (!p) continue;
+
+    const expected = typeof p.version === "number" && p.version >= 1 ? p.version : 1;
+    const force = forceOverwritePlanDates.has(date);
+
+    type RemotePlanRow = {
+      date: string;
+      version?: number;
+      areas?: string[];
+      trip_ids?: string[];
+      truck_day?: TruckDay[];
+      invoices?: Plan["invoices"];
+      locked?: boolean;
+      created_at?: string;
+      step?: Plan["step"];
+      day_stop_order?: unknown;
+      day_stop_sequence?: unknown;
+    };
+
+    let remoteRow: RemotePlanRow | null = null;
+
+    {
+      const { data, error } = await sb
+        .from("plans")
+        .select(
+          "date,areas,truck_day,invoices,locked,created_at,step,trip_ids,day_stop_order,day_stop_sequence,version",
+        )
+        .eq("date", date)
+        .maybeSingle();
+      if (error && /version|schema cache|does not exist/i.test(error.message)) {
+        throw new SchemaOutdatedError("plans.version");
       }
+      if (error) throw error;
+      remoteRow = (data as RemotePlanRow | null) ?? null;
     }
+
+    const remoteVersion =
+      remoteRow && typeof remoteRow.version === "number" && remoteRow.version >= 1
+        ? remoteRow.version
+        : remoteRow
+          ? 1
+          : null;
+
+    if (remoteRow && remoteVersion != null && !force && remoteVersion !== expected) {
+      conflictDates.push(date);
+      conflictRemotes[date] = planFromFullRow(remoteRow);
+      continue;
+    }
+
+    // Insert new plans at version 1; updates bump expected → expected+1 (or remote+1 when forced)
+    const writeVersion = remoteRow
+      ? force
+        ? (remoteVersion ?? expected) + 1
+        : expected + 1
+      : 1;
+
+    const payload = planRowPayload(p, now, writeVersion);
+
+    try {
+      if (!remoteRow) {
+        const { error } = await sb.from("plans").insert(payload as never);
+        if (error) {
+          if (/version|day_stop_sequence|day_stop_order|trip_ids|schema cache|does not exist/i.test(error.message)) {
+            throw new SchemaOutdatedError(error.message);
+          }
+          // Unique violation — someone inserted concurrently
+          if (/duplicate|23505/i.test(error.message)) {
+            const again = await fetchPlanFromCloud(date);
+            if (again) {
+              conflictDates.push(date);
+              conflictRemotes[date] = again;
+              continue;
+            }
+          }
+          throw error;
+        }
+      } else {
+        const matchVersion = force ? (remoteVersion ?? expected) : expected;
+        const { data, error } = await sb
+          .from("plans")
+          .update(payload as never)
+          .eq("date", date)
+          .eq("version", matchVersion)
+          .select("date");
+        if (error) {
+          if (/version|day_stop_sequence|day_stop_order|trip_ids|schema cache|does not exist/i.test(error.message)) {
+            throw new SchemaOutdatedError(error.message);
+          }
+          throw error;
+        }
+        if (!data?.length) {
+          const again = await fetchPlanFromCloud(date);
+          if (again) {
+            conflictDates.push(date);
+            conflictRemotes[date] = again;
+            continue;
+          }
+          throw new Error(`Plan update matched 0 rows for ${date}`);
+        }
+      }
+    } catch (err) {
+      if (err instanceof SchemaOutdatedError || err instanceof PlanSyncConflictError) throw err;
+      throw err;
+    }
+
+    lastSyncedPlanVersions[date] = writeVersion;
+    forceOverwritePlanDates.delete(date);
+  }
+
+  if (conflictDates.length) {
+    lastPlanConflict = { dates: conflictDates, remotes: conflictRemotes };
+    throw new PlanSyncConflictError(conflictDates, conflictRemotes);
   }
 }
 
@@ -1405,7 +1478,7 @@ export async function persistToCloud(s: CloudSnapshot, flags?: DirtyFlags): Prom
 
   const now = new Date().toISOString();
   const tasks: Promise<void>[] = [];
-  if (f.slices.has("areas")) tasks.push(syncAreas(s));
+  if (f.slices.has("areas")) tasks.push(syncAreas(s, f));
   if (f.slices.has("trucks")) tasks.push(syncTrucks(s, now, f));
   if (f.slices.has("trips")) tasks.push(syncTrips(s, now, f));
   if (f.slices.has("customers")) tasks.push(syncCustomers(s, now, f));
@@ -1525,12 +1598,12 @@ export async function hydrateWarehouse(opts?: {
     if (!cloudHasData(cloud) && snapshotHasData(local) && !migratedFlag) {
       markAllDirty(local);
       await persistToCloud(local, takeDirty());
-      await saveKey(MIGRATED_KEY, true);
+      await saveKeySoft(MIGRATED_KEY, true);
       await saveKey(DIRTY_KEY, null);
       cloud = local;
       migrated = true;
     } else if (cloudHasData(cloud) && !migratedFlag) {
-      await saveKey(MIGRATED_KEY, true);
+      await saveKeySoft(MIGRATED_KEY, true);
     }
 
     const needsRecovery =
@@ -1606,7 +1679,7 @@ export function getDirtySummary(): string {
   if (f.slices.has("trucks") || f.deletedTruckIds.size) parts.push("trucks");
   if (f.slices.has("trips") || f.deletedTripIds.size) parts.push("trips");
   if (f.slices.has("customers") || f.deletedCustomerIds.size) parts.push("customers");
-  if (f.slices.has("areas")) parts.push("towns");
+  if (f.slices.has("areas") || f.deletedAreaNames.size) parts.push("towns");
   if (f.slices.has("plans") || f.planDates.size || f.deletedPlanDates.size) {
     const dates = [...f.planDates, ...f.deletedPlanDates].slice(0, 2);
     parts.push(dates.length ? `plan ${dates.join(", ")}` : "plans");
@@ -1644,6 +1717,17 @@ async function persistToCloudIfNeeded(
     console.error("Cloud persist failed", err);
     dirty = mergeDirty(dirty, flags);
     scheduleDirtyPersist();
+    if (err instanceof PlanSyncConflictError) {
+      lastPlanConflict = { dates: err.dates, remotes: err.remotes };
+      lastPersistErrorMessage = `Plan conflict on ${err.dates.join(", ")}`;
+      return "conflict";
+    }
+    if (err instanceof SchemaOutdatedError) {
+      lastPersistErrorMessage = err.message;
+    } else {
+      lastPersistErrorMessage =
+        err instanceof Error ? err.message : "Cloud sync failed";
+    }
     return "error";
   }
 }
@@ -1651,13 +1735,19 @@ async function persistToCloudIfNeeded(
 export async function persistWarehouse(
   s: CloudSnapshot,
   generation?: number,
-  opts?: { skipLocal?: boolean; skipCloud?: boolean },
+  opts?: { skipLocal?: boolean; skipCloud?: boolean; keepalive?: boolean },
 ): Promise<CloudStatus> {
   const gen = generation ?? bumpSyncGeneration();
   latestGeneration = Math.max(latestGeneration, gen);
 
   if (!opts?.skipLocal) {
-    await saveLocalSnapshot(s);
+    try {
+      await saveLocalSnapshot(s);
+    } catch (err) {
+      console.error("IndexedDB save failed", err);
+      lastPersistErrorMessage = "Local save failed — changes may be lost if you close this tab";
+      return "error";
+    }
   }
 
   // Local-only write: keep dirty flags for the cloud debounce.
@@ -1673,6 +1763,11 @@ export async function persistWarehouse(
   queuedDirty = mergeDirty(queuedDirty, flags);
   // Persist tombstones immediately so a reload mid-sync can't resurrect deletes
   scheduleDirtyPersist();
+
+  if (opts?.keepalive) {
+    // Best-effort PostgREST write that can outlive the tab (same version — no bump).
+    void persistKeepaliveSnapshot(s, flags);
+  }
 
   const runQueue = async (): Promise<CloudStatus> => {
     let status: CloudStatus = "local";
@@ -1706,6 +1801,97 @@ export async function persistWarehouse(
 
 export function requestAuditPrune(): void {
   markDirty(["audit"], { pruneAudit: true });
+}
+
+/** Soft-check remote plan versions for focus refresh (no dirty overwrite). */
+export async function peekRemotePlanVersions(
+  dates: string[],
+): Promise<Record<string, number>> {
+  const sb = getSupabase();
+  if (!sb || dates.length === 0) return {};
+  const { data, error } = await sb.from("plans").select("date,version").in("date", dates);
+  if (error) {
+    if (/version|schema cache|does not exist/i.test(error.message)) return {};
+    throw error;
+  }
+  const out: Record<string, number> = {};
+  for (const row of data ?? []) {
+    const r = row as { date: string; version?: number };
+    out[r.date] = typeof r.version === "number" && r.version >= 1 ? r.version : 1;
+  }
+  return out;
+}
+
+/**
+ * Exit-path best-effort cloud write via fetch keepalive.
+ * Writes current version (no bump) so a later versioned sync can still ACK cleanly.
+ */
+async function persistKeepaliveSnapshot(
+  s: CloudSnapshot,
+  flags: DirtyFlags,
+): Promise<void> {
+  const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  if (!url || !key) return;
+  if (typeof navigator !== "undefined" && !navigator.onLine) return;
+
+  const now = new Date().toISOString();
+  const headers: Record<string, string> = {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
+    Prefer: "resolution=merge-duplicates",
+  };
+
+  const post = (table: string, rows: Record<string, unknown>[]) => {
+    if (!rows.length) return Promise.resolve();
+    return fetch(`${url}/rest/v1/${table}?on_conflict=${table === "plans" ? "date" : "id"}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(rows),
+      keepalive: true,
+    }).then(() => undefined);
+  };
+
+  const tasks: Promise<void>[] = [];
+  if (flags.slices.has("plans") || flags.planDates.size) {
+    const dates = flags.planDates.size > 0 ? [...flags.planDates] : Object.keys(s.plans);
+    const rows = dates
+      .map((d) => s.plans[d])
+      .filter(Boolean)
+      .map((p) => planRowPayload(p, now, typeof p.version === "number" && p.version >= 1 ? p.version : 1));
+    tasks.push(post("plans", rows));
+  }
+  if (flags.slices.has("trucks") && s.trucks.length) {
+    tasks.push(
+      post(
+        "trucks",
+        s.trucks.map((t) => ({
+          id: t.id,
+          name: t.name,
+          max_weight: t.maxWeight,
+          active: t.active,
+          sheet_letter: normalizeSheetLetter(t.sheetLetter),
+          updated_at: now,
+        })),
+      ),
+    );
+  }
+  if (flags.slices.has("trips") && s.trips.length) {
+    tasks.push(
+      post(
+        "trips",
+        s.trips.map((t) => ({
+          id: t.id,
+          name: t.name,
+          towns: t.towns,
+          stop_order: t.stopOrder ?? {},
+          updated_at: now,
+        })),
+      ),
+    );
+  }
+  await Promise.allSettled(tasks);
 }
 
 export { emptySnapshot, isCloudConfigured };

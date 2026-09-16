@@ -42,13 +42,28 @@ import {
   requestAuditPrune,
   isPlanDeletePending,
   getDirtySummary,
+  forcePlanOverwrite,
+  takePlanConflict,
+  takeSyncedPlanVersions,
+  takePersistErrorMessage,
+  peekRemotePlanVersions,
   type CloudStatus,
   type CloudSnapshot,
 } from "./cloudSync";
 import { isCloudConfigured } from "./supabase";
+import {
+  acquirePlanLease,
+  releasePlanLease,
+  type PlanLeaseInfo,
+} from "./planLease";
 import { toast } from "sonner";
 
-export type SyncState = "saved" | "saving" | "offline" | "error" | "local";
+export type SyncState = "saved" | "saving" | "offline" | "error" | "local" | "conflict";
+
+export type PlanConflictState = {
+  dates: string[];
+  remotes: Record<string, Plan>;
+};
 
 function tomorrowISO(): string {
   const d = new Date();
@@ -72,6 +87,7 @@ function emptyPlan(date: string): Plan {
     locked: false,
     createdAt: new Date().toISOString(),
     step: "setup",
+    version: 1,
   };
 }
 
@@ -84,6 +100,13 @@ type State = {
   syncState: SyncState;
   lastSyncedAt: string | null;
   pendingSummary: string;
+  /** Set when hydrate restored unsynced local work — UI shows a one-shot toast. */
+  restoredUnsaved: boolean;
+  planConflict: PlanConflictState | null;
+  /** Active plan-day edit lease (null if cloud/leases unavailable). */
+  planLease: PlanLeaseInfo | null;
+  /** True when another editor holds the lease for currentDate. */
+  leaseBlocked: boolean;
   trucks: Truck[];
   trips: Trip[];
   customers: Record<string, CustomerMemory>;
@@ -101,7 +124,15 @@ type State = {
   /** Hydrate from cloud/IDB. Skips if already hydrated unless force. Won't overwrite dirty local. */
   hydrate: (opts?: { force?: boolean }) => Promise<void>;
   /** Flush pending debounce and await cloud/IDB persist. */
-  flushSave: () => Promise<CloudStatus>;
+  flushSave: (opts?: { keepalive?: boolean }) => Promise<CloudStatus>;
+  /** Soft-check if cloud has a newer plan version while tab is focused. */
+  softRefreshPlan: () => Promise<void>;
+  /** Resolve plan version conflict: reload cloud or force-keep local. */
+  resolvePlanConflict: (choice: "reload" | "keep") => Promise<void>;
+  clearRestoredUnsaved: () => void;
+  /** Acquire / renew / steal plan-day edit lease. */
+  ensurePlanLease: (opts?: { steal?: boolean }) => Promise<boolean>;
+  releaseCurrentLease: () => Promise<void>;
   currentPlan: () => Plan;
 
   // trucks
@@ -311,7 +342,13 @@ function markDirtyFromPatch(patch: Partial<State>, prev: State) {
       if (!nextIds.has(id)) markDirty(["customers"], { deletedCustomerId: id });
     }
   }
-  if (patch.areaHistory !== undefined) markDirty(["areas"]);
+  if (patch.areaHistory !== undefined) {
+    markDirty(["areas"]);
+    const next = new Set(patch.areaHistory);
+    for (const name of prev.areaHistory) {
+      if (!next.has(name)) markDirty(["areas"], { deletedAreaName: name });
+    }
+  }
   if (
     patch.heldInvoices !== undefined ||
     patch.adminPin !== undefined ||
@@ -345,9 +382,25 @@ function clearRetryTimer() {
   }
 }
 
+function applySyncedVersions() {
+  const versions = takeSyncedPlanVersions();
+  const dates = Object.keys(versions);
+  if (!dates.length) return;
+  useStore.setState((s) => {
+    const plans = { ...s.plans };
+    for (const d of dates) {
+      const p = plans[d];
+      if (!p) continue;
+      plans[d] = { ...p, version: versions[d] };
+    }
+    return { plans };
+  });
+}
+
 function applyPersistResult(status: CloudStatus, opts?: { cloudAttempt?: boolean }) {
   const summary = getDirtySummary();
   const dirty = isWarehouseDirty();
+  const errMsg = takePersistErrorMessage();
 
   if (status === "offline") {
     useStore.setState({
@@ -359,12 +412,29 @@ function applyPersistResult(status: CloudStatus, opts?: { cloudAttempt?: boolean
     return;
   }
 
+  if (status === "conflict") {
+    const conflict = takePlanConflict();
+    useStore.setState({
+      cloudStatus: "error",
+      syncState: "conflict",
+      pendingSummary: errMsg || summary || "Plan conflict — choose Reload or Keep",
+      planConflict: conflict,
+    });
+    clearRetryTimer();
+    if (conflict) {
+      toast.error(`Cloud has a newer plan for ${conflict.dates.join(", ")}`, {
+        duration: 12_000,
+      });
+    }
+    return;
+  }
+
   if (status === "error") {
     if (errorSinceMs == null) errorSinceMs = Date.now();
     useStore.setState({
       cloudStatus: "error",
       syncState: "error",
-      pendingSummary: summary || "Sync failed — click to retry",
+      pendingSummary: errMsg || summary || "Sync failed — click to retry",
     });
     if (!failureToastShown && errorSinceMs != null && Date.now() - errorSinceMs >= 30_000) {
       failureToastShown = true;
@@ -389,11 +459,13 @@ function applyPersistResult(status: CloudStatus, opts?: { cloudAttempt?: boolean
     errorSinceMs = null;
     failureToastShown = false;
     clearRetryTimer();
+    applySyncedVersions();
     useStore.setState({
       cloudStatus: "cloud",
       syncState: "saved",
       lastSyncedAt: new Date().toISOString(),
       pendingSummary: "",
+      planConflict: null,
     });
     return;
   }
@@ -413,11 +485,13 @@ function applyPersistResult(status: CloudStatus, opts?: { cloudAttempt?: boolean
     errorSinceMs = null;
     failureToastShown = false;
     clearRetryTimer();
+    applySyncedVersions();
     useStore.setState({
       cloudStatus: "cloud",
       syncState: "saved",
       lastSyncedAt: new Date().toISOString(),
       pendingSummary: "",
+      planConflict: null,
     });
   }
 }
@@ -465,7 +539,7 @@ function scheduleSave() {
   }, CLOUD_DEBOUNCE_MS);
 }
 
-async function flushSaveNow(): Promise<CloudStatus> {
+async function flushSaveNow(opts?: { keepalive?: boolean }): Promise<CloudStatus> {
   if (localSaveTimer) {
     clearTimeout(localSaveTimer);
     localSaveTimer = null;
@@ -487,7 +561,9 @@ async function flushSaveNow(): Promise<CloudStatus> {
   const state = useStore.getState();
   const gen = pendingGeneration || bumpSyncGeneration();
   pendingGeneration = gen;
-  const status = await persistWarehouse(toSnapshot(state), gen);
+  const status = await persistWarehouse(toSnapshot(state), gen, {
+    keepalive: opts?.keepalive,
+  });
   applyPersistResult(status, { cloudAttempt: true });
   return status;
 }
@@ -495,6 +571,10 @@ async function flushSaveNow(): Promise<CloudStatus> {
 export const useStore = create<State>((set, get) => {
   const persist = () => scheduleSave();
   const mutate = (fn: (s: State) => Partial<State> | void) => {
+    if (get().leaseBlocked) {
+      toast.message("View only — another editor has this day");
+      return;
+    }
     set((s) => {
       const patch = fn(s);
       if (patch) markDirtyFromPatch(patch, s);
@@ -529,6 +609,10 @@ export const useStore = create<State>((set, get) => {
     syncState: "local",
     lastSyncedAt: null,
     pendingSummary: "",
+    restoredUnsaved: false,
+    planConflict: null,
+    planLease: null,
+    leaseBlocked: false,
     trucks: [],
     trips: [],
     customers: {},
@@ -553,6 +637,7 @@ export const useStore = create<State>((set, get) => {
 
       try {
         const preferLocal = isWarehouseDirty();
+        const hadDirtyBefore = preferLocal;
         const { snapshot, status, runPhaseB } = await hydrateWarehouse({
           preferLocal,
           force,
@@ -560,6 +645,7 @@ export const useStore = create<State>((set, get) => {
         // If we preferred local because dirty, keep in-memory state (already newer)
         if (preferLocal && already) {
           applyPersistResult(status, { cloudAttempt: status === "cloud" });
+          if (hadDirtyBefore) set({ restoredUnsaved: true });
           return;
         }
         const {
@@ -585,13 +671,16 @@ export const useStore = create<State>((set, get) => {
               ? "offline"
               : status === "error"
                 ? "error"
-                : "local";
+                : status === "conflict"
+                  ? "conflict"
+                  : "local";
         set({
           hydrated: true,
-          cloudStatus: status,
+          cloudStatus: status === "conflict" ? "error" : status,
           syncState,
           lastSyncedAt: status === "cloud" && !runPhaseB ? new Date().toISOString() : get().lastSyncedAt,
           pendingSummary: runPhaseB ? "Loading customers & history…" : "",
+          restoredUnsaved: hadDirtyBefore,
           trucks,
           trips: (trips ?? []).map((t) => normalizeTrip(t)),
           customers,
@@ -629,12 +718,102 @@ export const useStore = create<State>((set, get) => {
             }
           })();
         }
+
+        void get().ensurePlanLease();
       } catch {
         set({ hydrated: true, cloudStatus: "error", syncState: "error" });
       }
     },
 
-    flushSave: () => flushSaveNow(),
+    flushSave: (opts) => flushSaveNow(opts),
+
+    clearRestoredUnsaved: () => set({ restoredUnsaved: false }),
+
+    softRefreshPlan: async () => {
+      if (!isCloudConfigured()) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) return;
+      if (isWarehouseDirty()) return;
+      const date = get().currentDate;
+      const local = get().plans[date];
+      if (!local) return;
+      try {
+        const remote = await peekRemotePlanVersions([date]);
+        const remoteVer = remote[date];
+        if (remoteVer == null) return;
+        const localVer = local.version ?? 1;
+        if (remoteVer <= localVer) return;
+        toast.message("Plan updated elsewhere — Reload", {
+          action: {
+            label: "Reload",
+            onClick: () => {
+              void (async () => {
+                const cloudPlan = await fetchPlanFromCloud(date);
+                if (!cloudPlan) return;
+                set((s) => ({
+                  plans: { ...s.plans, [date]: cloudPlan },
+                }));
+                await saveLocalSnapshot(toSnapshot(get()));
+                toast.success("Reloaded plan from cloud");
+              })();
+            },
+          },
+          duration: 12_000,
+        });
+      } catch (err) {
+        console.warn("softRefreshPlan failed", err);
+      }
+    },
+
+    resolvePlanConflict: async (choice) => {
+      const conflict = get().planConflict;
+      if (!conflict) return;
+      if (choice === "reload") {
+        const plans = { ...get().plans };
+        for (const d of conflict.dates) {
+          const remote = conflict.remotes[d] ?? (await fetchPlanFromCloud(d));
+          if (remote) plans[d] = remote;
+        }
+        set({ plans, planConflict: null, syncState: "saved", pendingSummary: "" });
+        await saveLocalSnapshot(toSnapshot(get()));
+        toast.success("Loaded cloud plan");
+        return;
+      }
+      forcePlanOverwrite(conflict.dates);
+      set({ planConflict: null, syncState: "saving", pendingSummary: "Saving your version…" });
+      const status = await flushSaveNow();
+      if (status === "cloud") toast.success("Kept this device and saved");
+      else if (status === "conflict") toast.error("Still conflicting — try Reload");
+    },
+
+    ensurePlanLease: async (opts) => {
+      const date = get().currentDate;
+      if (!date) return true;
+      try {
+        const result = await acquirePlanLease(date, opts);
+        if (result.ok) {
+          set({ planLease: result.lease, leaseBlocked: false });
+          return true;
+        }
+        set({ planLease: result.lease, leaseBlocked: true });
+        return false;
+      } catch (err) {
+        console.warn("ensurePlanLease failed", err);
+        set({ planLease: null, leaseBlocked: false });
+        return true;
+      }
+    },
+
+    releaseCurrentLease: async () => {
+      const date = get().currentDate;
+      const lease = get().planLease;
+      if (!date || !lease?.heldByUs) return;
+      try {
+        await releasePlanLease(date);
+      } catch (err) {
+        console.warn("releaseCurrentLease failed", err);
+      }
+      set({ planLease: null, leaseBlocked: false });
+    },
 
     currentPlan: () => {
       const s = get();
@@ -896,14 +1075,23 @@ export const useStore = create<State>((set, get) => {
       patchPlan((p) => ({ ...p, step }));
     },
     setDate: (date) => {
-      mutate((st) => {
+      const prevDate = get().currentDate;
+      if (prevDate && prevDate !== date && get().planLease?.heldByUs) {
+        void releasePlanLease(prevDate);
+      }
+      set((st) => {
         const existing = st.plans[date];
+        markDirty(["settings"]);
         return {
           currentDate: date,
           showResume: !!existing && !existing.locked && existing.invoices.length > 0,
+          planLease: null,
+          leaseBlocked: false,
         };
       });
+      persist();
       void (async () => {
+        await get().ensurePlanLease();
         const existing = get().plans[date];
         const looksLikeStub =
           !!existing &&

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { stepList, useStore } from "@/lib/store";
 import { isWarehouseDirty } from "@/lib/cloudSync";
+import { HEARTBEAT_MS } from "@/lib/planLease";
 import {
   buildSearchResults,
   scrollToSearchTarget,
@@ -19,6 +20,7 @@ import { Stepper } from "./Stepper";
 import { PlannerSkeleton } from "./PlannerSkeleton";
 import { StepTransition } from "./StepTransition";
 import { ResumeModal } from "./ResumeModal";
+import { LeaseBanner, PlanConflictBanner } from "./SyncBanners";
 
 export function Planner() {
   const hydrated = useStore((s) => s.hydrated);
@@ -33,6 +35,12 @@ export function Planner() {
   const newPlan = useStore((s) => s.newPlan);
   const ensureTruckDay = useStore((s) => s.ensureTruckDay);
   const undo = useStore((s) => s.undo);
+  const restoredUnsaved = useStore((s) => s.restoredUnsaved);
+  const clearRestoredUnsaved = useStore((s) => s.clearRestoredUnsaved);
+  const softRefreshPlan = useStore((s) => s.softRefreshPlan);
+  const ensurePlanLease = useStore((s) => s.ensurePlanLease);
+  const releaseCurrentLease = useStore((s) => s.releaseCurrentLease);
+  const leaseBlocked = useStore((s) => s.leaseBlocked);
   const [q, setQ] = useState("");
   const [snapshotOpen, setSnapshotOpen] = useState(true);
 
@@ -52,9 +60,23 @@ export function Planner() {
   }, [hydrate]);
 
   useEffect(() => {
+    if (!hydrated || !restoredUnsaved) return;
+    toast.message("Restored unsaved work from this device");
+    clearRestoredUnsaved();
+  }, [hydrated, restoredUnsaved, clearRestoredUnsaved]);
+
+  useEffect(() => {
     if (!hydrated) return;
-    // Errors are surfaced via SyncStatusChip + auto-retry toast; avoid noisy mount toasts.
-  }, [hydrated]);
+    void ensurePlanLease();
+  }, [hydrated, currentDate, ensurePlanLease]);
+
+  useEffect(() => {
+    if (!hydrated || leaseBlocked) return;
+    const id = window.setInterval(() => {
+      void ensurePlanLease();
+    }, HEARTBEAT_MS);
+    return () => window.clearInterval(id);
+  }, [hydrated, leaseBlocked, ensurePlanLease, currentDate]);
 
   useEffect(() => {
     const onOnline = () => {
@@ -72,32 +94,41 @@ export function Planner() {
     const onOffline = () => {
       useStore.setState({ cloudStatus: "offline", syncState: "offline" });
     };
-    const flushPending = () => {
-      void useStore.getState().flushSave();
+    const flushPending = (keepalive?: boolean) => {
+      void useStore.getState().flushSave(keepalive ? { keepalive: true } : undefined);
     };
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") flushPending();
+      if (document.visibilityState === "hidden") {
+        flushPending(true);
+      } else if (document.visibilityState === "visible") {
+        void softRefreshPlan();
+        void ensurePlanLease();
+      }
     };
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      flushPending();
+      flushPending(true);
       if (isWarehouseDirty()) {
         e.preventDefault();
         e.returnValue = "";
       }
     };
+    const onPageHide = () => {
+      flushPending(true);
+      void releaseCurrentLease();
+    };
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", onOffline);
-    window.addEventListener("pagehide", flushPending);
+    window.addEventListener("pagehide", onPageHide);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => {
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
-      window.removeEventListener("pagehide", flushPending);
+      window.removeEventListener("pagehide", onPageHide);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
-  }, [hydrate]);
+  }, [hydrate, softRefreshPlan, ensurePlanLease, releaseCurrentLease]);
 
   useEffect(() => {
     if (hydrated && !plan) {
@@ -126,7 +157,8 @@ export function Planner() {
     [q, plan, heldInvoices],
   );
 
-  const searchDisabled = !plan || (plan.step === "setup" && plan.invoices.length === 0 && heldInvoices.length === 0);
+  const searchDisabled =
+    !plan || (plan.step === "setup" && plan.invoices.length === 0 && heldInvoices.length === 0);
 
   if (!hydrated || !plan) {
     return <PlannerSkeleton />;
@@ -145,6 +177,8 @@ export function Planner() {
         onSelectResult={handleSelectSearchResult}
         currentStep={step}
       />
+      <LeaseBanner />
+      <PlanConflictBanner />
       <Stepper current={step} onGo={setStep} locked={plan.locked} />
 
       <AssistantMobile />

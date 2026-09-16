@@ -1,4 +1,4 @@
-import { Cloud, CloudOff, Loader2, WifiOff } from "lucide-react";
+import { Cloud, CloudOff, Loader2, WifiOff, AlertTriangle } from "lucide-react";
 import { useStore, type SyncState } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -34,6 +34,8 @@ function chipMeta(state: SyncState): {
       return { text: "Saved", icon: Cloud, className: "text-good" };
     case "offline":
       return { text: "Offline", icon: WifiOff, className: "text-warn" };
+    case "conflict":
+      return { text: "Conflict", icon: AlertTriangle, className: "text-crit" };
     case "error":
       return { text: "Sync failed", icon: CloudOff, className: "text-crit" };
     default:
@@ -55,8 +57,10 @@ function chipTitle(
     }
     case "offline":
       return "Offline — saving on this device until you reconnect";
+    case "conflict":
+      return pendingSummary || "Plan conflict — resolve Reload / Keep this device";
     case "error":
-      return "Cloud sync failed — click to retry";
+      return pendingSummary || "Cloud sync failed — click to retry";
     default:
       return "Cloud not configured — data stays on this device";
   }
@@ -66,7 +70,9 @@ export function SyncStatusChip({ className }: { className?: string }) {
   const syncState = useStore((s) => s.syncState);
   const lastSyncedAt = useStore((s) => s.lastSyncedAt);
   const pendingSummary = useStore((s) => s.pendingSummary);
+  const planConflict = useStore((s) => s.planConflict);
   const flushSave = useStore((s) => s.flushSave);
+  const resolvePlanConflict = useStore((s) => s.resolvePlanConflict);
   const meta = chipMeta(syncState);
   const Icon = meta.icon;
 
@@ -75,9 +81,30 @@ export function SyncStatusChip({ className }: { className?: string }) {
       type="button"
       onClick={() => {
         void (async () => {
+          if (syncState === "conflict" && planConflict) {
+            // Prefer explicit resolve UI; chip click retries keep-local only if user already chose
+            toast.message(`Cloud has a newer plan for ${planConflict.dates.join(", ")}`, {
+              action: {
+                label: "Reload",
+                onClick: () => {
+                  void resolvePlanConflict("reload");
+                },
+              },
+              cancel: {
+                label: "Keep mine",
+                onClick: () => {
+                  void resolvePlanConflict("keep");
+                },
+              },
+              duration: 20_000,
+            });
+            return;
+          }
           const status = await flushSave();
           if (status === "cloud") {
             toast.success("Synced to cloud");
+          } else if (status === "conflict") {
+            toast.error("Plan conflict — choose Reload or Keep this device");
           } else if (status === "error") {
             toast.error("Cloud sync failed — will retry");
           } else if (status === "offline") {
