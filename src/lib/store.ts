@@ -45,6 +45,7 @@ import {
   forcePlanOverwrite,
   takePlanConflict,
   takeSyncedPlanVersions,
+  takeAdoptedPlans,
   takePersistErrorMessage,
   peekRemotePlanVersions,
   type CloudStatus,
@@ -384,17 +385,25 @@ function clearRetryTimer() {
 
 function applySyncedVersions() {
   const versions = takeSyncedPlanVersions();
-  const dates = Object.keys(versions);
-  if (!dates.length) return;
+  const adopted = takeAdoptedPlans();
+  const versionDates = Object.keys(versions);
+  const adoptedDates = Object.keys(adopted);
+  if (!versionDates.length && !adoptedDates.length) return;
   useStore.setState((s) => {
     const plans = { ...s.plans };
-    for (const d of dates) {
+    for (const d of adoptedDates) {
+      plans[d] = adopted[d]!;
+    }
+    for (const d of versionDates) {
       const p = plans[d];
       if (!p) continue;
+      // Don't clobber a full adopt with a bare version bump
+      if (adopted[d]) continue;
       plans[d] = { ...p, version: versions[d] };
     }
-    return { plans };
+    return { plans, planConflict: null };
   });
+  void saveLocalSnapshot(toSnapshot(useStore.getState()));
 }
 
 function applyPersistResult(status: CloudStatus, opts?: { cloudAttempt?: boolean }) {
@@ -414,6 +423,14 @@ function applyPersistResult(status: CloudStatus, opts?: { cloudAttempt?: boolean
 
   if (status === "conflict") {
     const conflict = takePlanConflict();
+    const prev = useStore.getState().planConflict;
+    const same =
+      prev &&
+      conflict &&
+      prev.dates.length === conflict.dates.length &&
+      prev.dates.every((d, i) => d === conflict.dates[i]);
+    // Keep versions for any plan dates that did save before the conflict was raised
+    applySyncedVersions();
     useStore.setState({
       cloudStatus: "error",
       syncState: "conflict",
@@ -421,7 +438,7 @@ function applyPersistResult(status: CloudStatus, opts?: { cloudAttempt?: boolean
       planConflict: conflict,
     });
     clearRetryTimer();
-    if (conflict) {
+    if (conflict && !same) {
       toast.error(`Cloud has a newer plan for ${conflict.dates.join(", ")}`, {
         duration: 12_000,
       });
@@ -681,6 +698,7 @@ export const useStore = create<State>((set, get) => {
           lastSyncedAt: status === "cloud" && !runPhaseB ? new Date().toISOString() : get().lastSyncedAt,
           pendingSummary: runPhaseB ? "Loading customers & history…" : "",
           restoredUnsaved: hadDirtyBefore,
+          planConflict: null,
           trucks,
           trips: (trips ?? []).map((t) => normalizeTrip(t)),
           customers,
@@ -1071,8 +1089,8 @@ export const useStore = create<State>((set, get) => {
     },
 
     setStep: (step) => {
-      void flushSaveNow();
       patchPlan((p) => ({ ...p, step }));
+      void flushSaveNow();
     },
     setDate: (date) => {
       const prevDate = get().currentDate;

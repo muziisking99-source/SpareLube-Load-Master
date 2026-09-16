@@ -41,6 +41,8 @@ export class SchemaOutdatedError extends Error {
 const forceOverwritePlanDates = new Set<string>();
 let lastPlanConflict: { dates: string[]; remotes: Record<string, Plan> } | null = null;
 let lastSyncedPlanVersions: Record<string, number> = {};
+/** Cloud plans silently adopted when local version lagged (non-current / bulk heal). */
+let lastAdoptedPlans: Record<string, Plan> = {};
 let lastPersistErrorMessage = "";
 
 export function forcePlanOverwrite(dates: string[]): void {
@@ -59,6 +61,12 @@ export function takePlanConflict(): {
 export function takeSyncedPlanVersions(): Record<string, number> {
   const v = lastSyncedPlanVersions;
   lastSyncedPlanVersions = {};
+  return v;
+}
+
+export function takeAdoptedPlans(): Record<string, Plan> {
+  const v = lastAdoptedPlans;
+  lastAdoptedPlans = {};
   return v;
 }
 
@@ -356,7 +364,7 @@ function planStubFromRow(row: {
   locked?: boolean;
   created_at?: string;
   step?: Plan["step"];
-  version?: number;
+  version?: unknown;
 }): Plan {
   return {
     date: row.date,
@@ -369,7 +377,7 @@ function planStubFromRow(row: {
     locked: !!row.locked,
     createdAt: row.created_at ?? new Date().toISOString(),
     step: row.step ?? "setup",
-    version: typeof row.version === "number" && row.version >= 1 ? row.version : 1,
+    version: normalizePlanVersion(row.version),
   };
 }
 
@@ -384,7 +392,7 @@ function planFromFullRow(row: {
   step?: Plan["step"];
   day_stop_order?: unknown;
   day_stop_sequence?: unknown;
-  version?: number;
+  version?: unknown;
 }): Plan {
   return normalizePlans({
     [row.date]: {
@@ -398,7 +406,7 @@ function planFromFullRow(row: {
       locked: !!row.locked,
       createdAt: row.created_at ?? new Date().toISOString(),
       step: row.step ?? "setup",
-      version: typeof row.version === "number" && row.version >= 1 ? row.version : 1,
+      version: normalizePlanVersion(row.version),
     },
   })[row.date];
 }
@@ -554,8 +562,9 @@ function normalizePlans(raw: Record<string, Plan>): Record<string, Plan> {
         (p as Plan & { day_stop_sequence?: unknown }).dayStopSequence ??
           (p as Plan & { day_stop_sequence?: unknown }).day_stop_sequence,
       ),
-      version:
-        typeof p.version === "number" && p.version >= 1 ? Math.floor(p.version) : 1,
+      version: normalizePlanVersion(
+        (p as Plan & { version?: unknown }).version,
+      ),
     };
   }
   return plans;
@@ -747,7 +756,7 @@ export async function fetchPlanFromCloud(date: string): Promise<Plan | null> {
       locked: !!row.locked,
       createdAt: row.created_at ?? new Date().toISOString(),
       step: row.step ?? "setup",
-      version: typeof row.version === "number" && row.version >= 1 ? row.version : 1,
+      version: normalizePlanVersion(row.version),
     },
   })[date];
 }
@@ -1276,9 +1285,17 @@ function planRowPayload(p: Plan, now: string, version: number) {
   };
 }
 
+/** Coerce plan version from JSON / PostgREST (number or numeric string). */
+export function normalizePlanVersion(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.floor(n);
+}
+
 async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Promise<void> {
   const sb = getSupabase()!;
-  const dates = flags.planDates.size > 0 ? [...flags.planDates] : Object.keys(s.plans);
+  // Only push explicitly dirty dates — never Object.keys(plans) (that conflict-spammed the archive).
+  const dates = [...flags.planDates];
   if (dates.length === 0 && flags.deletedPlanDates.size === 0) return;
 
   if (flags.deletedPlanDates.size > 0) {
@@ -1288,17 +1305,18 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
 
   const conflictDates: string[] = [];
   const conflictRemotes: Record<string, Plan> = {};
+  const currentDate = s.currentDate;
 
   for (const date of dates) {
     const p = s.plans[date];
     if (!p) continue;
 
-    const expected = typeof p.version === "number" && p.version >= 1 ? p.version : 1;
+    const expected = normalizePlanVersion(p.version);
     const force = forceOverwritePlanDates.has(date);
 
     type RemotePlanRow = {
       date: string;
-      version?: number;
+      version?: number | string;
       areas?: string[];
       trip_ids?: string[];
       truck_day?: TruckDay[];
@@ -1327,26 +1345,33 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
       remoteRow = (data as RemotePlanRow | null) ?? null;
     }
 
-    const remoteVersion =
-      remoteRow && typeof remoteRow.version === "number" && remoteRow.version >= 1
-        ? remoteRow.version
-        : remoteRow
-          ? 1
-          : null;
+    const remoteVersion = remoteRow ? normalizePlanVersion(remoteRow.version) : null;
 
-    if (remoteRow && remoteVersion != null && !force && remoteVersion !== expected) {
-      conflictDates.push(date);
-      conflictRemotes[date] = planFromFullRow(remoteRow);
+    // Cloud is ahead of this device.
+    if (remoteRow && remoteVersion != null && !force && remoteVersion > expected) {
+      const remotePlan = planFromFullRow(remoteRow);
+      // Only prompt for the day being edited. Archive / bulk leftovers adopt cloud quietly
+      // so we don't toast 20+ historical dates on every step change.
+      if (date === currentDate) {
+        conflictDates.push(date);
+        conflictRemotes[date] = remotePlan;
+      } else {
+        lastAdoptedPlans[date] = remotePlan;
+        lastSyncedPlanVersions[date] = remoteVersion;
+      }
       continue;
     }
 
-    // Insert new plans at version 1; updates bump expected → expected+1 (or remote+1 when forced)
-    const writeVersion = remoteRow
-      ? force
-        ? (remoteVersion ?? expected) + 1
-        : expected + 1
-      : 1;
+    const matchVersion =
+      remoteRow == null
+        ? null
+        : force
+          ? (remoteVersion ?? expected)
+          : remoteVersion != null && remoteVersion < expected
+            ? remoteVersion
+            : expected;
 
+    const writeVersion = remoteRow ? (matchVersion ?? expected) + 1 : 1;
     const payload = planRowPayload(p, now, writeVersion);
 
     try {
@@ -1356,24 +1381,51 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
           if (/version|day_stop_sequence|day_stop_order|trip_ids|schema cache|does not exist/i.test(error.message)) {
             throw new SchemaOutdatedError(error.message);
           }
-          // Unique violation — someone inserted concurrently
           if (/duplicate|23505/i.test(error.message)) {
             const again = await fetchPlanFromCloud(date);
             if (again) {
-              conflictDates.push(date);
-              conflictRemotes[date] = again;
+              const againVer = normalizePlanVersion(again.version);
+              if (againVer > expected && !force) {
+                if (date === currentDate) {
+                  conflictDates.push(date);
+                  conflictRemotes[date] = again;
+                } else {
+                  lastAdoptedPlans[date] = again;
+                  lastSyncedPlanVersions[date] = againVer;
+                }
+                continue;
+              }
+              const retryPayload = planRowPayload(p, now, againVer + 1);
+              const { data, error: upErr } = await sb
+                .from("plans")
+                .update(retryPayload as never)
+                .eq("date", date)
+                .eq("version", againVer)
+                .select("date");
+              if (upErr) throw upErr;
+              if (!data?.length) {
+                if (date === currentDate) {
+                  conflictDates.push(date);
+                  conflictRemotes[date] = again;
+                } else {
+                  lastAdoptedPlans[date] = again;
+                  lastSyncedPlanVersions[date] = againVer;
+                }
+                continue;
+              }
+              lastSyncedPlanVersions[date] = againVer + 1;
+              forceOverwritePlanDates.delete(date);
               continue;
             }
           }
           throw error;
         }
       } else {
-        const matchVersion = force ? (remoteVersion ?? expected) : expected;
         const { data, error } = await sb
           .from("plans")
           .update(payload as never)
           .eq("date", date)
-          .eq("version", matchVersion)
+          .eq("version", matchVersion!)
           .select("date");
         if (error) {
           if (/version|day_stop_sequence|day_stop_order|trip_ids|schema cache|does not exist/i.test(error.message)) {
@@ -1384,8 +1436,37 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
         if (!data?.length) {
           const again = await fetchPlanFromCloud(date);
           if (again) {
-            conflictDates.push(date);
-            conflictRemotes[date] = again;
+            const againVer = normalizePlanVersion(again.version);
+            if (againVer > expected && !force) {
+              if (date === currentDate) {
+                conflictDates.push(date);
+                conflictRemotes[date] = again;
+              } else {
+                lastAdoptedPlans[date] = again;
+                lastSyncedPlanVersions[date] = againVer;
+              }
+              continue;
+            }
+            const retryPayload = planRowPayload(p, now, againVer + 1);
+            const retry = await sb
+              .from("plans")
+              .update(retryPayload as never)
+              .eq("date", date)
+              .eq("version", againVer)
+              .select("date");
+            if (retry.error) throw retry.error;
+            if (!retry.data?.length) {
+              if (date === currentDate) {
+                conflictDates.push(date);
+                conflictRemotes[date] = again;
+              } else {
+                lastAdoptedPlans[date] = again;
+                lastSyncedPlanVersions[date] = againVer;
+              }
+              continue;
+            }
+            lastSyncedPlanVersions[date] = againVer + 1;
+            forceOverwritePlanDates.delete(date);
             continue;
           }
           throw new Error(`Plan update matched 0 rows for ${date}`);
@@ -1476,13 +1557,31 @@ export async function persistToCloud(s: CloudSnapshot, flags?: DirtyFlags): Prom
   }
   if (f.slices.size === 0) return;
 
+  // Stuck dirty from an earlier "sync all plans" bug: don't re-conflict the whole archive.
+  if (f.planDates.size > 5) {
+    const keep = new Set<string>();
+    if (s.currentDate && f.planDates.has(s.currentDate)) keep.add(s.currentDate);
+    for (const d of [...f.planDates]) {
+      if (!keep.has(d)) f.planDates.delete(d);
+    }
+    for (const bag of [dirty, queuedDirty]) {
+      for (const d of [...bag.planDates]) {
+        if (!keep.has(d)) bag.planDates.delete(d);
+      }
+    }
+    if (f.planDates.size === 0) f.slices.delete("plans");
+    scheduleDirtyPersist();
+  }
+
   const now = new Date().toISOString();
   const tasks: Promise<void>[] = [];
   if (f.slices.has("areas")) tasks.push(syncAreas(s, f));
   if (f.slices.has("trucks")) tasks.push(syncTrucks(s, now, f));
   if (f.slices.has("trips")) tasks.push(syncTrips(s, now, f));
   if (f.slices.has("customers")) tasks.push(syncCustomers(s, now, f));
-  if (f.slices.has("plans")) tasks.push(syncPlans(s, now, f));
+  if (f.slices.has("plans") || f.planDates.size > 0 || f.deletedPlanDates.size > 0) {
+    tasks.push(syncPlans(s, now, f));
+  }
   if (f.slices.has("settings")) tasks.push(syncSettings(s, now));
   await Promise.all(tasks);
   if (f.slices.has("audit")) await syncAuditAppend(s, f);
@@ -1816,8 +1915,8 @@ export async function peekRemotePlanVersions(
   }
   const out: Record<string, number> = {};
   for (const row of data ?? []) {
-    const r = row as { date: string; version?: number };
-    out[r.date] = typeof r.version === "number" && r.version >= 1 ? r.version : 1;
+    const r = row as { date: string; version?: unknown };
+    out[r.date] = normalizePlanVersion(r.version);
   }
   return out;
 }
@@ -1855,11 +1954,16 @@ async function persistKeepaliveSnapshot(
 
   const tasks: Promise<void>[] = [];
   if (flags.slices.has("plans") || flags.planDates.size) {
-    const dates = flags.planDates.size > 0 ? [...flags.planDates] : Object.keys(s.plans);
+    // Only dirty dates — never the full archive. Omit version (don't rewind locks).
+    const dates = [...flags.planDates];
     const rows = dates
       .map((d) => s.plans[d])
       .filter(Boolean)
-      .map((p) => planRowPayload(p, now, typeof p.version === "number" && p.version >= 1 ? p.version : 1));
+      .map((p) => {
+        const full = planRowPayload(p, now, normalizePlanVersion(p.version));
+        const { version: _version, ...rest } = full;
+        return rest;
+      });
     tasks.push(post("plans", rows));
   }
   if (flags.slices.has("trucks") && s.trucks.length) {
