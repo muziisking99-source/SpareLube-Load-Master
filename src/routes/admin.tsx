@@ -831,6 +831,7 @@ function AdminConsole({
                       <TableRow className="hover:bg-transparent">
                         <TableHead>Active</TableHead>
                         <TableHead>Name</TableHead>
+                        <TableHead className="w-20">Letter</TableHead>
                         <TableHead>Max Weight</TableHead>
                         <TableHead className="w-20" />
                       </TableRow>
@@ -849,6 +850,20 @@ function AdminConsole({
                               value={t.name}
                               onChange={(e) => updateTruck(t.id, { name: e.target.value })}
                               className="h-8"
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              value={t.sheetLetter ?? ""}
+                              maxLength={1}
+                              placeholder="—"
+                              onChange={(e) =>
+                                updateTruck(t.id, {
+                                  sheetLetter: e.target.value.toUpperCase().slice(0, 1),
+                                })
+                              }
+                              className="h-8 w-14 text-center font-semibold uppercase"
+                              aria-label={`Sheet letter for ${t.name}`}
                             />
                           </TableCell>
                           <TableCell>

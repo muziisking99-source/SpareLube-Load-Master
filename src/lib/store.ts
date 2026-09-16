@@ -9,7 +9,7 @@ import type {
   Truck,
   TruckDay,
 } from "./types";
-import { normalizeHeldInvoice, normalizeTruckDay } from "./types";
+import { normalizeHeldInvoice, normalizeTruckDay, normalizeSheetLetter } from "./types";
 import { allocate } from "./allocation";
 import {
   assignCustomerArea,
@@ -142,6 +142,8 @@ type State = {
   setTruckDayAreas: (truckId: string, areas: string[]) => void;
   /** @deprecated use setTruckDayTrip */
   setTruckDayArea: (truckId: string, area: string) => void;
+  /** Day-scoped lock for a truck on today's plan */
+  setTruckDayLocked: (truckId: string, locked: boolean) => void;
   /** Select which trips run today (Step 1). Derives plan.areas from trip towns. */
   setPlanTrips: (tripIds: string[]) => void;
   ensureTruckDay: () => void;
@@ -645,7 +647,11 @@ export const useStore = create<State>((set, get) => {
       log("truck.add", `Added truck ${truck.name}`);
     },
     updateTruck: (id, patch) => {
-      mutate((s) => ({ trucks: s.trucks.map((t) => (t.id === id ? { ...t, ...patch } : t)) }));
+      const next =
+        patch.sheetLetter !== undefined
+          ? { ...patch, sheetLetter: normalizeSheetLetter(patch.sheetLetter) }
+          : patch;
+      mutate((s) => ({ trucks: s.trucks.map((t) => (t.id === id ? { ...t, ...next } : t)) }));
     },
     deleteTruck: (id) => {
       mutate((s) => ({ trucks: s.trucks.filter((t) => t.id !== id) }));
@@ -977,6 +983,8 @@ export const useStore = create<State>((set, get) => {
           tripIds: clean,
           tripId: clean[0] ?? null,
           areas: areasForNext,
+          locked: exists?.locked,
+          round2TripId: exists?.round2TripId,
         });
         let truckDay = exists
           ? p.truckDay.map((t) => (t.truckId === truckId ? next : t))
@@ -1042,6 +1050,18 @@ export const useStore = create<State>((set, get) => {
     },
     setTruckDayArea: (truckId, area) => {
       get().setTruckDayAreas(truckId, area ? [area] : []);
+    },
+    setTruckDayLocked: (truckId, locked) => {
+      patchPlan((p) => {
+        const exists = p.truckDay.find((t) => t.truckId === truckId);
+        const truckDay = exists
+          ? p.truckDay.map((t) =>
+              t.truckId === truckId ? normalizeTruckDay({ ...t, locked }) : t,
+            )
+          : [...p.truckDay, normalizeTruckDay({ truckId, tripId: null, areas: [], locked })];
+        return { ...p, truckDay };
+      });
+      log("truck.day_lock", `${locked ? "Locked" : "Unlocked"} truck ${truckId} for day`);
     },
     ensureTruckDay: () => {
       const s = get();
@@ -1916,7 +1936,7 @@ export const useStore = create<State>((set, get) => {
         ...p,
         truckDay: p.truckDay.map((td) =>
           td.truckId === truckId
-            ? normalizeTruckDay({ ...td, round2TripId: tripId })
+            ? normalizeTruckDay({ ...td, round2TripId: tripId, locked: td.locked })
             : td,
         ),
       }));

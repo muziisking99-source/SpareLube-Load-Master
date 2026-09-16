@@ -549,6 +549,11 @@
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
+  .load-sheet-document .inv-credit-chip {
+    background: #fff4e5 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
   .load-sheet-document .load-sheet-logo {
     height: 40px;
     -webkit-print-color-adjust: exact;

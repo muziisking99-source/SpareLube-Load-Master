@@ -20,11 +20,19 @@ type LoadStop = {
   key: string;
   customer: string;
   area: string;
+  /** Total docs (invoices + credits) — for footer totals */
   count: number;
+  /** Non-credit docs only */
+  invoiceCount: number;
+  /** Credit notes / negative-weight docs */
+  creditCount: number;
   weight: number;
-  hasCredit: boolean;
   comment: string;
 };
+
+function isCreditDoc(inv: Invoice): boolean {
+  return !!inv.creditNote || inv.weight < 0;
+}
 
 /** Group invoices by customer, preserving load-number order from a sorted list. */
 function groupStopsForLoadSheet(list: Invoice[]): LoadStop[] {
@@ -39,8 +47,9 @@ function groupStopsForLoadSheet(list: Invoice[]): LoadStop[] {
         customer: inv.customer,
         area: inv.area,
         count: 0,
+        invoiceCount: 0,
+        creditCount: 0,
         weight: 0,
-        hasCredit: false,
         comment: "",
       };
       map.set(key, stop);
@@ -48,7 +57,8 @@ function groupStopsForLoadSheet(list: Invoice[]): LoadStop[] {
     }
     stop.count += 1;
     stop.weight += inv.weight || 0;
-    if (inv.creditNote || inv.weight < 0) stop.hasCredit = true;
+    if (isCreditDoc(inv)) stop.creditCount += 1;
+    else stop.invoiceCount += 1;
     const note = (inv.comment ?? "").trim();
     if (note && !stop.comment.split(" · ").includes(note)) {
       stop.comment = stop.comment ? `${stop.comment} · ${note}` : note;
@@ -168,7 +178,7 @@ function LoadStopsTable({
               <td>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                   <span>{stop.customer}</span>
-                  {stop.count > 1 && (
+                  {stop.invoiceCount >= 1 && (
                     <span
                       className="inv-count-chip"
                       style={{
@@ -181,12 +191,16 @@ function LoadStopsTable({
                         background: "#efefef",
                         border: "1px solid #bbb",
                       }}
-                      title={`${stop.count} invoices`}
+                      title={
+                        stop.invoiceCount === 1
+                          ? "1 invoice"
+                          : `${stop.invoiceCount} invoices`
+                      }
                     >
-                      {stop.count}
+                      {stop.invoiceCount > 1 ? stop.invoiceCount : "INV"}
                     </span>
                   )}
-                  {stop.hasCredit && (
+                  {stop.creditCount >= 1 && (
                     <span
                       className="inv-credit-chip"
                       style={{
@@ -199,9 +213,13 @@ function LoadStopsTable({
                         background: "#fff4e5",
                         border: "1px solid #d4a574",
                       }}
-                      title="Includes credit note"
+                      title={
+                        stop.creditCount === 1
+                          ? "1 credit note"
+                          : `${stop.creditCount} credit notes`
+                      }
                     >
-                      CR
+                      {stop.creditCount > 1 ? `CR×${stop.creditCount}` : "CR"}
                     </span>
                   )}
                 </span>
@@ -247,7 +265,7 @@ function LoadStopsTable({
 }
 
 type TruckSheetData = {
-  truck: { id: string; name: string };
+  truck: { id: string; name: string; sheetLetter?: string | null };
   truckDay: import("@/lib/types").TruckDay | undefined;
   rounds: Array<{
     round: 1 | 2;
@@ -325,13 +343,14 @@ function TruckSheetsContent({
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gridTemplateColumns: "repeat(4, 1fr)",
                   gap: "6px 16px",
                   marginBottom: 8,
                 }}
               >
                 <MetaField label="Date" value={planDate} />
                 <MetaField label="Truck" value={t.name} />
+                <MetaField label="Letter" value={t.sheetLetter?.trim() || "—"} />
                 <MetaField label="Trip" value={tripLabel} />
                 <MetaField label="Driver" blank />
                 <MetaField label="Petty cash" blank />

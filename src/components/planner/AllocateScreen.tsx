@@ -4,6 +4,8 @@ import {
   Ban,
   ChevronDown,
   GripVertical,
+  Lock,
+  LockOpen,
   Play,
   RotateCcw,
   Undo2,
@@ -91,6 +93,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const updateTruck = useStore((s) => s.updateTruck);
   const setTruckDayTrips = useStore((s) => s.setTruckDayTrips);
   const setTruckDayAreas = useStore((s) => s.setTruckDayAreas);
+  const setTruckDayLocked = useStore((s) => s.setTruckDayLocked);
   const ensureTruckDay = useStore((s) => s.ensureTruckDay);
 
   const [selected, setSelected] = useState<string[]>([]);
@@ -413,20 +416,39 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                       const splitActive =
                         !!sharedTrip &&
                         ((td?.areas?.length ?? 0) > 0);
+                      const truckLocked = !!td?.locked;
 
                       return (
                         <TableRow key={t.id} className={cn(!t.active && "opacity-50")}>
                           <TableCell>
                             <Checkbox
                               checked={t.active}
+                              disabled={readOnly || truckLocked}
                               onCheckedChange={(v) => updateTruck(t.id, { active: !!v })}
                             />
                           </TableCell>
-                          <TableCell className="font-medium">{t.name}</TableCell>
+                          <TableCell className="font-medium">
+                            <span className="inline-flex items-center gap-1.5">
+                              {t.name}
+                              {t.sheetLetter ? (
+                                <Badge variant="outline" className="text-[10px]">
+                                  {t.sheetLetter}
+                                </Badge>
+                              ) : null}
+                              {truckLocked ? (
+                                <Lock className="size-3 text-muted-foreground" aria-label="Locked" />
+                              ) : null}
+                            </span>
+                          </TableCell>
                           <TableCell className="metric-mono">{t.maxWeight}</TableCell>
                           <TableCell>
                             <TruckTripMultiSelect
-                              disabled={!t.active || planTrips.length === 0 || readOnly}
+                              disabled={
+                                !t.active ||
+                                planTrips.length === 0 ||
+                                readOnly ||
+                                truckLocked
+                              }
                               planTrips={planTrips}
                               selectedIds={assignedIds}
                               onChange={(ids) => setTruckDayTrips(t.id, ids)}
@@ -435,7 +457,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                           <TableCell>
                             {sharedTrip && t.active ? (
                               <TruckTownMultiSelect
-                                disabled={readOnly || townOptions.length === 0}
+                                disabled={readOnly || truckLocked || townOptions.length === 0}
                                 towns={townOptions}
                                 selected={selectedTowns}
                                 placeholder={
@@ -511,6 +533,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
         onMoveInvoice={(i) => setMoveTarget({ inv: i })}
         onUnallocate={(i) => moveInvoice(i.id, null)}
         onLock={() => setStep("lock")}
+        onSetTruckLocked={setTruckDayLocked}
       />
       </ScreenShell>
       {moveDialog}
@@ -545,6 +568,7 @@ function TruckWorkbench({
   onMoveInvoice,
   onUnallocate,
   onLock,
+  onSetTruckLocked,
 }: {
   mode: "allocate" | "adjust";
   readOnly?: boolean;
@@ -570,6 +594,7 @@ function TruckWorkbench({
   onMoveInvoice: (i: Invoice) => void;
   onUnallocate: (i: Invoice) => void;
   onLock: () => void;
+  onSetTruckLocked: (truckId: string, locked: boolean) => void;
 }) {
   const isAdjust = mode === "adjust";
   const customers = useStore((s) => s.customers);
@@ -625,6 +650,8 @@ function TruckWorkbench({
 
   const focusTruck = activeTrucks.find((t) => t.id === focusId) ?? activeTrucks[0];
   const focusTruckDay = planTruckDay.find((td) => td.truckId === focusTruck?.id);
+  const focusTruckLocked = !!focusTruckDay?.locked;
+  const truckEditLocked = readOnly || focusTruckLocked;
   const assignedTripIds = tripIdsForTruckDay(focusTruckDay);
   const tripName = focusTruck ? dayTripName.get(focusTruck.id) : null;
   const round2TripName = focusTruckDay?.round2TripId
@@ -725,6 +752,7 @@ function TruckWorkbench({
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || assignedTripIds.length === 0 || active.id === over.id) return;
+    if (truckEditLocked) return;
 
     const inRound1 = round1.some((i) => i.id === active.id);
     const inRound2 = round2.some((i) => i.id === active.id);
@@ -759,7 +787,7 @@ function TruckWorkbench({
   }
 
   function confirmSecondRound(tripId: string) {
-    if (!focusTruck || !tripId) return;
+    if (!focusTruck || !tripId || truckEditLocked) return;
     const trip = planTrips.find((t) => t.id === tripId);
     const n = sendToSecondRound(
       focusTruck.id,
@@ -784,7 +812,7 @@ function TruckWorkbench({
   }
 
   function handleSecondRoundClick() {
-    if (!focusTruck) return;
+    if (!focusTruck || truckEditLocked) return;
     if (planTrips.length === 0) {
       toast.error("Select trips for today on Setup first");
       return;
@@ -801,7 +829,7 @@ function TruckWorkbench({
   }
 
   function handleBackToRound1() {
-    if (selectedRound2.length === 0) return;
+    if (selectedRound2.length === 0 || truckEditLocked) return;
     setInvoiceRound(selectedRound2, 1);
     toast.success(`Restored ${selectedRound2.length} to Round 1`);
     onClearSel();
@@ -890,6 +918,8 @@ function TruckWorkbench({
           const tone = p >= 95 ? "bg-crit" : p >= 80 ? "bg-warn" : "bg-good";
           const active = t.id === focusTruck?.id;
           const tName = dayTripName.get(t.id);
+          const td = planTruckDay.find((d) => d.truckId === t.id);
+          const locked = !!td?.locked;
           return (
             <button
               key={t.id}
@@ -902,7 +932,13 @@ function TruckWorkbench({
                   : "border-border bg-panel hover:bg-panel-2",
               )}
             >
-              <div className="truncate text-sm font-semibold tracking-tight">{t.name}</div>
+              <div className="flex items-center gap-1 truncate text-sm font-semibold tracking-tight">
+                {t.sheetLetter ? (
+                  <span className="metric-mono text-primary">{t.sheetLetter}</span>
+                ) : null}
+                <span className="truncate">{t.name}</span>
+                {locked ? <Lock className="ml-auto size-3 shrink-0 text-muted-foreground" /> : null}
+              </div>
               <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
                 {tName ?? "No trip"} · {tInv.length} inv
               </div>
@@ -926,7 +962,18 @@ function TruckWorkbench({
         <section className="panel overflow-hidden">
           <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <h3 className="font-semibold tracking-tight">{focusTruck.name}</h3>
+              <h3 className="flex flex-wrap items-center gap-2 font-semibold tracking-tight">
+                {focusTruck.sheetLetter ? (
+                  <Badge variant="outline">{focusTruck.sheetLetter}</Badge>
+                ) : null}
+                {focusTruck.name}
+                {focusTruckLocked ? (
+                  <Badge variant="outline" className="gap-1 text-[10px]">
+                    <Lock className="size-3" />
+                    Locked
+                  </Badge>
+                ) : null}
+              </h3>
               <p className="mt-0.5 truncate text-sm text-muted-foreground">
                 {tripName ?? "No trip assigned"}
                 {round2.length > 0 && round2TripName
@@ -942,13 +989,51 @@ function TruckWorkbench({
               </div>
               {isAdjust && (
                 <>
-                  <Button type="button" size="sm" variant="secondary" onClick={handleSecondRoundClick}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={focusTruckLocked ? "outline" : "secondary"}
+                    disabled={readOnly}
+                    onClick={() => {
+                      onSetTruckLocked(focusTruck.id, !focusTruckLocked);
+                      toast.success(
+                        focusTruckLocked
+                          ? `${focusTruck.name} unlocked`
+                          : `${focusTruck.name} locked for today`,
+                      );
+                    }}
+                  >
+                    {focusTruckLocked ? (
+                      <>
+                        <LockOpen className="size-3.5" />
+                        Unlock truck
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="size-3.5" />
+                        Lock truck
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={truckEditLocked}
+                    onClick={handleSecondRoundClick}
+                  >
                     <RotateCcw className="size-3.5" />
                     Second Round
                     {selectedRound1.length > 0 ? ` (${selectedRound1.length})` : ""}
                   </Button>
                   {selectedRound2.length > 0 && (
-                    <Button type="button" size="sm" variant="outline" onClick={handleBackToRound1}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={truckEditLocked}
+                      onClick={handleBackToRound1}
+                    >
                       Back to Round 1 ({selectedRound2.length})
                     </Button>
                   )}
@@ -994,7 +1079,12 @@ function TruckWorkbench({
                   <SortableContext
                     items={round1.map((i) => i.id)}
                     strategy={verticalListSortingStrategy}
-                    disabled={!isAdjust || assignedTripIds.length === 0 || round1.length === 0}
+                    disabled={
+                      !isAdjust ||
+                      truckEditLocked ||
+                      assignedTripIds.length === 0 ||
+                      round1.length === 0
+                    }
                   >
                     <TableBody>
                       {round1.map((i) => {
@@ -1010,7 +1100,8 @@ function TruckWorkbench({
                             dayStopOrder={dayStopOrder}
                             checked={selected.includes(i.id)}
                             highlightProps={highlightProps(i.id)}
-                            draggable
+                            draggable={!truckEditLocked}
+                            editDisabled={truckEditLocked}
                             onToggleSelect={() => onToggleSelect(i.id)}
                             onSetLoad={(key, n) =>
                               invoiceTripId &&
@@ -1030,7 +1121,9 @@ function TruckWorkbench({
                     <SortableContext
                       items={round2.map((i) => i.id)}
                       strategy={verticalListSortingStrategy}
-                      disabled={!isAdjust || assignedTripIds.length === 0}
+                      disabled={
+                        !isAdjust || truckEditLocked || assignedTripIds.length === 0
+                      }
                     >
                       <TableBody>
                         <TableRow className="bg-panel-2/30 hover:bg-panel-2/30">
@@ -1055,7 +1148,8 @@ function TruckWorkbench({
                               dayStopOrder={dayStopOrder}
                               checked={selected.includes(i.id)}
                               highlightProps={highlightProps(i.id)}
-                              draggable={isAdjust}
+                              draggable={isAdjust && !truckEditLocked}
+                              editDisabled={truckEditLocked}
                               onToggleSelect={() => onToggleSelect(i.id)}
                               onSetLoad={(key, n) =>
                                 invoiceTripId &&
@@ -1283,6 +1377,7 @@ function SortableTruckInvoiceRow({
   onMoveInvoice,
   onUnallocate,
   draggable,
+  editDisabled = false,
 }: {
   inv: Invoice;
   isAdjust: boolean;
@@ -1296,6 +1391,7 @@ function SortableTruckInvoiceRow({
     onClick: (e: React.MouseEvent) => void;
   };
   draggable: boolean;
+  editDisabled?: boolean;
   onToggleSelect: () => void;
   onSetLoad: (key: string, n: number) => void;
   onSetComment: (comment: string) => void;
@@ -1365,6 +1461,7 @@ function SortableTruckInvoiceRow({
             type="number"
             min={0}
             value={loadNo || ""}
+            disabled={editDisabled}
             onChange={(e) => {
               const n = Number(e.target.value);
               onSetLoad(key, Number.isFinite(n) ? n : 0);
@@ -1399,6 +1496,7 @@ function SortableTruckInvoiceRow({
         <TableCell>
           <Input
             value={inv.comment ?? ""}
+            disabled={editDisabled}
             onChange={(e) => onSetComment(e.target.value)}
             placeholder="Note…"
             className="h-8 min-w-[8rem] text-sm"
@@ -1426,6 +1524,7 @@ function SortableTruckInvoiceRow({
               variant="ghost"
               size="sm"
               className="h-8 px-2 text-xs"
+              disabled={editDisabled}
               onClick={onMoveInvoice}
             >
               Move
@@ -1435,6 +1534,7 @@ function SortableTruckInvoiceRow({
               variant="ghost"
               size="icon"
               className="size-8 text-muted-foreground hover:text-destructive"
+              disabled={editDisabled}
               onClick={onUnallocate}
               title="Move to unallocated"
             >
@@ -1510,19 +1610,22 @@ function MoveDialog({
             const crossTown =
               movingTowns.length > 0 &&
               movingTowns.some((a) => !truckTowns.includes(a));
+            const locked = !!plan.truckDay.find((td) => td.truckId === t.id)?.locked;
+            const blocked = !fits || locked;
             return (
               <button
                 key={t.id}
                 type="button"
-                disabled={!fits}
+                disabled={blocked}
                 onClick={() => setTarget(t.id)}
                 className={`w-full rounded-lg border p-3 text-left transition-colors ${
                   target === t.id ? "border-primary bg-primary/5" : "border-border hover:bg-panel-2"
-                } ${!fits ? "opacity-40" : ""}`}
+                } ${blocked ? "opacity-40" : ""}`}
               >
                 <div className="flex flex-col gap-1 text-sm sm:flex-row sm:justify-between">
                   <span>
                     <b>{t.name}</b>
+                    {t.sheetLetter ? ` (${t.sheetLetter})` : ""}
                     {tripLabel ? ` · ${tripLabel}` : ""}
                     {" · "}
                     {truckTowns.join(", ") || "—"}
@@ -1531,12 +1634,15 @@ function MoveDialog({
                     {currentWeight.toFixed(0)} / {t.maxWeight} kg
                   </span>
                 </div>
-                {!fits && (
+                {locked && (
+                  <div className="text-xs text-muted-foreground">Truck is locked for today</div>
+                )}
+                {!fits && !locked && (
                   <div className="text-xs text-crit">
                     Exceeds max by {(movingWeight - remaining).toFixed(0)} kg
                   </div>
                 )}
-                {fits && (
+                {fits && !locked && (
                   <div className="text-xs text-muted-foreground">After move: {pct.toFixed(0)}%</div>
                 )}
                 {crossTown && (

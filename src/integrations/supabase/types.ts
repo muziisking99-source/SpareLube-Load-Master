@@ -182,6 +182,7 @@ export type Database = {
           id: string
           max_weight: number
           name: string
+          sheet_letter: string | null
           updated_at: string
         }
         Insert: {
@@ -189,6 +190,7 @@ export type Database = {
           id: string
           max_weight?: number
           name: string
+          sheet_letter?: string | null
           updated_at?: string
         }
         Update: {
@@ -196,6 +198,7 @@ export type Database = {
           id?: string
           max_weight?: number
           name?: string
+          sheet_letter?: string | null
           updated_at?: string
         }
         Relationships: []

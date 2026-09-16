@@ -3,6 +3,8 @@ export type Truck = {
   name: string;
   maxWeight: number;
   active: boolean;
+  /** Optional A–Z letter printed on load sheets */
+  sheetLetter?: string | null;
 };
 
 export type CustomerMemory = {
@@ -80,6 +82,8 @@ export type TruckDay = {
    * this truck covers (shared-trip split). Empty areas = all trip towns.
    */
   areas?: string[];
+  /** Day-scoped lock — finished truck cannot be edited on Adjust */
+  locked?: boolean;
 };
 
 export type Plan = {
@@ -157,6 +161,7 @@ export function normalizeTruckDay(raw: {
   round2TripId?: string | null;
   areas?: string[];
   area?: string;
+  locked?: boolean;
 }): TruckDay {
   let tripIds: string[] = [];
   if (Array.isArray(raw.tripIds) && raw.tripIds.length > 0) {
@@ -176,7 +181,15 @@ export function normalizeTruckDay(raw: {
     tripIds,
     round2TripId: raw.round2TripId ?? null,
     areas,
+    locked: !!raw.locked,
   };
+}
+
+/** Normalize sheet letter to a single A–Z char, or null if empty/invalid. */
+export function normalizeSheetLetter(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const ch = raw.trim().toUpperCase().slice(0, 1);
+  return /^[A-Z]$/.test(ch) ? ch : null;
 }
 
 export function normalizeCustomer(raw: Partial<CustomerMemory> & { name: string }): CustomerMemory {

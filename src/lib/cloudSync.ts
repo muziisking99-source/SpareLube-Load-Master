@@ -7,7 +7,7 @@ import type {
   Truck,
   TruckDay,
 } from "./types";
-import { normalizeCustomer, normalizeDayStopOrder, normalizeDayStopSequence, normalizeHeldInvoice, normalizeInvoice, normalizeTruckDay } from "./types";
+import { normalizeCustomer, normalizeDayStopOrder, normalizeDayStopSequence, normalizeHeldInvoice, normalizeInvoice, normalizeSheetLetter, normalizeTruckDay } from "./types";
 import { customerKey } from "./customers";
 import { normalizeTrip } from "./trips";
 import { getSupabase, isCloudConfigured } from "./supabase";
@@ -335,7 +335,15 @@ function mergeTrucksById(
   remoteIds: Set<string>,
 ): Truck[] {
   const byId = new Map(local.map((t) => [t.id, t]));
-  for (const t of remote) byId.set(t.id, t);
+  for (const t of remote) {
+    const prev = byId.get(t.id);
+    // Preserve local sheetLetter when remote omitted it (column missing)
+    if (prev?.sheetLetter && !t.sheetLetter) {
+      byId.set(t.id, { ...t, sheetLetter: prev.sheetLetter });
+    } else {
+      byId.set(t.id, t);
+    }
+  }
   return [...byId.values()].filter((t) => remoteIds.has(t.id));
 }
 
@@ -832,14 +840,41 @@ export async function hydrateFromCloud(
 
   const tripsRes = await fetchTripsFromCloud(lastSync, force);
 
-  let trucksQuery = sb.from("trucks").select("id,name,max_weight,active,updated_at");
+  let trucksQuery = sb.from("trucks").select("id,name,max_weight,active,sheet_letter,updated_at");
   if (lastSync && !force) trucksQuery = trucksQuery.gt("updated_at", lastSync);
 
-  const [areasRes, trucksRes, settingsRes] = await Promise.all([
-    sb.from("areas").select("name"),
-    trucksQuery,
-    sb.from("app_settings").select("active_date,admin_pin,held_invoices").eq("id", 1).maybeSingle(),
-  ]);
+  let trucksRes = await (async () => {
+    const [areasRes, trucksQueryRes, settingsRes] = await Promise.all([
+      sb.from("areas").select("name"),
+      trucksQuery,
+      sb.from("app_settings").select("active_date,admin_pin,held_invoices").eq("id", 1).maybeSingle(),
+    ]);
+    return { areasRes, trucksRes: trucksQueryRes, settingsRes };
+  })();
+
+  // Fallback if sheet_letter column missing
+  if (
+    trucksRes.trucksRes.error &&
+    /sheet_letter|schema cache|does not exist/i.test(trucksRes.trucksRes.error.message)
+  ) {
+    let q = sb.from("trucks").select("id,name,max_weight,active,updated_at");
+    if (lastSync && !force) q = q.gt("updated_at", lastSync);
+    const fallback = await Promise.all([
+      sb.from("areas").select("name"),
+      q,
+      sb.from("app_settings").select("active_date,admin_pin,held_invoices").eq("id", 1).maybeSingle(),
+    ]);
+    trucksRes = {
+      areasRes: fallback[0],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      trucksRes: fallback[1] as any,
+      settingsRes: fallback[2],
+    };
+  }
+
+  const areasRes = trucksRes.areasRes;
+  const trucksResFinal = trucksRes.trucksRes;
+  const settingsRes = trucksRes.settingsRes;
 
   const settingsMissingHeldCol =
     !!settingsRes.error && /held_invoices|schema cache|does not exist/i.test(settingsRes.error.message);
@@ -935,15 +970,25 @@ export async function hydrateFromCloud(
     !!tripsRes.error && /does not exist|schema cache/i.test(tripsRes.error.message);
   const tripsError = tripsRes.error && !tripsTableMissing ? tripsRes.error : null;
 
-  const firstError = areasRes.error || trucksRes.error || tripsError;
+  const firstError = areasRes.error || trucksResFinal.error || tripsError;
   if (firstError) throw firstError;
 
-  let trucks: Truck[] = (trucksRes.data ?? []).map((t) => ({
-    id: t.id,
-    name: t.name,
-    maxWeight: Number(t.max_weight) || 0,
-    active: !!t.active,
-  }));
+  let trucks: Truck[] = (trucksResFinal.data ?? []).map((t) => {
+    const row = t as {
+      id: string;
+      name: string;
+      max_weight: number;
+      active: boolean;
+      sheet_letter?: string | null;
+    };
+    return {
+      id: row.id,
+      name: row.name,
+      maxWeight: Number(row.max_weight) || 0,
+      active: !!row.active,
+      sheetLetter: normalizeSheetLetter(row.sheet_letter),
+    };
+  });
 
   if (lastSync && !force) {
     const { data: idRows, error: idErr } = await sb.from("trucks").select("id");
@@ -1043,17 +1088,34 @@ async function syncTrucks(s: CloudSnapshot, now: string, flags: DirtyFlags): Pro
     const { error } = await sb.from("trucks").delete().in("id", trucksToDelete);
     if (error) throw error;
   }
-  await upsertInChunks(
-    "trucks",
-    s.trucks.map((t) => ({
-      id: t.id,
-      name: t.name,
-      max_weight: t.maxWeight,
-      active: t.active,
-      updated_at: now,
-    })),
-    "id",
-  );
+  try {
+    await upsertInChunks(
+      "trucks",
+      s.trucks.map((t) => ({
+        id: t.id,
+        name: t.name,
+        max_weight: t.maxWeight,
+        active: t.active,
+        sheet_letter: normalizeSheetLetter(t.sheetLetter),
+        updated_at: now,
+      })),
+      "id",
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/sheet_letter|schema cache|does not exist/i.test(msg)) throw err;
+    await upsertInChunks(
+      "trucks",
+      s.trucks.map((t) => ({
+        id: t.id,
+        name: t.name,
+        max_weight: t.maxWeight,
+        active: t.active,
+        updated_at: now,
+      })),
+      "id",
+    );
+  }
 }
 
 async function syncTrips(s: CloudSnapshot, now: string, flags: DirtyFlags): Promise<void> {
