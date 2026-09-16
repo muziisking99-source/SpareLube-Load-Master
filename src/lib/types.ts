@@ -84,6 +84,8 @@ export type TruckDay = {
   areas?: string[];
   /** Day-scoped lock — finished truck cannot be edited on Adjust */
   locked?: boolean;
+  /** Day-scoped load-sheet letter (A–Z), typed in Step 3 */
+  sheetLetter?: string | null;
 };
 
 export type Plan = {
@@ -167,6 +169,7 @@ export function normalizeTruckDay(raw: {
   areas?: string[];
   area?: string;
   locked?: boolean;
+  sheetLetter?: string | null;
 }): TruckDay {
   let tripIds: string[] = [];
   if (Array.isArray(raw.tripIds) && raw.tripIds.length > 0) {
@@ -187,6 +190,7 @@ export function normalizeTruckDay(raw: {
     round2TripId: raw.round2TripId ?? null,
     areas,
     locked: !!raw.locked,
+    sheetLetter: normalizeSheetLetter(raw.sheetLetter),
   };
 }
 

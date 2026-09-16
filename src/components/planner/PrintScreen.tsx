@@ -350,7 +350,10 @@ function TruckSheetsContent({
               >
                 <MetaField label="Date" value={planDate} />
                 <MetaField label="Truck" value={t.name} />
-                <MetaField label="Letter" value={t.sheetLetter?.trim() || "—"} />
+                <MetaField
+                  label="Letter"
+                  value={truckDay?.sheetLetter?.trim() || t.sheetLetter?.trim() || "—"}
+                />
                 <MetaField label="Trip" value={tripLabel} />
                 <MetaField label="Driver" blank />
                 <MetaField label="Petty cash" blank />

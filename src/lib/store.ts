@@ -176,6 +176,8 @@ type State = {
   setTruckDayArea: (truckId: string, area: string) => void;
   /** Day-scoped lock for a truck on today's plan */
   setTruckDayLocked: (truckId: string, locked: boolean) => void;
+  /** Day-scoped load-sheet letter (A–Z) for a truck */
+  setTruckDaySheetLetter: (truckId: string, letter: string | null) => void;
   /** Select which trips run today (Step 1). Derives plan.areas from trip towns. */
   setPlanTrips: (tripIds: string[]) => void;
   ensureTruckDay: () => void;
@@ -1269,13 +1271,37 @@ export const useStore = create<State>((set, get) => {
       });
       log("truck.day_lock", `${locked ? "Locked" : "Unlocked"} truck ${truckId} for day`);
     },
+    setTruckDaySheetLetter: (truckId, letter) => {
+      const sheetLetter = normalizeSheetLetter(letter);
+      patchPlan((p) => {
+        const exists = p.truckDay.find((t) => t.truckId === truckId);
+        const truckDay = exists
+          ? p.truckDay.map((t) =>
+              t.truckId === truckId ? normalizeTruckDay({ ...t, sheetLetter }) : t,
+            )
+          : [
+              ...p.truckDay,
+              normalizeTruckDay({ truckId, tripId: null, areas: [], sheetLetter }),
+            ];
+        return { ...p, truckDay };
+      });
+    },
     ensureTruckDay: () => {
       const s = get();
       patchPlan((p) => {
         const known = new Set(p.truckDay.map((t) => t.truckId));
         const additions: TruckDay[] = [];
         for (const t of s.trucks) {
-          if (!known.has(t.id)) additions.push({ truckId: t.id, tripId: null, areas: [] });
+          if (!known.has(t.id)) {
+            additions.push(
+              normalizeTruckDay({
+                truckId: t.id,
+                tripId: null,
+                areas: [],
+                sheetLetter: t.sheetLetter ?? null,
+              }),
+            );
+          }
         }
         if (!additions.length) return p;
         return { ...p, truckDay: [...p.truckDay, ...additions] };

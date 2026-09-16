@@ -94,6 +94,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
   const setTruckDayTrips = useStore((s) => s.setTruckDayTrips);
   const setTruckDayAreas = useStore((s) => s.setTruckDayAreas);
   const setTruckDayLocked = useStore((s) => s.setTruckDayLocked);
+  const setTruckDaySheetLetter = useStore((s) => s.setTruckDaySheetLetter);
   const ensureTruckDay = useStore((s) => s.ensureTruckDay);
 
   const [selected, setSelected] = useState<string[]>([]);
@@ -380,7 +381,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
           <section className="glass-panel p-4 sm:p-5">
             <ScreenHeader
               title="Assign trucks to trips"
-              description="Activate trucks for today and pair each one to a selected trip. When two trucks share a trip, pick towns in the Towns column — leftovers go to the other truck."
+              description="Activate trucks for today, type each truck’s load-sheet letter, and pair trips. When two trucks share a trip, pick towns in the Towns column — leftovers go to the other truck."
               className="mb-4"
             />
             {trucks.length === 0 ? (
@@ -395,6 +396,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                     <TableRow className="bg-panel-2 hover:bg-panel-2">
                       <TableHead className="w-16">Active</TableHead>
                       <TableHead>Truck</TableHead>
+                      <TableHead className="w-16">Letter</TableHead>
                       <TableHead className="w-28">Max kg</TableHead>
                       <TableHead>Today&apos;s trips</TableHead>
                       <TableHead>Towns</TableHead>
@@ -417,6 +419,7 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                         !!sharedTrip &&
                         ((td?.areas?.length ?? 0) > 0);
                       const truckLocked = !!td?.locked;
+                      const dayLetter = td?.sheetLetter ?? "";
 
                       return (
                         <TableRow key={t.id} className={cn(!t.active && "opacity-50")}>
@@ -430,15 +433,23 @@ export function AllocateScreen({ mode }: { mode: "allocate" | "adjust" }) {
                           <TableCell className="font-medium">
                             <span className="inline-flex items-center gap-1.5">
                               {t.name}
-                              {t.sheetLetter ? (
-                                <Badge variant="outline" className="text-[10px]">
-                                  {t.sheetLetter}
-                                </Badge>
-                              ) : null}
                               {truckLocked ? (
                                 <Lock className="size-3 text-muted-foreground" aria-label="Locked" />
                               ) : null}
                             </span>
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              value={dayLetter}
+                              disabled={!t.active || readOnly || truckLocked}
+                              maxLength={1}
+                              placeholder="—"
+                              aria-label={`Letter for ${t.name}`}
+                              className="metric-mono h-8 w-12 px-2 text-center uppercase"
+                              onChange={(e) =>
+                                setTruckDaySheetLetter(t.id, e.target.value)
+                              }
+                            />
                           </TableCell>
                           <TableCell className="metric-mono">{t.maxWeight}</TableCell>
                           <TableCell>
@@ -933,8 +944,8 @@ function TruckWorkbench({
               )}
             >
               <div className="flex items-center gap-1 truncate text-sm font-semibold tracking-tight">
-                {t.sheetLetter ? (
-                  <span className="metric-mono text-primary">{t.sheetLetter}</span>
+                {td?.sheetLetter ? (
+                  <span className="metric-mono text-primary">{td.sheetLetter}</span>
                 ) : null}
                 <span className="truncate">{t.name}</span>
                 {locked ? <Lock className="ml-auto size-3 shrink-0 text-muted-foreground" /> : null}
@@ -963,8 +974,8 @@ function TruckWorkbench({
           <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <h3 className="flex flex-wrap items-center gap-2 font-semibold tracking-tight">
-                {focusTruck.sheetLetter ? (
-                  <Badge variant="outline">{focusTruck.sheetLetter}</Badge>
+                {focusTruckDay?.sheetLetter ? (
+                  <Badge variant="outline">{focusTruckDay.sheetLetter}</Badge>
                 ) : null}
                 {focusTruck.name}
                 {focusTruckLocked ? (
@@ -1611,6 +1622,8 @@ function MoveDialog({
               movingTowns.length > 0 &&
               movingTowns.some((a) => !truckTowns.includes(a));
             const locked = !!plan.truckDay.find((td) => td.truckId === t.id)?.locked;
+            const dayLetter =
+              plan.truckDay.find((td) => td.truckId === t.id)?.sheetLetter ?? null;
             const blocked = !fits || locked;
             return (
               <button
@@ -1625,7 +1638,7 @@ function MoveDialog({
                 <div className="flex flex-col gap-1 text-sm sm:flex-row sm:justify-between">
                   <span>
                     <b>{t.name}</b>
-                    {t.sheetLetter ? ` (${t.sheetLetter})` : ""}
+                    {dayLetter ? ` (${dayLetter})` : ""}
                     {tripLabel ? ` · ${tripLabel}` : ""}
                     {" · "}
                     {truckTowns.join(", ") || "—"}
