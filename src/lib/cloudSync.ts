@@ -1292,6 +1292,21 @@ export function normalizePlanVersion(raw: unknown): number {
   return Math.floor(n);
 }
 
+/** Compare plan body for sync conflict detection — ignore step/version/timestamps. */
+function plansContentEqual(a: Plan, b: Plan): boolean {
+  const norm = (p: Plan) =>
+    JSON.stringify({
+      areas: p.areas ?? [],
+      tripIds: p.tripIds ?? [],
+      truckDay: p.truckDay ?? [],
+      invoices: p.invoices ?? [],
+      dayStopOrder: p.dayStopOrder ?? {},
+      dayStopSequence: p.dayStopSequence ?? {},
+      locked: !!p.locked,
+    });
+  return norm(a) === norm(b);
+}
+
 async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Promise<void> {
   const sb = getSupabase()!;
   // Only push explicitly dirty dates — never Object.keys(plans) (that conflict-spammed the archive).
@@ -1347,29 +1362,15 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
 
     const remoteVersion = remoteRow ? normalizePlanVersion(remoteRow.version) : null;
 
-    // Cloud is ahead of this device.
-    if (remoteRow && remoteVersion != null && !force && remoteVersion > expected) {
-      const remotePlan = planFromFullRow(remoteRow);
-      // Only prompt for the day being edited. Archive / bulk leftovers adopt cloud quietly
-      // so we don't toast 20+ historical dates on every step change.
-      if (date === currentDate) {
-        conflictDates.push(date);
-        conflictRemotes[date] = remotePlan;
-      } else {
-        lastAdoptedPlans[date] = remotePlan;
-        lastSyncedPlanVersions[date] = remoteVersion;
-      }
-      continue;
-    }
-
-    const matchVersion =
+    // If cloud version differs from local, always rebase onto the live remote version.
+    // Day lease is the multi-user guard; version mismatches from step changes / lagged
+    // local bumps must not block navigation with conflict toasts.
+    const matchVersion: number | null =
       remoteRow == null
         ? null
-        : force
+        : force || (remoteVersion != null && remoteVersion !== expected)
           ? (remoteVersion ?? expected)
-          : remoteVersion != null && remoteVersion < expected
-            ? remoteVersion
-            : expected;
+          : expected;
 
     const writeVersion = remoteRow ? (matchVersion ?? expected) + 1 : 1;
     const payload = planRowPayload(p, now, writeVersion);
@@ -1386,6 +1387,24 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
             if (again) {
               const againVer = normalizePlanVersion(again.version);
               if (againVer > expected && !force) {
+                if (plansContentEqual(p, again)) {
+                  const merged: Plan = { ...again, ...p, version: againVer };
+                  const wv = againVer + 1;
+                  const retryPayload = planRowPayload(merged, now, wv);
+                  const { data, error: upErr } = await sb
+                    .from("plans")
+                    .update(retryPayload as never)
+                    .eq("date", date)
+                    .eq("version", againVer)
+                    .select("date");
+                  if (upErr) throw upErr;
+                  if (data?.length) {
+                    lastSyncedPlanVersions[date] = wv;
+                    lastAdoptedPlans[date] = { ...merged, version: wv };
+                    forceOverwritePlanDates.delete(date);
+                    continue;
+                  }
+                }
                 if (date === currentDate) {
                   conflictDates.push(date);
                   conflictRemotes[date] = again;
@@ -1438,6 +1457,24 @@ async function syncPlans(s: CloudSnapshot, now: string, flags: DirtyFlags): Prom
           if (again) {
             const againVer = normalizePlanVersion(again.version);
             if (againVer > expected && !force) {
+              if (plansContentEqual(p, again)) {
+                const merged: Plan = { ...again, ...p, version: againVer };
+                const wv = againVer + 1;
+                const retryPayload = planRowPayload(merged, now, wv);
+                const retry = await sb
+                  .from("plans")
+                  .update(retryPayload as never)
+                  .eq("date", date)
+                  .eq("version", againVer)
+                  .select("date");
+                if (retry.error) throw retry.error;
+                if (retry.data?.length) {
+                  lastSyncedPlanVersions[date] = wv;
+                  lastAdoptedPlans[date] = { ...merged, version: wv };
+                  forceOverwritePlanDates.delete(date);
+                  continue;
+                }
+              }
               if (date === currentDate) {
                 conflictDates.push(date);
                 conflictRemotes[date] = again;

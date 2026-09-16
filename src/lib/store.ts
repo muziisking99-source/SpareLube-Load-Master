@@ -1089,8 +1089,8 @@ export const useStore = create<State>((set, get) => {
     },
 
     setStep: (step) => {
+      // Debounced save only — immediate flush raced version checks on every stepper click.
       patchPlan((p) => ({ ...p, step }));
-      void flushSaveNow();
     },
     setDate: (date) => {
       const prevDate = get().currentDate;
